@@ -6,3 +6,4 @@
 - Bind **127.0.0.1** only. No auth. No cloud deploy.
 - Default tests mock the worker. Do not require a GPU for `pytest`.
 - Do not re-open product-scope research. If upstream ACE-Step parameter names change, adapt in the worker and keep Bard's HTTP schema stable.
+- This clone must stay under Conclave `.projects/`. Do not move it to `Documents/wizards-bard` or any path outside the jail.

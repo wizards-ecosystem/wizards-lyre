@@ -25,16 +25,19 @@ Windows, RTX 4070 Ti SUPER 16 GB. Default: ACE-Step 2B turbo + 1.7B LM. Bind `12
 
 ## Conclave / jail
 
-This repo is a Wizard's Conclave project (`config/projects/bard.yaml` in wizards-conclave). Keep that YAML `enabled: false` until the Windows jail canary passes:
+This clone lives at `wizards-conclave/.projects/wizards-bard`. That `.projects/` folder is the NTFS jail (`jail.root`). Agents may write anything in `.projects`; they must not write Conclave source, `.env`, or `.conclave`.
+
+Do not recreate `C:/Users/isaac/Documents/wizards-bard`. Conclave skips any `repo:` path outside `.projects/`.
+
+Jail setup (once, elevated, from the Conclave repo):
 
 ```powershell
-# Elevated PowerShell
 cd C:\Users\isaac\Documents\wizards-conclave
-powershell -File scripts\install-windows-jail.ps1 -Root C:\Users\isaac\Documents\wizards-bard
+.\scripts\setup-windows-jail.cmd
 .\scripts\wz.ps1 doctor
 ```
 
-When doctor reports the bard jail user can write this folder and cannot write the Conclave repo, set `enabled: true`.
+Doctor must show PASS for `jail .projects`. Re-run setup after `pnpm install`. `config/projects/bard.yaml` is enabled; goals are implement SPEC.md in phase order.
 
 ## Tests
 
