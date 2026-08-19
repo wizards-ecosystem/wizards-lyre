@@ -1,0 +1,22 @@
+[project]
+name = "wizards-bard"
+version = "0.1.0"
+description = "Local ACE-Step generative music studio"
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
+# App dependencies land in phase 1 (fastapi, acestep, ...). Keep the bootstrap install light.
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["server", "worker"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
