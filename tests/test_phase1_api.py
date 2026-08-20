@@ -551,6 +551,53 @@ def test_plan_json_updates_are_serialized_across_threads(
     assert final_plan["keyscale"] == "C Major"
 
 
+def test_active_take_not_promoted_when_plan_patch_merge_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SPEC.md sec 10 point 5: a failed job must leave the project's
+    active_take_id untouched, not pointing at the take that just failed.
+    The worker must promote a take to active only after every fallible
+    persistence step (write_take_meta, merge_plan_patch) has actually
+    succeeded (reviewer-flagged: merge_plan_patch used to run *after*
+    set_active_take, so a merge failure -- e.g. a lock timeout or disk
+    error -- left active_take_id pointing at a take whose meta.json says
+    `error`)."""
+    monkeypatch.setenv("BARD_PROJECTS_DIR", str(tmp_path / "projects"))
+    monkeypatch.setenv("BARD_DB_PATH", str(tmp_path / "bard.db"))
+    monkeypatch.setenv("BARD_WORKER", "mock")
+
+    from server import jobs as jobs_module
+
+    jobs_module.init_db()
+    # Simple mode (query set, caption/lyrics empty via default_plan) so
+    # mock_worker returns a plan_patch and merge_plan_patch actually runs.
+    project = storage.create_project(title="Patch Merge Failure", query="dreamy synthwave drive")
+    project_id = project["id"]
+    assert storage.load_project(project_id)["active_take_id"] is None
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("disk error")
+
+    monkeypatch.setattr(storage, "merge_plan_patch", boom)
+
+    job = jobs_module.enqueue_job(project_id, {"action": "generate"})
+    claimed = jobs_module.claim_next_queued_job()
+    assert claimed["id"] == job["id"]
+    jobs_module.run_claimed_job(claimed)
+
+    final_job = jobs_module.get_job(job["id"])
+    assert final_job["status"] == "error"
+    assert "disk error" in final_job["error"]
+
+    # never promoted -- must not point at the take that just failed
+    assert storage.load_project(project_id)["active_take_id"] is None
+
+    takes = storage.list_takes(project_id)
+    assert len(takes) == 1
+    assert takes[0]["id"] == final_job["take_id"]
+    assert takes[0]["error"] is not None
+
+
 def test_worker_failure_writes_error_take_meta(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:

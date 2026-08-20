@@ -582,7 +582,6 @@ def run_claimed_job(job: dict[str, Any]) -> None:
             take_dir=tdir,
         )
         storage.write_take_meta(project_id, take_id, meta)
-        storage.set_active_take(project_id, take_id)
         if plan_patch is not None:
             # `plan` above was loaded before this (possibly long-running)
             # generation started. merge_plan_patch re-reads the plan and
@@ -593,6 +592,11 @@ def run_claimed_job(job: dict[str, Any]) -> None:
             # delta, not a full plan replacement -- see worker.mock_worker
             # / worker.acestep_worker.
             storage.merge_plan_patch(project_id, plan_patch)
+        # Promote the take to active only after every fallible persistence
+        # step above has actually succeeded (reviewer-flagged): if
+        # merge_plan_patch raised, the except block below marks this take
+        # `error`, and active_take_id must not be left pointing at it.
+        storage.set_active_take(project_id, take_id)
         _set_status(job_id, "done", take_id=take_id)
     except Exception as exc:  # noqa: BLE001 - persist worker failure onto the job row
         if take_id is not None:
