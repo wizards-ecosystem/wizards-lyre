@@ -9,6 +9,11 @@ Polls `server.jobs`' SQLite queue for `queued` rows, claims and runs one at
 a time against the backend selected by `BARD_WORKER` (default: `acestep`;
 set `BARD_WORKER=mock` for local dev/tests without a GPU). Never imports
 FastAPI or binds a port (SPEC.md sec 10 point 4).
+
+On startup and on every poll, it also reclaims jobs a previous, now-dead
+worker process left stuck `running` (see `server.jobs.reclaim_stale_jobs`)
+-- that's what makes a killed process or a native CUDA crash recoverable
+instead of leaving the job `running` forever.
 """
 
 from __future__ import annotations
@@ -23,7 +28,9 @@ DEFAULT_POLL_INTERVAL_SEC = 0.5
 def run_loop(stop_event: threading.Event, poll_interval: float = DEFAULT_POLL_INTERVAL_SEC) -> None:
     """Claim and run queued jobs one at a time until `stop_event` is set."""
     jobs.init_db()
+    jobs.reclaim_stale_jobs()  # recover anything a previous, now-dead worker left running
     while not stop_event.is_set():
+        jobs.reclaim_stale_jobs()
         did_work = jobs.process_one_queued_job()
         if not did_work:
             stop_event.wait(poll_interval)

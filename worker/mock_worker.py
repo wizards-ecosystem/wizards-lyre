@@ -50,6 +50,13 @@ def _repaint_meta(job: dict[str, Any]) -> dict | None:
     }
 
 
+def supports_dit_profile(dit_profile: str) -> tuple[bool, str | None]:
+    """The mock never loads a real model, so every profile is trivially
+    "supported" -- capability rejection (SPEC.md sec 4.1/8.1) is exercised
+    against `worker.acestep_worker`, which actually has GPU/offload limits."""
+    return True, None
+
+
 def _is_simple_mode(plan: dict[str, Any]) -> bool:
     return bool(plan.get("query")) and not plan.get("caption") and not plan.get("lyrics")
 

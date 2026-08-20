@@ -365,6 +365,87 @@ def test_invalid_action_rejected(client: TestClient) -> None:
     assert resp.status_code == 400
 
 
+def test_quality_profile_rejected_without_cpu_offload_support(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SPEC.md sec 4.1/8.1: `quality` (XL) needs CPU offload on a 16 GB card;
+    the server must reject it up front, not let a job OOM mid-run."""
+    project = client.post("/api/projects", json={"title": "Quality"}).json()
+    project_id = project["id"]
+    client.put(
+        f"/api/projects/{project_id}/plan",
+        json={**storage.default_plan(), "caption": "orchestral, cinematic"},
+    )
+
+    monkeypatch.setenv("BARD_WORKER", "acestep")
+    import worker.acestep_worker as acestep_worker
+
+    def _fake_supports(dit_profile: str) -> tuple[bool, str | None]:
+        if dit_profile == "quality":
+            return False, "no cpu-offload-capable handler in this environment"
+        return True, None
+
+    monkeypatch.setattr(acestep_worker, "supports_dit_profile", _fake_supports)
+
+    resp = client.post(
+        f"/api/projects/{project_id}/jobs",
+        json={"action": "generate", "dit_profile": "quality"},
+    )
+    assert resp.status_code == 400
+    assert "cpu-offload" in resp.json()["detail"].lower()
+
+    # other profiles are unaffected by the quality-only capability check
+    resp = client.post(
+        f"/api/projects/{project_id}/jobs",
+        json={"action": "generate", "dit_profile": "iterate"},
+    )
+    assert resp.status_code == 200
+
+
+def test_reclaim_stale_running_job_requeues_then_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SPEC.md sec 10 point 5: a job a dead worker left stuck `running` must
+    be recoverable, not stuck forever. A stale heartbeat requeues it for a
+    retry; past `MAX_ATTEMPTS` it's marked `error` instead of retried
+    forever."""
+    monkeypatch.setenv("BARD_PROJECTS_DIR", str(tmp_path / "projects"))
+    monkeypatch.setenv("BARD_DB_PATH", str(tmp_path / "bard.db"))
+    monkeypatch.setenv("BARD_WORKER", "mock")
+
+    from server import jobs as jobs_module
+
+    jobs_module.init_db()
+    project = storage.create_project(title="Stale")
+    job = jobs_module.enqueue_job(project["id"], {"action": "generate"})
+
+    claimed = jobs_module.claim_next_queued_job()
+    assert claimed["id"] == job["id"]
+    assert claimed["status"] == "running"
+
+    # heartbeat/updated_at is "now"; stale_after=0 treats it as immediately stale
+    reclaimed = jobs_module.reclaim_stale_jobs(stale_after=0)
+    assert job["id"] in reclaimed
+    after_first_reclaim = jobs_module.get_job(job["id"])
+    assert after_first_reclaim["status"] == "queued"  # first miss: requeued for a retry
+
+    # burn through the remaining attempts the same way
+    for _ in range(jobs_module.MAX_ATTEMPTS - 1):
+        jobs_module.claim_next_queued_job()
+        jobs_module.reclaim_stale_jobs(stale_after=0)
+
+    final = jobs_module.get_job(job["id"])
+    assert final["status"] == "error"
+    assert "heartbeat" in final["error"].lower()
+
+    # a job with a fresh heartbeat is left alone
+    other = jobs_module.enqueue_job(project["id"], {"action": "generate"})
+    jobs_module.claim_next_queued_job()
+    reclaimed_fresh = jobs_module.reclaim_stale_jobs(stale_after=3600)
+    assert other["id"] not in reclaimed_fresh
+    assert jobs_module.get_job(other["id"])["status"] == "running"
+
+
 def test_no_forbidden_engine_imports() -> None:
     """SPEC.md sec 11: static check that no Lyria/Gemini/ElevenLabs/Stability
     /Suno/Udio client code has been added to this project's own source (see

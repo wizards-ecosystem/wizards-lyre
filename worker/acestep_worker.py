@@ -17,6 +17,7 @@ ACE-Step/CUDA can't take the FastAPI server down with it either.
 
 from __future__ import annotations
 
+import inspect
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -34,6 +35,10 @@ DIT_CHECKPOINTS = {
 }
 DEFAULT_LM = "acestep-5Hz-lm-1.7B"
 LM_BACKEND = "pt"  # SPEC.md sec 4.2: vLLM is not a reliable native-Windows backend.
+
+# SPEC.md sec 4.1: XL turbo (`quality`) needs CPU offload on a 16 GB card;
+# every other profile fits without it.
+CPU_OFFLOAD_PROFILES = {"quality"}
 
 TASK_TYPE_BY_ACTION = {
     "generate": "text2music",
@@ -63,6 +68,36 @@ def _import_acestep():
     return AceStepHandler, GenerationParams, LLMHandler, generate_music
 
 
+def _handler_supports_cpu_offload(AceStepHandler: Any) -> bool:
+    try:
+        params = inspect.signature(AceStepHandler.__init__).parameters
+    except (TypeError, ValueError):
+        return False
+    return "cpu_offload" in params
+
+
+def supports_dit_profile(dit_profile: str) -> tuple[bool, str | None]:
+    """Whether this worker can currently load `dit_profile`. SPEC.md sec 4.1:
+    'quality' (XL, 4B) requires CPU offload on a 16 GB GPU; SPEC.md sec 8.1:
+    'Reject quality if worker reports it cannot load XL with offload.'
+    Checked by `server.jobs` at enqueue time so a job never gets stuck
+    mid-run risking an uncontrolled OOM; also enforced defensively in
+    `_ensure_loaded` for direct worker callers (e.g. scripts/smoke-gpu.py)."""
+    if dit_profile not in CPU_OFFLOAD_PROFILES:
+        return True, None
+    try:
+        AceStepHandler, _, _, _ = _import_acestep()
+    except WorkerUnavailable as exc:
+        return False, str(exc)
+    if not _handler_supports_cpu_offload(AceStepHandler):
+        return False, (
+            f"dit_profile 'quality' ({DIT_CHECKPOINTS['quality']}) requires a "
+            "CPU-offload-capable AceStepHandler on a 16 GB GPU; the installed acestep "
+            "does not support cpu_offload. Use 'iterate' or 'polish' instead."
+        )
+    return True, None
+
+
 def _ensure_loaded(dit_profile: str) -> tuple[Any, Any, Any]:
     """Swap the loaded DiT if needed. Caller holds _LOCK."""
     AceStepHandler, _, LLMHandler, _ = _import_acestep()
@@ -72,7 +107,15 @@ def _ensure_loaded(dit_profile: str) -> tuple[Any, Any, Any]:
         # DiTs at once on a 16 GB card (SPEC.md sec 4.3).
         _STATE["handler"] = None
         checkpoint = DIT_CHECKPOINTS[dit_profile]
-        _STATE["handler"] = AceStepHandler(checkpoint=checkpoint, backend=LM_BACKEND)
+        if dit_profile in CPU_OFFLOAD_PROFILES:
+            ok, reason = supports_dit_profile(dit_profile)
+            if not ok:
+                raise WorkerUnavailable(reason)
+            _STATE["handler"] = AceStepHandler(
+                checkpoint=checkpoint, backend=LM_BACKEND, cpu_offload=True
+            )
+        else:
+            _STATE["handler"] = AceStepHandler(checkpoint=checkpoint, backend=LM_BACKEND)
         _STATE["dit_profile"] = dit_profile
 
     if _STATE["lm"] is None:

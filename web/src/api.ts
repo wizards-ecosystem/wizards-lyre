@@ -97,6 +97,7 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ action: "generate", dit_profile: "iterate", seed: -1 }),
     }),
+  getJob: (jobId: string) => request<Job>(`/api/jobs/${jobId}`),
   takeAudioUrl: (projectId: string, takeId: string) =>
     `/api/projects/${projectId}/takes/${takeId}/audio`,
 };

@@ -1,5 +1,33 @@
 import { useEffect, useState } from "react";
-import { api, Plan, ProjectDetail, ProjectSummary } from "./api";
+import { api, Job, Plan, ProjectDetail, ProjectSummary } from "./api";
+
+const JOB_POLL_INTERVAL_MS = 1000;
+// Real ACE-Step generation can take a while (SPEC.md sec 5: it queues
+// behind a dedicated worker process); give it a generous ceiling before
+// giving up on polling rather than declaring failure too early.
+const JOB_POLL_TIMEOUT_MS = 10 * 60 * 1000;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// A job only finishes async, via server.jobs' queued -> running -> done|error
+// lifecycle (SPEC.md sec 5) -- the enqueue response is just the initial
+// `queued` row, so the caller has to keep polling /api/jobs/{id} itself.
+async function pollJob(jobId: string, onUpdate?: (job: Job) => void): Promise<Job> {
+  const deadline = Date.now() + JOB_POLL_TIMEOUT_MS;
+  for (;;) {
+    const job = await api.getJob(jobId);
+    onUpdate?.(job);
+    if (job.status === "done" || job.status === "error") {
+      return job;
+    }
+    if (Date.now() > deadline) {
+      throw new Error(`job ${jobId} is still ${job.status} after ${JOB_POLL_TIMEOUT_MS / 1000}s`);
+    }
+    await sleep(JOB_POLL_INTERVAL_MS);
+  }
+}
 
 export default function App() {
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
@@ -8,6 +36,7 @@ export default function App() {
   const [newTitle, setNewTitle] = useState("");
   const [newQuery, setNewQuery] = useState("");
   const [busy, setBusy] = useState(false);
+  const [busyStatus, setBusyStatus] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   async function refreshProjects() {
@@ -57,9 +86,11 @@ export default function App() {
   async function generate() {
     if (!activeId) return;
     setBusy(true);
+    setBusyStatus("queued");
     setErrorMsg(null);
     try {
-      const job = await api.generate(activeId);
+      const queued = await api.generate(activeId);
+      const job = await pollJob(queued.id, (update) => setBusyStatus(update.status));
       if (job.status === "error") {
         setErrorMsg(job.error ?? "generate job failed");
       }
@@ -68,6 +99,7 @@ export default function App() {
       setErrorMsg(String(err));
     } finally {
       setBusy(false);
+      setBusyStatus(null);
     }
   }
 
@@ -132,7 +164,7 @@ export default function App() {
                 />
               </label>
               <button onClick={generate} disabled={busy}>
-                {busy ? "Generating…" : "Generate"}
+                {busy ? `Generating… (${busyStatus ?? "queued"})` : "Generate"}
               </button>
             </section>
 

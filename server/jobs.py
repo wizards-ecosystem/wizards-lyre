@@ -8,6 +8,13 @@ OS process from the FastAPI server so a long generation never blocks HTTP
 and a native GPU crash can't take the server down with it. See SPEC.md
 sec 5 (IPC / three processes), sec 8.1 (job body / studio_ops enforcement),
 and sec 10 (worker contract).
+
+A claimed job carries a heartbeat lease: `run_claimed_job` touches
+`heartbeat_at` every `HEARTBEAT_INTERVAL_SEC` while it runs. If the worker
+process dies or the GPU crashes mid-job, the heartbeat stops; the next
+`reclaim_stale_jobs` call (run at worker startup and each poll) finds the
+stuck `running` row and either requeues it for another attempt or, past
+`MAX_ATTEMPTS`, marks it `error` instead of leaving it `running` forever.
 """
 
 from __future__ import annotations
@@ -15,6 +22,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import threading
 import uuid
 from contextlib import closing
 from datetime import datetime, timezone
@@ -26,6 +34,10 @@ from worker import mock_worker
 VALID_ACTIONS = {"generate", "cover", "repaint", "extract", "lego", "complete"}
 STUDIO_OPS_ACTIONS = {"extract", "lego", "complete"}
 SOURCE_REQUIRED_ACTIONS = {"cover", "repaint", "extract", "lego", "complete"}
+
+HEARTBEAT_INTERVAL_SEC = 5.0
+STALE_AFTER_SEC = 60.0
+MAX_ATTEMPTS = 3
 
 # A worker returns the take's meta.json plus an optional plan.json patch
 # (simple-mode generation fills caption/lyrics/metas from the LM and the
@@ -54,6 +66,21 @@ def _connect() -> sqlite3.Connection:
     return conn
 
 
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, decl: str) -> None:
+    cols = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+    if column in cols:
+        return
+    try:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+    except sqlite3.OperationalError as exc:
+        # The server and the worker process both call init_db() at startup
+        # and can race here; if the column showed up between our PRAGMA
+        # check and this ALTER, that's another caller finishing the same
+        # migration, not a real failure.
+        if "duplicate column name" not in str(exc):
+            raise
+
+
 def init_db() -> None:
     with closing(_connect()) as conn:
         conn.execute(
@@ -72,20 +99,41 @@ def init_db() -> None:
             )
             """
         )
+        # Added for the heartbeat/lease/stale-reclaim mechanism; migrated in
+        # for any jobs.db created before it existed.
+        _ensure_column(conn, "jobs", "heartbeat_at", "TEXT")
+        _ensure_column(conn, "jobs", "attempts", "INTEGER NOT NULL DEFAULT 0")
         conn.commit()
 
 
-def _resolve_worker() -> WorkerFn:
-    """Pick the worker backend. `mock` is for tests/local dev only; production
-    defaults to the real ACE-Step worker (SPEC.md sec 10 / sec 14)."""
+def _resolve_worker_module():
+    """Pick the worker backend module. `mock` is for tests/local dev only;
+    production defaults to the real ACE-Step worker (SPEC.md sec 10 / 14)."""
     backend = os.environ.get("BARD_WORKER", "acestep")
     if backend == "mock":
-        return mock_worker.run_job
+        return mock_worker
     if backend == "acestep":
         from worker import acestep_worker
 
-        return acestep_worker.run_job
+        return acestep_worker
     raise JobError(f"unknown BARD_WORKER backend: {backend}")
+
+
+def _resolve_worker() -> WorkerFn:
+    return _resolve_worker_module().run_job
+
+
+def _check_worker_capability(dit_profile: str) -> None:
+    """SPEC.md sec 4.1/8.1: `quality` (XL) needs CPU offload on a 16 GB
+    card; reject it up front instead of risking an uncontrolled OOM deep
+    inside a job run."""
+    module = _resolve_worker_module()
+    check = getattr(module, "supports_dit_profile", None)
+    if check is None:
+        return
+    ok, reason = check(dit_profile)
+    if not ok:
+        raise JobError(reason or f"worker cannot currently load dit_profile '{dit_profile}'")
 
 
 def _resolve_dit_profile(action: str, dit_profile: str | None) -> str:
@@ -138,6 +186,7 @@ def enqueue_job(project_id: str, body: dict[str, Any]) -> dict:
         raise JobError(f"invalid action: {action}")
 
     dit_profile = _resolve_dit_profile(action, body.get("dit_profile"))
+    _check_worker_capability(dit_profile)
     _resolve_source_audio(project_id, action, body)
 
     job_id = uuid.uuid4().hex
@@ -148,7 +197,8 @@ def enqueue_job(project_id: str, body: dict[str, Any]) -> dict:
     with closing(_connect()) as conn:
         conn.execute(
             "INSERT INTO jobs (id, project_id, action, dit_profile, status, payload_json, "
-            "take_id, error, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "take_id, error, created_at, updated_at, heartbeat_at, attempts) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 job_id,
                 project_id,
@@ -160,6 +210,8 @@ def enqueue_job(project_id: str, body: dict[str, Any]) -> dict:
                 None,
                 now,
                 now,
+                None,
+                0,
             ),
         )
         conn.commit()
@@ -176,6 +228,20 @@ def _set_status(
             (status, take_id, error, _now(), job_id),
         )
         conn.commit()
+
+
+def _touch_heartbeat(job_id: str) -> None:
+    with closing(_connect()) as conn:
+        conn.execute(
+            "UPDATE jobs SET heartbeat_at = ? WHERE id = ? AND status = 'running'",
+            (_now(), job_id),
+        )
+        conn.commit()
+
+
+def _heartbeat_loop(job_id: str, stop: threading.Event) -> None:
+    while not stop.wait(HEARTBEAT_INTERVAL_SEC):
+        _touch_heartbeat(job_id)
 
 
 def _error_take_meta(
@@ -203,8 +269,10 @@ def _error_take_meta(
 
 
 def claim_next_queued_job() -> dict[str, Any] | None:
-    """Atomically claim the oldest `queued` job, marking it `running`. Used
-    by `process_one_queued_job` / the dedicated worker process loop."""
+    """Atomically claim the oldest `queued` job, marking it `running` and
+    starting its heartbeat lease. Used by `process_one_queued_job` / the
+    dedicated worker process loop."""
+    now = _now()
     with closing(_connect()) as conn:
         conn.execute("BEGIN IMMEDIATE")
         row = conn.execute(
@@ -214,12 +282,14 @@ def claim_next_queued_job() -> dict[str, Any] | None:
             conn.commit()
             return None
         conn.execute(
-            "UPDATE jobs SET status = 'running', updated_at = ? WHERE id = ?",
-            (_now(), row["id"]),
+            "UPDATE jobs SET status = 'running', heartbeat_at = ?, "
+            "attempts = attempts + 1, updated_at = ? WHERE id = ?",
+            (now, now, row["id"]),
         )
         conn.commit()
 
     job = _row_to_dict(row)
+    job["status"] = "running"  # `row` was fetched before the UPDATE above
     job["payload"] = json.loads(row["payload_json"])
     return job
 
@@ -227,12 +297,21 @@ def claim_next_queued_job() -> dict[str, Any] | None:
 def run_claimed_job(job: dict[str, Any]) -> None:
     """Run one already-`running` job to completion. GPU work happens here --
     run this from `worker/run_worker.py` as its own process in production so
-    a worker/GPU failure or crash never reaches the HTTP process."""
+    a worker/GPU failure or crash never reaches the HTTP process. A
+    background thread renews the job's heartbeat lease while this runs so a
+    hard crash (which skips the except/finally below entirely) is still
+    detectable by `reclaim_stale_jobs`."""
     job_id = job["id"]
     project_id = job["project_id"]
     action = job["action"]
     dit_profile = job["dit_profile"]
     payload = job["payload"]
+
+    stop_heartbeat = threading.Event()
+    heartbeat_thread = threading.Thread(
+        target=_heartbeat_loop, args=(job_id, stop_heartbeat), daemon=True
+    )
+    heartbeat_thread.start()
 
     take_id: str | None = None
     try:
@@ -259,6 +338,57 @@ def run_claimed_job(job: dict[str, Any]) -> None:
                 _error_take_meta(take_id, action, dit_profile, payload, str(exc)),
             )
         _set_status(job_id, "error", take_id=take_id, error=str(exc))
+    finally:
+        stop_heartbeat.set()
+        heartbeat_thread.join(timeout=HEARTBEAT_INTERVAL_SEC)
+
+
+def reclaim_stale_jobs(stale_after: float = STALE_AFTER_SEC) -> list[str]:
+    """Recover jobs a dead/crashed worker left stuck `running` (SPEC.md sec
+    10 point 5). A job whose heartbeat is older than `stale_after` seconds is
+    requeued for another attempt, or -- past `MAX_ATTEMPTS` -- marked `error`
+    instead of retried forever. Called at worker startup and on every poll
+    (see `worker/run_worker.py`).
+
+    Note: a take directory the crashed attempt had already allocated (before
+    its heartbeat went stale) is not tracked here and is left on disk; only
+    the job's queue state is recovered.
+    """
+    cutoff = datetime.now(timezone.utc).timestamp() - stale_after
+    reclaimed: list[str] = []
+    with closing(_connect()) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        rows = conn.execute(
+            "SELECT id, attempts, heartbeat_at, updated_at FROM jobs WHERE status = 'running'"
+        ).fetchall()
+        for row in rows:
+            reference = row["heartbeat_at"] or row["updated_at"]
+            try:
+                ref_ts = datetime.fromisoformat(reference).timestamp()
+            except (TypeError, ValueError):
+                ref_ts = 0.0
+            if ref_ts >= cutoff:
+                continue
+
+            if row["attempts"] >= MAX_ATTEMPTS:
+                conn.execute(
+                    "UPDATE jobs SET status = 'error', error = ?, updated_at = ? WHERE id = ?",
+                    (
+                        f"worker heartbeat lost after {row['attempts']} attempt(s); "
+                        "the worker process likely crashed",
+                        _now(),
+                        row["id"],
+                    ),
+                )
+            else:
+                conn.execute(
+                    "UPDATE jobs SET status = 'queued', heartbeat_at = NULL, updated_at = ? "
+                    "WHERE id = ?",
+                    (_now(), row["id"]),
+                )
+            reclaimed.append(row["id"])
+        conn.commit()
+    return reclaimed
 
 
 def process_one_queued_job() -> bool:
