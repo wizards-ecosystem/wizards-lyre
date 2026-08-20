@@ -426,6 +426,32 @@ def test_initialize_worker_reports_failure_without_crashing(
     assert acestep_worker._STATE["handler"] is None
 
 
+def test_initialize_worker_reports_ordinary_runtime_failure_without_crashing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ordinary ACE-Step/CUDA failures during a real load -- a missing
+    checkpoint (OSError), a CUDA driver error or OOM (RuntimeError) -- are
+    not TypeError/AttributeError, so `_api_method_call` doesn't convert them
+    to WorkerUnavailable. initialize_worker must still catch and report
+    them (not let them propagate and crash worker.run_worker)."""
+
+    class OomHandler:
+        def __init__(self) -> None:
+            pass
+
+        def initialize_service(self, **kwargs: Any) -> None:
+            raise RuntimeError("CUDA out of memory")
+
+    log: list[tuple] = []
+    _install_fake_acestep(monkeypatch, log, handler_cls=OomHandler)
+
+    ready, message = acestep_worker.initialize_worker()
+
+    assert ready is False
+    assert "out of memory" in message
+    assert acestep_worker._STATE["handler"] is None
+
+
 def test_unexpected_audio_format_is_a_clean_error_not_mislabeled(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

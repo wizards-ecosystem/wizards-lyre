@@ -48,9 +48,15 @@ export default function App() {
   // flight at a time, always carrying the latest edit. Without this, one
   // PUT per keystroke can complete out of order and let an older request
   // clobber a newer edit on disk even though the UI already shows it.
+  //
+  // saveChainRef is a promise chain, not just a flag: each save links onto
+  // the tail of whatever's already scheduled/in-flight, so awaiting it (as
+  // generate() does before enqueueing) waits for every save queued so far
+  // -- both one already in flight *and* one this call itself just kicked
+  // off -- to actually land on disk before a job reads the plan.
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingSaveRef = useRef<{ projectId: string; plan: Plan } | null>(null);
-  const savingRef = useRef(false);
+  const saveChainRef = useRef<Promise<void>>(Promise.resolve());
 
   useEffect(() => {
     return () => {
@@ -58,22 +64,33 @@ export default function App() {
     };
   }, []);
 
-  async function flushPlanSave() {
-    if (savingRef.current || !pendingSaveRef.current) return;
-    const { projectId, plan } = pendingSaveRef.current;
-    pendingSaveRef.current = null;
-    savingRef.current = true;
-    try {
-      await api.savePlan(projectId, plan);
-    } catch (err) {
-      setErrorMsg(String(err));
-    } finally {
-      savingRef.current = false;
-      // Another edit queued while this save was in flight -- send it next,
-      // never concurrently with the one that just finished.
-      if (pendingSaveRef.current) {
-        flushPlanSave();
+  function enqueueSave(): Promise<void> {
+    saveChainRef.current = saveChainRef.current.then(async () => {
+      const pending = pendingSaveRef.current;
+      if (!pending) return;
+      pendingSaveRef.current = null;
+      try {
+        await api.savePlan(pending.projectId, pending.plan);
+      } catch (err) {
+        setErrorMsg(String(err));
       }
+    });
+    return saveChainRef.current;
+  }
+
+  // Cancels any pending debounce and waits for the latest edit (plus
+  // anything already in flight) to finish saving. generate() must call
+  // this before enqueueing a job, or a job can start within the debounce
+  // window and read the plan from before the user's last edit.
+  async function flushPendingPlanSave(): Promise<void> {
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current);
+      saveTimeoutRef.current = null;
+    }
+    if (pendingSaveRef.current) {
+      await enqueueSave();
+    } else {
+      await saveChainRef.current;
     }
   }
 
@@ -118,7 +135,8 @@ export default function App() {
     pendingSaveRef.current = { projectId: activeId, plan };
     if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
     saveTimeoutRef.current = setTimeout(() => {
-      flushPlanSave().catch((err) => setErrorMsg(String(err)));
+      saveTimeoutRef.current = null;
+      enqueueSave();
     }, PLAN_SAVE_DEBOUNCE_MS);
   }
 
@@ -128,6 +146,11 @@ export default function App() {
     setBusyStatus("queued");
     setErrorMsg(null);
     try {
+      // The plan can still be mid-debounce (or an earlier save still in
+      // flight) when Generate is clicked -- without this, the job can read
+      // the plan from before the user's last edit (e.g. the query/caption
+      // they just typed).
+      await flushPendingPlanSave();
       const queued = await api.generate(activeId);
       const job = await pollJob(queued.id, (update) => setBusyStatus(update.status));
       if (job.status === "error") {

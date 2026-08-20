@@ -65,6 +65,17 @@ def initialize_worker() -> tuple[bool, str]:
     return True, "mock worker: no GPU/model to load, always ready"
 
 
+DEFAULT_SIMULATED_DIT_PROFILE = "iterate"
+
+
+def get_loaded_dit_profile() -> str | None:
+    """The mock never actually loads a model; report the default profile as
+    "loaded" since `initialize_worker` always simulates success for it, so
+    `/api/health` has something meaningful to show in mock-backed local
+    dev/tests (SPEC.md sec 8 `dit_loaded`)."""
+    return DEFAULT_SIMULATED_DIT_PROFILE
+
+
 def _is_simple_mode(plan: dict[str, Any]) -> bool:
     return bool(plan.get("query")) and not plan.get("caption") and not plan.get("lyrics")
 

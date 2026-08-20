@@ -71,6 +71,62 @@ def test_health(client: TestClient) -> None:
     assert "dit_loaded" in body
 
 
+def test_health_reports_published_worker_readiness(client: TestClient) -> None:
+    """SPEC.md sec 8: /api/health must reflect real worker startup state
+    (published by worker/run_worker.py), not a static guess -- the `client`
+    fixture's background worker thread publishes it almost immediately."""
+    deadline = time.time() + 5.0
+    body: dict[str, Any] = {}
+    while time.time() < deadline:
+        body = client.get("/api/health").json()
+        if body.get("dit_loaded") is not None:
+            break
+        time.sleep(0.01)
+    assert body.get("dit_loaded") == "iterate"
+    assert "unavailable" not in body["gpu"].lower()
+
+
+def test_health_before_any_worker_reports_in(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No worker process has published status yet -- health must say so
+    plainly instead of implying a worker is ready."""
+    monkeypatch.setenv("BARD_PROJECTS_DIR", str(tmp_path / "projects"))
+    monkeypatch.setenv("BARD_DB_PATH", str(tmp_path / "bard.db"))
+    monkeypatch.setenv("BARD_WORKER", "mock")
+
+    with TestClient(app) as c:
+        resp = c.get("/api/health")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["ok"] is True
+        assert body["dit_loaded"] is None
+        assert "not reported yet" in body["gpu"]
+
+
+def test_health_reports_unavailable_when_worker_startup_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A worker that fails to start (missing ACE-Step/CUDA/weights) must
+    show up as an unavailable/error state, not a silent null."""
+    monkeypatch.setenv("BARD_PROJECTS_DIR", str(tmp_path / "projects"))
+    monkeypatch.setenv("BARD_DB_PATH", str(tmp_path / "bard.db"))
+    monkeypatch.setenv("BARD_WORKER", "mock")
+
+    from server import jobs as jobs_module
+
+    jobs_module.init_db()
+    jobs_module.publish_worker_status(False, "boom: no GPU found", None)
+
+    with TestClient(app) as c:
+        resp = c.get("/api/health")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["dit_loaded"] is None
+        assert "unavailable" in body["gpu"].lower()
+        assert "boom" in body["gpu"]
+
+
 def test_project_create_and_plan_roundtrip(client: TestClient) -> None:
     resp = client.post("/api/projects", json={"title": "My Song", "query": "lofi beat"})
     assert resp.status_code == 200
@@ -509,6 +565,14 @@ def test_quality_profile_rejected_without_cpu_offload_support(client: TestClient
         f"/api/projects/{project_id}/plan",
         json={**storage.default_plan(), "caption": "orchestral, cinematic"},
     )
+
+    # The `client` fixture's background worker thread also publishes
+    # capabilities once at its own startup; wait for that one-time publish
+    # to land before overriding it below, or it can race and clobber our
+    # override right back to "supported" afterward.
+    deadline = time.time() + 5.0
+    while jobs_module.get_worker_capability("quality") is None and time.time() < deadline:
+        time.sleep(0.01)
 
     # simulate what worker/run_worker.py publishes at startup
     jobs_module.publish_worker_capability(

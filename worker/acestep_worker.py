@@ -184,6 +184,14 @@ def _log_cuda_status() -> str:
         return f"CUDA detect: error while querying CUDA/VRAM: {exc}"
 
 
+def get_loaded_dit_profile() -> str | None:
+    """Which DiT profile (if any) is currently loaded in this process's
+    memory, or None if nothing has loaded successfully yet. Read-only --
+    never triggers a load. `worker/run_worker.py` publishes this for
+    `/api/health` (SPEC.md sec 8 `dit_loaded`)."""
+    return _STATE["dit_profile"]
+
+
 def initialize_worker() -> tuple[bool, str]:
     """Worker-startup readiness (SPEC.md sec 10 point 1): detect CUDA, log
     VRAM, and preload the default `iterate` DiT + LM (`pt` backend) before
@@ -197,7 +205,15 @@ def initialize_worker() -> tuple[bool, str]:
     try:
         with _LOCK:
             _ensure_loaded("iterate")
-    except WorkerUnavailable as exc:
+    except Exception as exc:  # noqa: BLE001 - see below
+        # `_api_call`/`_api_method_call` only convert signature mismatches
+        # (TypeError/AttributeError) to WorkerUnavailable; ordinary
+        # ACE-Step/CUDA failures during a real load -- missing checkpoint
+        # files (OSError), a CUDA/driver error or OOM (RuntimeError) -- can
+        # still reach here directly. Both must be a reported, non-fatal
+        # readiness failure (SPEC.md sec 10 point 5), not an uncaught
+        # exception that kills worker.run_worker before it starts polling.
+        # `except Exception` still lets KeyboardInterrupt/SystemExit through.
         message = f"worker startup: failed to preload default 'iterate' DiT + LM: {exc}"
         print(message)
         return False, message

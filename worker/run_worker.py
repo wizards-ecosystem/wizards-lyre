@@ -17,14 +17,21 @@ instead of leaving the job `running` forever.
 
 Before polling, it runs the backend's startup readiness check (SPEC.md sec
 10 point 1: detect CUDA, log VRAM, preload the default `iterate` DiT + LM)
-via `<backend>.initialize_worker()`, then publishes what it can currently
-load (see `server.jobs.publish_worker_capability`) for every `dit_profile`
-based on that *actual* result -- not an optimistic guess -- so `quality`
-(XL) CPU-offload support (SPEC.md sec 4.1/8.1) is reported honestly, and a
+via `<backend>.initialize_worker()`, then publishes:
+
+- overall readiness + which DiT (if any) is loaded, via
+  `server.jobs.publish_worker_status` -- this is what `/api/health` reports
+  (SPEC.md sec 8 `dit_loaded`)
+- per-profile capability, via `server.jobs.publish_worker_capability` -- so
+  `quality` (XL) CPU-offload support (SPEC.md sec 4.1/8.1) is reported
+  honestly
+
+based on that *actual* startup result, not an optimistic guess, so a
 startup failure (missing ACE-Step/CUDA/weights) is visible immediately
-instead of only surfacing on the first job. This worker process is the only
-one allowed to import acestep to find any of this out; the FastAPI server
-just reads what got published (SPEC.md sec 10 point 4).
+instead of only surfacing on the first job or a static health response.
+This worker process is the only one allowed to import acestep to find any
+of this out; the FastAPI server just reads what got published (SPEC.md sec
+10 point 4).
 """
 
 from __future__ import annotations
@@ -42,6 +49,13 @@ def _startup_readiness() -> tuple[bool, str]:
     if init_fn is None:
         return True, f"{module.__name__}: no startup initialization required"
     return init_fn()
+
+
+def _publish_status(startup_ready: bool, startup_message: str) -> None:
+    module = jobs.resolve_worker_module()
+    get_loaded = getattr(module, "get_loaded_dit_profile", None)
+    loaded_dit_profile = get_loaded() if get_loaded is not None else None
+    jobs.publish_worker_status(startup_ready, startup_message, loaded_dit_profile)
 
 
 def _publish_capabilities(startup_ready: bool, startup_message: str) -> None:
@@ -67,6 +81,7 @@ def run_loop(stop_event: threading.Event, poll_interval: float = DEFAULT_POLL_IN
     jobs.init_db()
     jobs.reclaim_stale_jobs()  # recover anything a previous, now-dead worker left running
     startup_ready, startup_message = _startup_readiness()
+    _publish_status(startup_ready, startup_message)
     _publish_capabilities(startup_ready, startup_message)
     while not stop_event.is_set():
         jobs.reclaim_stale_jobs()

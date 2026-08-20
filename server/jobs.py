@@ -113,6 +113,17 @@ def init_db() -> None:
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS worker_status (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                ready INTEGER NOT NULL,
+                message TEXT,
+                loaded_dit_profile TEXT,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
         conn.commit()
 
 
@@ -168,6 +179,42 @@ def get_worker_capability(dit_profile: str) -> tuple[bool, str | None] | None:
     if row is None:
         return None
     return bool(row["supported"]), row["reason"]
+
+
+def publish_worker_status(ready: bool, message: str, loaded_dit_profile: str | None) -> None:
+    """Record overall worker readiness and which DiT profile (if any) is
+    currently loaded in the worker process's memory. Called by
+    `worker/run_worker.py` right after its startup readiness check
+    (`<backend>.initialize_worker()`) so `/api/health` can report real
+    worker state (SPEC.md sec 8: `dit_loaded`) instead of a static guess --
+    the FastAPI process can't read the worker's in-memory state directly
+    (SPEC.md sec 10 point 4 / worker-server isolation)."""
+    with closing(_connect()) as conn:
+        conn.execute(
+            "INSERT INTO worker_status (id, ready, message, loaded_dit_profile, updated_at) "
+            "VALUES (1, ?, ?, ?, ?) "
+            "ON CONFLICT(id) DO UPDATE SET ready = excluded.ready, message = excluded.message, "
+            "loaded_dit_profile = excluded.loaded_dit_profile, updated_at = excluded.updated_at",
+            (1 if ready else 0, message, loaded_dit_profile, _now()),
+        )
+        conn.commit()
+
+
+def get_worker_status() -> dict[str, Any] | None:
+    """Last-published worker readiness, or None if no worker process has
+    ever reported in (e.g. `worker/run_worker.py` hasn't started yet)."""
+    with closing(_connect()) as conn:
+        row = conn.execute(
+            "SELECT ready, message, loaded_dit_profile, updated_at FROM worker_status WHERE id = 1"
+        ).fetchone()
+    if row is None:
+        return None
+    return {
+        "ready": bool(row["ready"]),
+        "message": row["message"],
+        "loaded_dit_profile": row["loaded_dit_profile"],
+        "updated_at": row["updated_at"],
+    }
 
 
 def _check_worker_capability(dit_profile: str) -> None:

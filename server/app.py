@@ -82,10 +82,21 @@ def _value_error_handler(request, exc: ValueError):  # noqa: ANN001, ARG001
 
 @app.get("/api/health")
 def health() -> dict[str, Any]:
+    backend = os.environ.get("BARD_WORKER", "acestep")
+    status = jobs.get_worker_status()
+    if status is None:
+        return {
+            "ok": True,
+            "gpu": f"worker backend: {backend} (not reported yet -- is worker.run_worker running?)",
+            "dit_loaded": None,
+        }
+    gpu = status["message"] or f"worker backend: {backend}"
+    if not status["ready"]:
+        gpu = f"unavailable: {gpu}"
     return {
         "ok": True,
-        "gpu": f"worker backend: {os.environ.get('BARD_WORKER', 'acestep')}",
-        "dit_loaded": None,
+        "gpu": gpu,
+        "dit_loaded": status["loaded_dit_profile"],
     }
 
 
