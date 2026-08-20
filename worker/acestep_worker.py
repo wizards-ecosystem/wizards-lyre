@@ -10,7 +10,9 @@ backend) must stay safe on a machine with no GPU and no ACE-Step install;
 only calling `run_job` reaches for either. On a machine without ACE-Step
 installed, `run_job` raises `WorkerUnavailable`, which `server.jobs` catches
 and records as the job's `error` -- a missing/broken GPU stack fails the job,
-not the HTTP process (sec 10 point 5).
+not the HTTP process (sec 10 point 5). Run this worker as its own OS process
+(`python -m worker.run_worker`, see that module) so a native crash inside
+ACE-Step/CUDA can't take the FastAPI server down with it either.
 """
 
 from __future__ import annotations
@@ -88,8 +90,28 @@ def _repaint_meta(job: dict[str, Any]) -> dict | None:
     }
 
 
-def run_job(job: dict[str, Any], plan: dict[str, Any], take_id: str, take_dir: Path) -> dict:
-    """Run one real ACE-Step job and return the take's meta.json contents.
+def _is_simple_mode(job: dict[str, Any], plan: dict[str, Any]) -> bool:
+    """SPEC.md sec 7.2: Simple mode is "user types query"; caption/lyrics
+    stay empty until the LM (thinking=true) fills them in."""
+    return (
+        job.get("action") == "generate"
+        and bool(plan.get("query"))
+        and not plan.get("caption")
+        and not plan.get("lyrics")
+    )
+
+
+def run_job(
+    job: dict[str, Any], plan: dict[str, Any], take_id: str, take_dir: Path
+) -> tuple[dict, dict | None]:
+    """Run one real ACE-Step job. Returns `(take_meta, plan_patch)`;
+    `plan_patch` is the LM-filled plan to persist when this was a simple-mode
+    generation, else None (SPEC.md sec 7.2: "Persist the filled plan.").
+
+    `job["src_audio"]` must already be a resolved, jailed filesystem path (or
+    None for `generate`) -- `server.jobs` resolves `source_take_id` /
+    `upload_path` before calling this, so the worker never has to reach back
+    into project storage itself.
 
     Raises `WorkerUnavailable` if acestep/CUDA isn't usable; `server.jobs`
     catches that and marks the job `error` without crashing the HTTP process.
@@ -97,18 +119,28 @@ def run_job(job: dict[str, Any], plan: dict[str, Any], take_id: str, take_dir: P
     _, GenerationParams, _, generate_music = _import_acestep()
     take_dir.mkdir(parents=True, exist_ok=True)
 
+    simple_mode = _is_simple_mode(job, plan)
+    # Null/omitted bpm, key, or duration: let ACE-Step's CoT fill them in
+    # (SPEC.md sec 7.2, use_cot_metas), same as simple mode's blank caption.
+    use_cot_metas = simple_mode or any(
+        plan.get(k) is None for k in ("bpm", "keyscale", "duration_sec")
+    )
+
     with _LOCK:
         handler, lm, dit_profile = _ensure_loaded(job["dit_profile"])
         params = GenerationParams(
             task_type=TASK_TYPE_BY_ACTION[job["action"]],
+            query=plan.get("query") if simple_mode else None,
             caption=plan.get("caption", ""),
             lyrics=plan.get("lyrics", ""),
             bpm=plan.get("bpm"),
             keyscale=plan.get("keyscale"),
             duration_sec=plan.get("duration_sec"),
             instrumental=plan.get("instrumental", False),
+            thinking=simple_mode,
+            use_cot_metas=use_cot_metas,
             seed=job.get("seed", -1),
-            src_audio=job.get("upload_path") or job.get("source_take_id"),
+            src_audio=job.get("src_audio"),
             audio_cover_strength=job.get("audio_cover_strength"),
             repainting_start=job.get("repainting_start"),
             repainting_end=job.get("repainting_end"),
@@ -121,20 +153,39 @@ def run_job(job: dict[str, Any], plan: dict[str, Any], take_id: str, take_dir: P
             save_dir=str(take_dir),
         )
 
-    return {
+    caption = getattr(result, "caption", None) or plan.get("caption", "")
+    lyrics = getattr(result, "lyrics", None) or plan.get("lyrics", "")
+    bpm = getattr(result, "bpm", None) or plan.get("bpm")
+    keyscale = getattr(result, "keyscale", None) or plan.get("keyscale")
+    duration_sec = getattr(result, "duration_sec", None) or plan.get("duration_sec")
+
+    plan_patch = None
+    if simple_mode:
+        # The LM filled caption/lyrics/metas from `query` -- persist them
+        # onto plan.json instead of discarding them (SPEC.md sec 7.2).
+        plan_patch = {
+            **plan,
+            "caption": caption,
+            "lyrics": lyrics,
+            "bpm": bpm,
+            "keyscale": keyscale,
+        }
+
+    meta = {
         "id": take_id,
         "parent_take_id": job.get("source_take_id"),
         "task_type": TASK_TYPE_BY_ACTION[job["action"]],
         "dit_profile": dit_profile,
         "seed": getattr(result, "seed", job.get("seed", -1)),
-        "duration_sec": getattr(result, "duration_sec", plan.get("duration_sec")),
-        "caption": plan.get("caption", ""),
-        "lyrics": plan.get("lyrics", ""),
-        "bpm": plan.get("bpm"),
-        "keyscale": plan.get("keyscale"),
+        "duration_sec": duration_sec,
+        "caption": caption,
+        "lyrics": lyrics,
+        "bpm": bpm,
+        "keyscale": keyscale,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "score": None,
         "error": None,
         "repaint": _repaint_meta(job),
         "track_name": job.get("track_name"),
     }
+    return meta, plan_patch

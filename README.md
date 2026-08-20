@@ -6,9 +6,10 @@ The product spec is **[SPEC.md](SPEC.md)**. Implement that file. Do not invent e
 
 ## Status
 
-Phase 1 (SPEC.md sec 12): FastAPI health/projects/plan/takes/jobs API, SQLite job queue, a
-minimal React shell (library, plan, takes, generate), and a mocked worker for tests. The
-production job backend is `worker/acestep_worker.py`, which calls ACE-Step 1.5's
+Phase 1 (SPEC.md sec 12): FastAPI health/projects/plan/takes/jobs API, a SQLite
+`queued -> running -> done|error` job queue, a dedicated worker process (`worker/run_worker.py`)
+that drains it, a minimal React shell (library, plan, takes, generate), and a mocked worker for
+tests. The production job backend is `worker/acestep_worker.py`, which calls ACE-Step 1.5's
 `generate_music` -- it requires ACE-Step installed and weights downloaded (see below). Phases
 2-4 (studio loop, base-model swap, LoRA/polish) are not implemented yet.
 
@@ -22,7 +23,7 @@ Windows, RTX 4070 Ti SUPER 16 GB. Default: ACE-Step 2B turbo + 1.7B LM. Bind `12
 |---|---|
 | `SPEC.md` | Sole product spec |
 | `server/` | FastAPI (HTTP, jobs, files) |
-| `worker/` | ACE-Step GPU process (`acestep_worker.py`) and the test-only `mock_worker.py` |
+| `worker/` | `run_worker.py` (dedicated process entry point), `acestep_worker.py` (real backend), test-only `mock_worker.py` |
 | `web/` | Vite + React studio |
 | `tests/` | pytest, mocked worker, no GPU |
 | `scripts/smoke-gpu.py` | Real ACE-Step turbo smoke (manual, not part of pytest) |
@@ -46,14 +47,21 @@ Without ACE-Step installed, the server still runs; `generate`/`cover`/... jobs w
 clear "acestep is not installed" error instead of crashing. Set `BARD_WORKER=mock` to force the
 mocked worker (silent WAV, no GPU) for local UI/API poking without a GPU.
 
-## Run the server
+## Run the server + worker
+
+Two separate processes (SPEC.md sec 5): the FastAPI server only ever reads/writes SQLite and
+disk; the worker is where CUDA and ACE-Step actually load, so a GPU crash can't take HTTP down
+and a long generation never blocks a request.
 
 ```powershell
-python -m server.app
+python -m server.app          # terminal 1: HTTP API + (if built) the SPA
+python -m worker.run_worker   # terminal 2: claims `queued` jobs, runs them one at a time
 ```
 
-Binds `127.0.0.1:8421` by default; override with `BARD_PORT`. If `web/dist` exists, the server
-serves the built SPA at `/`; otherwise `/` returns a hint to build or run the frontend dev server.
+`server.app` binds `127.0.0.1:8421` by default; override with `BARD_PORT`. If `web/dist` exists,
+it serves the built SPA at `/`; otherwise `/` returns a hint to build or run the frontend dev
+server. Jobs posted to `/api/projects/{id}/jobs` sit as `queued` until `worker.run_worker` (or
+`BARD_WORKER=mock` for a GPU-free worker) picks them up.
 
 ## Frontend
 

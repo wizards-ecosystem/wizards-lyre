@@ -6,6 +6,9 @@ See SPEC.md sec 11 and 14.
 from __future__ import annotations
 
 import json
+import re
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -13,6 +16,16 @@ from fastapi.testclient import TestClient
 
 from server import storage
 from server.app import app
+from worker.run_worker import run_loop
+
+FORBIDDEN_IMPORTS = (
+    "google.genai",
+    "google.generativeai",
+    "elevenlabs",
+    "stability_sdk",
+    "suno",
+    "udio",
+)
 
 
 @pytest.fixture()
@@ -23,8 +36,30 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     # production's default (see server/jobs.py) and is exercised only by the
     # manual, non-pytest scripts/smoke-gpu.py.
     monkeypatch.setenv("BARD_WORKER", "mock")
-    with TestClient(app) as c:
-        yield c
+
+    # `enqueue_job` only inserts a `queued` row -- it never runs a job
+    # itself (SPEC.md sec 5). This thread stands in for the dedicated
+    # `worker/run_worker.py` process that drains the same SQLite queue in
+    # production, fast-polled so tests stay quick.
+    stop_event = threading.Event()
+    worker_thread = threading.Thread(target=run_loop, args=(stop_event, 0.01), daemon=True)
+    worker_thread.start()
+    try:
+        with TestClient(app) as c:
+            yield c
+    finally:
+        stop_event.set()
+        worker_thread.join(timeout=5)
+
+
+def _wait_for_job(client: TestClient, job_id: str, timeout: float = 5.0) -> dict:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        job = client.get(f"/api/jobs/{job_id}").json()
+        if job["status"] in ("done", "error"):
+            return job
+        time.sleep(0.01)
+    raise TimeoutError(f"job {job_id} did not finish within {timeout}s")
 
 
 def test_health(client: TestClient) -> None:
@@ -94,7 +129,12 @@ def test_generate_job_creates_playable_take(client: TestClient) -> None:
         json={"action": "generate", "dit_profile": "iterate", "seed": -1},
     )
     assert resp.status_code == 200
-    job = resp.json()
+    queued = resp.json()
+    # enqueue_job only inserts the row; it never runs the job in the request
+    # (SPEC.md sec 5), so it may still be queued/running when this returns.
+    assert queued["status"] in ("queued", "running", "done")
+
+    job = _wait_for_job(client, queued["id"])
     assert job["status"] == "done"
     assert job["error"] is None
     take_id = job["take_id"]
@@ -137,6 +177,71 @@ def test_generate_job_creates_playable_take(client: TestClient) -> None:
     assert meta_path.exists()
 
 
+def test_simple_query_generation_fills_and_persists_plan(client: TestClient) -> None:
+    """SPEC.md sec 7.2: Simple mode ('query' set, caption/lyrics blank) must
+    have the LM (mocked here) fill caption/lyrics/metas, and the filled plan
+    must be persisted to plan.json, not discarded."""
+    project = client.post(
+        "/api/projects", json={"title": "Simple Mode", "query": "dreamy synthwave drive"}
+    ).json()
+    project_id = project["id"]
+
+    detail = client.get(f"/api/projects/{project_id}").json()
+    assert detail["plan"]["query"] == "dreamy synthwave drive"
+    assert detail["plan"]["caption"] == ""
+
+    resp = client.post(f"/api/projects/{project_id}/jobs", json={"action": "generate"})
+    job = _wait_for_job(client, resp.json()["id"])
+    assert job["status"] == "done", job.get("error")
+
+    detail = client.get(f"/api/projects/{project_id}").json()
+    assert "dreamy synthwave drive" in detail["plan"]["caption"]
+    assert detail["plan"]["bpm"] is not None
+    assert detail["plan"]["keyscale"] is not None
+
+    take = detail["takes"][0]
+    assert take["caption"] == detail["plan"]["caption"]
+
+
+def test_worker_failure_writes_error_take_meta(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SPEC.md sec 10 point 5: on failure the worker writes meta.json with
+    `error` set for the take it already allocated, not just a job error."""
+    project = client.post("/api/projects", json={"title": "Boom"}).json()
+    project_id = project["id"]
+    client.put(
+        f"/api/projects/{project_id}/plan",
+        json={**storage.default_plan(), "caption": "will explode"},
+    )
+
+    import worker.mock_worker as mock_worker
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("synthetic worker failure")
+
+    monkeypatch.setattr(mock_worker, "run_job", _boom)
+
+    resp = client.post(f"/api/projects/{project_id}/jobs", json={"action": "generate"})
+    job = _wait_for_job(client, resp.json()["id"])
+    assert job["status"] == "error"
+    assert "synthetic worker failure" in job["error"]
+
+    take_id = job["take_id"]
+    assert take_id  # the take dir was allocated before the worker blew up
+
+    meta_path = storage.take_dir(project_id, take_id) / "meta.json"
+    assert meta_path.exists()
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    assert meta["error"] and "synthetic worker failure" in meta["error"]
+
+    assert not (storage.take_dir(project_id, take_id) / "mix.wav").exists()
+
+    # a failed take is never promoted to active
+    project_after = client.get(f"/api/projects/{project_id}").json()["project"]
+    assert project_after["active_take_id"] != take_id
+
+
 def test_path_jail_rejects_escape(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("BARD_PROJECTS_DIR", str(tmp_path / "projects"))
     monkeypatch.setenv("BARD_DB_PATH", str(tmp_path / "bard.db"))
@@ -163,10 +268,12 @@ def test_studio_ops_required_for_extract_lego_complete(client: TestClient) -> No
     client.put(f"/api/projects/{project_id}/plan", json=storage.default_plan())
 
     # a source take to extract/lego/complete from
-    gen = client.post(
+    resp = client.post(
         f"/api/projects/{project_id}/jobs",
         json={"action": "generate", "dit_profile": "iterate"},
-    ).json()
+    )
+    gen = _wait_for_job(client, resp.json()["id"])
+    assert gen["status"] == "done", gen.get("error")
     source_take_id = gen["take_id"]
 
     for action in ("extract", "lego", "complete"):
@@ -192,9 +299,10 @@ def test_studio_ops_required_for_extract_lego_complete(client: TestClient) -> No
             },
         )
         assert resp.status_code == 200, action
-        job = resp.json()
-        assert job["dit_profile"] == "studio_ops"
-        assert job["status"] == "done"
+        queued = resp.json()
+        assert queued["dit_profile"] == "studio_ops"
+        job = _wait_for_job(client, queued["id"])
+        assert job["status"] == "done", job.get("error")
 
         # explicit studio_ops is accepted
         resp = client.post(
@@ -207,6 +315,8 @@ def test_studio_ops_required_for_extract_lego_complete(client: TestClient) -> No
             },
         )
         assert resp.status_code == 200, action
+        job = _wait_for_job(client, resp.json()["id"])
+        assert job["status"] == "done", job.get("error")
 
 
 def test_cover_repaint_extract_require_a_real_source(client: TestClient) -> None:
@@ -253,3 +363,24 @@ def test_invalid_action_rejected(client: TestClient) -> None:
         json={"action": "not-a-real-action"},
     )
     assert resp.status_code == 400
+
+
+def test_no_forbidden_engine_imports() -> None:
+    """SPEC.md sec 11: static check that no Lyria/Gemini/ElevenLabs/Stability
+    /Suno/Udio client code has been added to this project's own source (see
+    also tests/test_spec_lock.py, which scans the whole repo)."""
+    root = Path(__file__).resolve().parents[1]
+    pattern = re.compile(
+        r"^\s*(?:from|import)\s+(" + "|".join(re.escape(n) for n in FORBIDDEN_IMPORTS) + r")\b",
+        re.MULTILINE,
+    )
+    skip_parts = {".venv", "node_modules", ".git", "dist"}
+    hits: list[str] = []
+    for glob in ("**/*.py", "**/*.ts", "**/*.tsx", "**/*.js", "**/*.mjs"):
+        for path in root.glob(glob):
+            if any(part in skip_parts for part in path.parts):
+                continue
+            text = path.read_text(encoding="utf-8", errors="replace")
+            if pattern.search(text):
+                hits.append(str(path.relative_to(root)))
+    assert hits == []
