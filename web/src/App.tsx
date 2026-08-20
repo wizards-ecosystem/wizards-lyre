@@ -49,14 +49,23 @@ export default function App() {
   // PUT per keystroke can complete out of order and let an older request
   // clobber a newer edit on disk even though the UI already shows it.
   //
-  // saveChainRef is a promise chain, not just a flag: each save links onto
-  // the tail of whatever's already scheduled/in-flight, so awaiting it (as
-  // generate() does before enqueueing) waits for every save queued so far
-  // -- both one already in flight *and* one this call itself just kicked
-  // off -- to actually land on disk before a job reads the plan.
+  // There is only one pending-save slot, shared across projects (not one
+  // per project ID), so switching the active project must flush whatever
+  // is pending *before* the switch -- otherwise an edit to the project
+  // being left can be silently discarded by the next project's edits
+  // reusing the same slot/timer.
+  //
+  // saveChainRef is a promise chain used purely to serialize save
+  // *execution order* -- it always resolves, even after a failed save, so
+  // one failure doesn't permanently break every save after it.
+  // lastSaveOutcomeRef instead reflects the *real* outcome of the most
+  // recently started save; flushPendingPlanSave() awaits that (not the
+  // chain) so a failed save is never silently treated as success --
+  // generate() must not enqueue a job against a plan that failed to save.
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingSaveRef = useRef<{ projectId: string; plan: Plan } | null>(null);
   const saveChainRef = useRef<Promise<void>>(Promise.resolve());
+  const lastSaveOutcomeRef = useRef<Promise<void>>(Promise.resolve());
 
   useEffect(() => {
     return () => {
@@ -65,23 +74,24 @@ export default function App() {
   }, []);
 
   function enqueueSave(): Promise<void> {
-    saveChainRef.current = saveChainRef.current.then(async () => {
+    const runSave = saveChainRef.current.then(async () => {
       const pending = pendingSaveRef.current;
       if (!pending) return;
       pendingSaveRef.current = null;
-      try {
-        await api.savePlan(pending.projectId, pending.plan);
-      } catch (err) {
-        setErrorMsg(String(err));
-      }
+      await api.savePlan(pending.projectId, pending.plan);
     });
-    return saveChainRef.current;
+    saveChainRef.current = runSave.catch(() => {});
+    lastSaveOutcomeRef.current = runSave;
+    return runSave;
   }
 
   // Cancels any pending debounce and waits for the latest edit (plus
-  // anything already in flight) to finish saving. generate() must call
-  // this before enqueueing a job, or a job can start within the debounce
-  // window and read the plan from before the user's last edit.
+  // anything already in flight) to finish saving. generate() and
+  // switchActiveProject() must call this first: without it, a job can
+  // start (or a project switch can happen) within the debounce window and
+  // read/discard the plan from before the user's last edit. Throws if the
+  // save actually failed, so callers can abort instead of proceeding
+  // against a stale on-disk plan.
   async function flushPendingPlanSave(): Promise<void> {
     if (saveTimeoutRef.current) {
       clearTimeout(saveTimeoutRef.current);
@@ -90,8 +100,20 @@ export default function App() {
     if (pendingSaveRef.current) {
       await enqueueSave();
     } else {
-      await saveChainRef.current;
+      await lastSaveOutcomeRef.current;
     }
+  }
+
+  // Flushes any pending/in-flight save for the *current* project before
+  // switching to a different one (SPEC.md: a shared save slot must not
+  // silently drop an edit when the user switches projects mid-debounce).
+  async function switchActiveProject(id: string): Promise<void> {
+    try {
+      await flushPendingPlanSave();
+    } catch (err) {
+      setErrorMsg(String(err));
+    }
+    setActiveId(id);
   }
 
   async function refreshProjects() {
@@ -121,7 +143,7 @@ export default function App() {
       setNewTitle("");
       setNewQuery("");
       await refreshProjects();
-      setActiveId(project.id);
+      await switchActiveProject(project.id);
     } catch (err) {
       setErrorMsg(String(err));
     }
@@ -136,7 +158,10 @@ export default function App() {
     if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
     saveTimeoutRef.current = setTimeout(() => {
       saveTimeoutRef.current = null;
-      enqueueSave();
+      // Fire-and-forget from here (nothing is awaiting this save yet), but
+      // still surface a failure -- flushPendingPlanSave() picks up the
+      // real outcome via lastSaveOutcomeRef if something awaits it later.
+      enqueueSave().catch((err) => setErrorMsg(String(err)));
     }, PLAN_SAVE_DEBOUNCE_MS);
   }
 
@@ -187,7 +212,7 @@ export default function App() {
             <li
               key={p.id}
               className={p.id === activeId ? "active" : ""}
-              onClick={() => setActiveId(p.id)}
+              onClick={() => switchActiveProject(p.id)}
             >
               {p.title}
             </li>
