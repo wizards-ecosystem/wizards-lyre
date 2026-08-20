@@ -6,7 +6,6 @@ import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-THIS_FILE = Path(__file__).resolve()
 
 # Exact "import X" / "from X import ..." module names. Kept narrow (dotted
 # module identifiers only) so this list can safely contain words that also
@@ -53,13 +52,13 @@ CODE_GLOBS = ("**/*.py", "**/*.ts", "**/*.tsx", "**/*.js", "**/*.mjs")
 SKIP_PARTS = {".venv", "node_modules", ".git"}
 
 
-def _iter_source(*, skip_self: bool = False) -> list[Path]:
+def _iter_source(*, skip_tests: bool = False) -> list[Path]:
     files: list[Path] = []
     for glob in CODE_GLOBS:
         for path in ROOT.glob(glob):
             if any(part in SKIP_PARTS for part in path.parts):
                 continue
-            if skip_self and path.resolve() == THIS_FILE:
+            if skip_tests and "tests" in path.parts:
                 continue
             files.append(path)
     return files
@@ -89,16 +88,18 @@ def test_source_does_not_import_forbidden_engines() -> None:
 
 
 def test_source_does_not_reference_forbidden_clients() -> None:
-    """Broader scan: catches non-import references too, e.g. gradio app
-    mounting (`mount_gradio_app`, `gr.Blocks(...).launch()`), REST clients
-    built around a forbidden vendor's API, or a stray `import suno_client`.
+    """Broader scan of application source (excludes tests/, since test files
+    legitimately hold these names as literals to assert their absence
+    elsewhere). Catches non-import references too, e.g. gradio app mounting
+    (`mount_gradio_app`, `gr.Blocks(...).launch()`), REST clients built
+    around a forbidden vendor's API, or a stray `import suno_client`.
     """
     pattern = re.compile(
         r"(?<![A-Za-z])(" + "|".join(re.escape(name) for name in FORBIDDEN_KEYWORDS) + r")(?![A-Za-z])",
         re.IGNORECASE,
     )
     hits: list[str] = []
-    for path in _iter_source(skip_self=True):
+    for path in _iter_source(skip_tests=True):
         text = path.read_text(encoding="utf-8", errors="replace")
         match = pattern.search(text)
         if match:
@@ -112,7 +113,7 @@ def test_source_does_not_bind_public_host() -> None:
     """
     pattern = re.compile("|".join(re.escape(host) for host in FORBIDDEN_BIND_HOSTS))
     hits: list[str] = []
-    for path in _iter_source(skip_self=True):
+    for path in _iter_source(skip_tests=True):
         text = path.read_text(encoding="utf-8", errors="replace")
         if pattern.search(text):
             hits.append(str(path.relative_to(ROOT)))
