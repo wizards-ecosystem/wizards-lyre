@@ -31,7 +31,17 @@ from typing import Any, Callable
 from server import config, storage
 from worker import mock_worker
 
-VALID_ACTIONS = {"generate", "cover", "repaint", "extract", "lego", "complete"}
+# SPEC.md sec 12 (phase order): phase 1 is generate only. cover/repaint
+# (phase 2) and extract/lego/complete (phase 3) each need frontend workflow
+# phase 1 doesn't have -- source selection, repaint regions, and a
+# base-model-swap confirmation/loading UX -- so the API must not accept them
+# yet even though worker/acestep_worker.py's adapter already implements
+# their call contract (exercised directly by
+# tests/test_acestep_worker_adapter.py, independent of this gate). Moving an
+# action from PHASE_GATED_ACTIONS to VALID_ACTIONS is the one-line change
+# that turns it on once its phase's UI/workflow lands.
+VALID_ACTIONS = {"generate"}
+PHASE_GATED_ACTIONS = {"cover", "repaint", "extract", "lego", "complete"}
 STUDIO_OPS_ACTIONS = {"extract", "lego", "complete"}
 SOURCE_REQUIRED_ACTIONS = {"cover", "repaint", "extract", "lego", "complete"}
 
@@ -398,6 +408,13 @@ def enqueue_job(project_id: str, body: dict[str, Any]) -> dict:
     storage.load_project(project_id)
 
     action = body.get("action")
+    if action in PHASE_GATED_ACTIONS:
+        raise JobError(
+            f"action '{action}' is not available yet -- phase 1 only implements "
+            "'generate' (SPEC.md sec 12: cover/repaint land in phase 2, "
+            "extract/lego/complete in phase 3, each with required UI this build "
+            "doesn't have yet)"
+        )
     if action not in VALID_ACTIONS:
         raise JobError(f"invalid action: {action}")
 

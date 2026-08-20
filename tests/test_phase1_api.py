@@ -661,12 +661,17 @@ def test_smoke_gpu_script_writes_under_output_dir(
     assert written[0].is_relative_to(output_root)
 
 
-def test_studio_ops_required_for_extract_lego_complete(client: TestClient) -> None:
-    project = client.post("/api/projects", json={"title": "Ops Test"}).json()
+def test_phase_gated_actions_rejected_until_their_phase(client: TestClient) -> None:
+    """SPEC.md sec 12 (phase order): phase 1 is 'generate' only. cover/repaint
+    (phase 2) and extract/lego/complete (phase 3) each need frontend
+    workflow this build doesn't have yet -- source selection, repaint
+    regions, base-model-swap confirmation/loading UX -- so the API must
+    reject them outright instead of accepting a job the UI can't drive,
+    regardless of how well-formed the rest of the request is."""
+    project = client.post("/api/projects", json={"title": "Phase Gate Test"}).json()
     project_id = project["id"]
     client.put(f"/api/projects/{project_id}/plan", json=storage.default_plan())
 
-    # a source take to extract/lego/complete from
     resp = client.post(
         f"/api/projects/{project_id}/jobs",
         json={"action": "generate", "dit_profile": "iterate"},
@@ -675,35 +680,10 @@ def test_studio_ops_required_for_extract_lego_complete(client: TestClient) -> No
     assert gen["status"] == "done", gen.get("error")
     source_take_id = gen["take_id"]
 
-    for action in ("extract", "lego", "complete"):
-        # explicit wrong profile is rejected outright
-        resp = client.post(
-            f"/api/projects/{project_id}/jobs",
-            json={
-                "action": action,
-                "dit_profile": "iterate",
-                "source_take_id": source_take_id,
-                "track_name": "vocals",
-            },
-        )
-        assert resp.status_code == 400, action
-
-        # omitting dit_profile is coerced to studio_ops and the job runs
-        resp = client.post(
-            f"/api/projects/{project_id}/jobs",
-            json={
-                "action": action,
-                "source_take_id": source_take_id,
-                "track_name": "vocals",
-            },
-        )
-        assert resp.status_code == 200, action
-        queued = resp.json()
-        assert queued["dit_profile"] == "studio_ops"
-        job = _wait_for_job(client, queued["id"])
-        assert job["status"] == "done", job.get("error")
-
-        # explicit studio_ops is accepted
+    for action in ("cover", "repaint", "extract", "lego", "complete"):
+        # Well-formed in every other respect (real source, studio_ops
+        # profile where that would otherwise be required) -- still rejected
+        # purely because this action isn't available yet.
         resp = client.post(
             f"/api/projects/{project_id}/jobs",
             json={
@@ -713,45 +693,65 @@ def test_studio_ops_required_for_extract_lego_complete(client: TestClient) -> No
                 "track_name": "vocals",
             },
         )
-        assert resp.status_code == 200, action
-        job = _wait_for_job(client, resp.json()["id"])
-        assert job["status"] == "done", job.get("error")
+        assert resp.status_code == 400, action
+        assert "not available yet" in resp.json()["detail"], action
+
+        # No job row is left behind for a rejected action.
+        assert all(j["action"] != action for j in client.get("/api/jobs").json())
 
 
-def test_cover_repaint_extract_require_a_real_source(client: TestClient) -> None:
-    project = client.post("/api/projects", json={"title": "Source Test"}).json()
+def test_resolve_dit_profile_studio_ops_enforcement() -> None:
+    """Direct unit coverage for _resolve_dit_profile's studio_ops coercion
+    (SPEC.md sec 8.1) -- currently unreachable via enqueue_job (see
+    test_phase_gated_actions_rejected_until_their_phase) because
+    extract/lego/complete are phase-3-gated, but the logic stays correct and
+    tested so enabling those actions later is just a PHASE_GATED_ACTIONS
+    edit, not new/unverified logic."""
+    from server import jobs as jobs_module
+
+    for action in ("extract", "lego", "complete"):
+        assert jobs_module._resolve_dit_profile(action, None) == "studio_ops"
+        assert jobs_module._resolve_dit_profile(action, "studio_ops") == "studio_ops"
+        with pytest.raises(jobs_module.JobError):
+            jobs_module._resolve_dit_profile(action, "iterate")
+
+    assert jobs_module._resolve_dit_profile("generate", None) == "iterate"
+    assert jobs_module._resolve_dit_profile("generate", "polish") == "polish"
+
+
+def test_resolve_source_audio_requires_a_real_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Direct unit coverage for _resolve_source_audio's source validation
+    (SPEC.md sec 8.1/11) -- see test_resolve_dit_profile_studio_ops_enforcement
+    for why this is tested below enqueue_job rather than through it."""
+    monkeypatch.setenv("BARD_PROJECTS_DIR", str(tmp_path / "projects"))
+    monkeypatch.setenv("BARD_DB_PATH", str(tmp_path / "bard.db"))
+
+    from server import jobs as jobs_module
+
+    project = storage.create_project(title="Source Unit Test")
     project_id = project["id"]
-    client.put(f"/api/projects/{project_id}/plan", json=storage.default_plan())
 
     for action in ("cover", "repaint", "extract", "lego", "complete"):
         # no source_take_id and no upload_path at all
-        resp = client.post(
-            f"/api/projects/{project_id}/jobs",
-            json={"action": action, "track_name": "vocals"},
-        )
-        assert resp.status_code == 400, action
+        with pytest.raises(jobs_module.JobError):
+            jobs_module._resolve_source_audio(project_id, action, {"track_name": "vocals"})
 
         # a source_take_id that doesn't exist
-        resp = client.post(
-            f"/api/projects/{project_id}/jobs",
-            json={
-                "action": action,
-                "source_take_id": "does-not-exist",
-                "track_name": "vocals",
-            },
-        )
-        assert resp.status_code == 400, action
+        with pytest.raises(jobs_module.JobError):
+            jobs_module._resolve_source_audio(
+                project_id, action, {"source_take_id": "does-not-exist"}
+            )
 
         # an upload_path that escapes the project's jail
-        resp = client.post(
-            f"/api/projects/{project_id}/jobs",
-            json={
-                "action": action,
-                "upload_path": "../../../../evil.wav",
-                "track_name": "vocals",
-            },
-        )
-        assert resp.status_code == 400, action
+        with pytest.raises(storage.PathJailError):
+            jobs_module._resolve_source_audio(
+                project_id, action, {"upload_path": "../../../../evil.wav"}
+            )
+
+    # generate never requires a source
+    assert jobs_module._resolve_source_audio(project_id, "generate", {}) is None
 
 
 def test_batch_size_forced_to_one(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -61,9 +61,10 @@ acestep-download
 Weights land under `checkpoints/` by default (override with `BARD_CHECKPOINTS_DIR`) -- see
 `worker/acestep_worker.py`'s `CHECKPOINTS_ROOT`.
 
-Without ACE-Step installed, the server still runs; `generate`/`cover`/... jobs will fail with a
-clear "acestep is not installed" error instead of crashing. Set `BARD_WORKER=mock` to force the
-mocked worker (silent WAV, no GPU) for local UI/API poking without a GPU.
+Without ACE-Step installed, the server still runs; `generate` jobs (phase 1's only accepted
+action -- see Status above) will fail with a clear "acestep is not installed" error instead of
+crashing. Set `BARD_WORKER=mock` to force the mocked worker (silent WAV, no GPU) for local
+UI/API poking without a GPU.
 
 ## Run the server + worker
 
