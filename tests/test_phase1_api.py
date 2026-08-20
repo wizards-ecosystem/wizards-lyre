@@ -179,11 +179,11 @@ def test_worker_republishes_status_after_recovering_from_startup_failure(
     project = storage.create_project(title="Recovery")
     project_id = project["id"]
 
-    # Enqueue *before* the worker publishes anything: enqueue_job rejects a
-    # request outright once "unavailable" capability is published (SPEC.md
-    # sec 8.1), so the realistic "recovers after processing a queued job"
-    # case is a job that was already queued when the worker's claim/run
-    # loop -- which never re-checks capability -- picks it up.
+    # Enqueue before the worker publishes anything, purely so the ordering
+    # below is deterministic (the job's claim/run loop never re-checks
+    # capability once queued, regardless of when it was enqueued -- ordinary
+    # 'generate' requests are never capability-gated in the first place,
+    # see test_ordinary_profiles_queue_despite_total_worker_startup_failure).
     job = jobs_module.enqueue_job(project_id, {"action": "generate"})
     assert job["status"] == "queued"
 
@@ -882,6 +882,53 @@ def test_quality_profile_rejected_without_cpu_offload_support(client: TestClient
         json={"action": "generate", "dit_profile": "quality"},
     )
     assert resp.status_code == 200
+
+
+def test_ordinary_profiles_queue_despite_total_worker_startup_failure(
+    client: TestClient,
+) -> None:
+    """When the *whole worker* fails to start (missing ACE-Step/CUDA/
+    weights), worker/run_worker.py's _publish_capabilities marks every DiT
+    profile unsupported, not just quality. SPEC.md sec 4.1/8.1 only calls
+    for early rejection of quality (CPU-offload support); rejecting an
+    ordinary 'iterate' generate request the same way would mean it can never
+    reach the queue, so it can never become a recoverable `error` job with
+    failure metadata (SPEC.md sec 10 point 5 / README's documented "jobs
+    fail cleanly instead of being rejected" contract), and a transient
+    startup failure could never self-heal since no job would ever reach
+    _ensure_loaded to retry it (reviewer-flagged)."""
+    from server import jobs as jobs_module
+
+    project = client.post("/api/projects", json={"title": "Startup Failure"}).json()
+    project_id = project["id"]
+    client.put(
+        f"/api/projects/{project_id}/plan",
+        json={**storage.default_plan(), "caption": "x"},
+    )
+
+    # Simulate worker/run_worker.py._publish_capabilities' blanket-failure
+    # publish: every profile marked unsupported, exactly as it does when
+    # initialize_worker() fails.
+    for dit_profile in storage.VALID_DIT_PROFILES:
+        jobs_module.publish_worker_capability(
+            dit_profile, False, "worker startup: failed to preload default 'iterate' DiT + LM: boom"
+        )
+    jobs_module.publish_worker_status(False, "boom: no GPU found", None)
+
+    resp = client.post(
+        f"/api/projects/{project_id}/jobs",
+        json={"action": "generate", "dit_profile": "iterate"},
+    )
+    assert resp.status_code == 200, resp.json()
+    assert resp.json()["status"] == "queued"
+
+    # quality remains gated even in this scenario -- it's the one profile
+    # SPEC.md actually calls for early rejection of.
+    resp = client.post(
+        f"/api/projects/{project_id}/jobs",
+        json={"action": "generate", "dit_profile": "quality"},
+    )
+    assert resp.status_code == 400
 
 
 def test_quality_profile_allowed_when_worker_has_not_reported(

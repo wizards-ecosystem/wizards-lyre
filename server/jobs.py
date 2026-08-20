@@ -425,7 +425,19 @@ def enqueue_job(project_id: str, body: dict[str, Any]) -> dict:
         raise JobError(f"invalid action: {action}")
 
     dit_profile = _resolve_dit_profile(action, body.get("dit_profile"), project["dit_profile"])
-    _check_worker_capability(dit_profile)
+    # SPEC.md sec 4.1/8.1 only calls for early rejection of 'quality' (XL
+    # needs CPU offload on a 16 GB card) -- every other profile always
+    # reports supported=True from the real supports_dit_profile() and only
+    # ever shows up as unsupported here because the *whole worker* failed to
+    # start (worker/run_worker.py's _publish_capabilities marks every
+    # profile unsupported in that case, not just quality). Gating ordinary
+    # profiles on that blocks them from ever reaching the queue -- so they
+    # can never become a recoverable `error` job with failure metadata
+    # (SPEC.md sec 10 point 5, README's documented contract) -- and blocks
+    # recovery from a transient startup failure entirely, since no job can
+    # reach _ensure_loaded to retry it (reviewer-flagged).
+    if dit_profile == "quality":
+        _check_worker_capability(dit_profile)
     _resolve_source_audio(project_id, action, body)
 
     job_id = uuid.uuid4().hex

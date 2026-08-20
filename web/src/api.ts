@@ -94,10 +94,14 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(plan),
     }),
+  // dit_profile is intentionally omitted: the server falls back to the
+  // project's own persisted dit_profile (PATCH /api/projects/{id}) when the
+  // job body doesn't provide one. Hardcoding "iterate" here would silently
+  // override that project-level choice on every generate request.
   generate: (id: string) =>
     request<Job>(`/api/projects/${id}/jobs`, {
       method: "POST",
-      body: JSON.stringify({ action: "generate", dit_profile: "iterate", seed: -1 }),
+      body: JSON.stringify({ action: "generate", seed: -1 }),
     }),
   getJob: (jobId: string) => request<Job>(`/api/jobs/${jobId}`),
   takeAudioUrl: (projectId: string, takeId: string) =>
