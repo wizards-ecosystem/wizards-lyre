@@ -47,11 +47,13 @@ until a real ACE-Step field name is confirmed, and `track_name` maps to
 the task-specific `instruction` field, sent only for extract/lego/complete
 (SPEC.md sec 4.4). `GenerationConfig` carries `batch_size`,
 `audio_format="wav"` (ACE-Step defaults to FLAC otherwise, which this
-adapter must not silently relabel as `.wav`), and `use_random_seed` --
+adapter must not silently relabel as `.wav`), `use_random_seed` --
 `GenerationParams.seed` alone is not enough to reproduce a take: this must
 be explicitly `False` whenever a fixed (non--1) seed is requested, or
-ACE-Step's own default (`True`) ignores it; `generate_music` takes both
-plus `dit_handler` (not `handler`)
+ACE-Step's own default (`True`) ignores it -- and `enable_normalization=True`
+(SPEC.md sec 4.3: "default on", always requested explicitly rather than
+trusting whatever ACE-Step's own default happens to be); `generate_music`
+takes both plus `dit_handler` (not `handler`)
 and `lm_handler`. Its `GenerationResult` reports `success` plus generated
 files in `audios` (dicts) and LM/CoT-filled metadata in `extra_outputs`;
 the actual seed used lives nested at `audio["params"]["seed"]`, not
@@ -539,6 +541,10 @@ def run_job(
             # sec 7: mix.wav is "preferred archive").
             audio_format="wav",
             use_random_seed=use_random_seed,
+            # SPEC.md sec 4.3: loudness normalization is "default on, no
+            # extra mastering chain in v1" -- requested explicitly rather
+            # than relying on ACE-Step's own default staying True upstream.
+            enable_normalization=True,
         )
         result = _api_call(
             "generate_music",

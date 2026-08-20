@@ -21,15 +21,18 @@ level `create_sample` whose result carries the language under `language`
 `track_name` field -- those don't exist upstream and previously raised
 TypeError on every real call), `generate_music(dit_handler=...)` (not
 `handler=`), audio results as dicts with the actual seed nested at
-`audio["params"]["seed"]`, and FLAC-by-default output unless
-`GenerationConfig(audio_format="wav")` is requested -- then runs `run_job`
-against them, so `worker/acestep_worker.py`'s exact calling convention is
-verified without requiring CUDA or the real acestep package. See SPEC.md
-sec 13.
+`audio["params"]["seed"]`, FLAC-by-default output unless
+`GenerationConfig(audio_format="wav")` is requested, and loudness
+normalization requested explicitly (`enable_normalization=True`, SPEC.md
+sec 4.3: "default on") rather than left to whatever ACE-Step's own default
+is -- then runs `run_job` against them, so `worker/acestep_worker.py`'s
+exact calling convention is verified without requiring CUDA or the real
+acestep package. See SPEC.md sec 13.
 """
 
 from __future__ import annotations
 
+import subprocess
 import sys
 import types
 import wave
@@ -111,16 +114,26 @@ class FakeGenerationParams:
 
 
 class FakeGenerationConfig:
-    """batch_size/audio_format/use_random_seed -- inference_steps/
-    guidance_scale belong on GenerationParams instead (this is exactly what
-    the reviewer flagged). use_random_seed defaults True upstream and must
-    be explicitly False for a fixed (non--1) seed to actually be honored --
-    also reviewer-flagged."""
+    """batch_size/audio_format/use_random_seed/enable_normalization --
+    inference_steps/guidance_scale belong on GenerationParams instead (this
+    is exactly what the reviewer flagged). use_random_seed defaults True
+    upstream and must be explicitly False for a fixed (non--1) seed to
+    actually be honored -- also reviewer-flagged. enable_normalization must
+    be requested explicitly True (SPEC.md sec 4.3: "default on") rather than
+    left unset."""
 
-    def __init__(self, *, batch_size: int, audio_format: str, use_random_seed: bool) -> None:
+    def __init__(
+        self,
+        *,
+        batch_size: int,
+        audio_format: str,
+        use_random_seed: bool,
+        enable_normalization: bool,
+    ) -> None:
         self.batch_size = batch_size
         self.audio_format = audio_format
         self.use_random_seed = use_random_seed
+        self.enable_normalization = enable_normalization
 
 
 class FakeResult:
@@ -345,6 +358,9 @@ def test_run_job_matches_installed_api_contract(
     # ACE-Step defaults to FLAC; the adapter must request WAV explicitly
     # instead of silently relabeling whatever comes back as .wav.
     assert config.audio_format == "wav"
+    # SPEC.md sec 4.3: loudness normalization is "default on" -- requested
+    # explicitly rather than relying on whatever ACE-Step's own default is.
+    assert config.enable_normalization is True
     # Custom-mode plan metadata (language, time signature) must actually
     # reach the renderer, not be dropped.
     assert params.vocal_language == "fr"
@@ -794,3 +810,31 @@ def test_audio_path_outside_take_dir_is_rejected_not_moved(
     # ... and nothing was moved into (or created under) take_dir
     assert not (take_dir / "mix.wav").exists()
     assert not (take_dir / "evil.wav").exists()
+
+
+def test_importing_worker_module_never_touches_acestep_or_cuda() -> None:
+    """SPEC.md sec 10 point 4 / sec 11: importing `worker.acestep_worker`
+    must stay safe on a machine with no GPU and no ACE-Step install -- only
+    calling `run_job`/`initialize_worker`/`supports_dit_profile` may reach
+    for `acestep` or CUDA (`torch`). Runs in a fresh subprocess, with no fake
+    `acestep.*` modules installed, so a stray module-level `import acestep`
+    or `import torch` would fail the import for real instead of merely being
+    shadowed by another test's monkeypatched fake modules or an
+    already-imported `sys.modules` entry left over from earlier in this same
+    process."""
+    script = (
+        "import sys\n"
+        "import worker.acestep_worker\n"
+        "assert 'acestep' not in sys.modules, sorted(sys.modules)\n"
+        "assert 'torch' not in sys.modules, sorted(sys.modules)\n"
+        "print('OK')\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(Path(__file__).resolve().parents[1]),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "OK" in result.stdout
