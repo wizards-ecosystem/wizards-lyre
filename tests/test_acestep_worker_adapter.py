@@ -7,8 +7,12 @@ undetected. This module installs fake `acestep.*` modules with the
 signatures ACE-Step 1.5 actually exposes -- `AceStepHandler` loaded via
 `initialize_service(project_root=..., config_path=<checkpoint name>,
 device=...)`, `LLMHandler` loaded via a *different* method with *different*
-argument names, `initialize(checkpoint_dir=..., lm_model_path=...)`,
-module-level `create_sample`, `inference_steps`/`guidance_scale` on
+argument names, `initialize(checkpoint_dir=..., lm_model_path=...,
+backend="pt", device=...)`, returning `(status_message, success)` (a falsy
+`success` must be treated as a failed load, not cached as ready), module-
+level `create_sample` whose result carries the language under `language`
+(mapped onto Bard's own `vocal_language` plan field), `inference_steps`/
+`guidance_scale`/`vocal_language`/`timesignature`/`negative_tags` on
 `GenerationParams` (not `GenerationConfig`), `generate_music(dit_handler=...)`
 (not `handler=`), audio results as dicts with the actual seed nested at
 `audio["params"]["seed"]`, and FLAC-by-default output unless
@@ -63,6 +67,9 @@ class FakeGenerationParams:
         keyscale: Any,
         duration: Any,
         instrumental: bool,
+        vocal_language: Any,
+        timesignature: Any,
+        negative_tags: list[str],
         thinking: bool,
         use_cot_metas: bool,
         seed: int,
@@ -81,6 +88,9 @@ class FakeGenerationParams:
         self.keyscale = keyscale
         self.duration = duration
         self.instrumental = instrumental
+        self.vocal_language = vocal_language
+        self.timesignature = timesignature
+        self.negative_tags = negative_tags
         self.thinking = thinking
         self.use_cot_metas = use_cot_metas
         self.seed = seed
@@ -114,13 +124,17 @@ def _install_fake_acestep(
     log: list[tuple],
     handler_cls: type | None = None,
     returned_audio_suffix: str = ".wav",
+    lm_init_result: tuple[str, bool] = ("lm ready", True),
 ) -> None:
     """Register fake `acestep.*` modules so `worker.acestep_worker`'s lazy
     `from acestep... import ...` statements resolve to them instead of the
     real (uninstalled) package. `returned_audio_suffix` simulates what
     `generate_music` hands back regardless of the requested
     `audio_format` -- default `.wav` (the request honored); pass `.flac`
-    to simulate ACE-Step ignoring it and still defaulting to FLAC."""
+    to simulate ACE-Step ignoring it and still defaulting to FLAC.
+    `lm_init_result` simulates LLMHandler.initialize's `(status_message,
+    success)` return; pass a falsy `success` to simulate a failed LM load
+    that must not be cached as ready."""
 
     class DefaultFakeAceStepHandler:
         def __init__(self) -> None:
@@ -151,15 +165,23 @@ def _install_fake_acestep(
             self.checkpoint_dir: str | None = None
             self.lm_model_path: str | None = None
 
-        def initialize(self, *, checkpoint_dir: str, lm_model_path: str) -> None:
+        def initialize(
+            self, *, checkpoint_dir: str, lm_model_path: str, backend: str, device: str
+        ) -> tuple[str, bool]:
             log.append(
                 (
                     "lm.initialize",
-                    {"checkpoint_dir": checkpoint_dir, "lm_model_path": lm_model_path},
+                    {
+                        "checkpoint_dir": checkpoint_dir,
+                        "lm_model_path": lm_model_path,
+                        "backend": backend,
+                        "device": device,
+                    },
                 )
             )
             self.checkpoint_dir = checkpoint_dir
             self.lm_model_path = lm_model_path
+            return lm_init_result
 
     def create_sample(*, lm_handler: Any, query: str, instrumental: bool) -> dict:
         log.append(("create_sample", lm_handler, query, instrumental))
@@ -169,6 +191,10 @@ def _install_fake_acestep(
             "bpm": 120,
             "keyscale": "C Major",
             "duration": 30,
+            # ACE-Step's own field name is "language", not "vocal_language"
+            # (Bard's plan.json field) -- distinct from extra_outputs'
+            # "en" below so the mapping in _plan_from_query is unambiguous.
+            "language": "ja",
         }
 
     def generate_music(
@@ -224,10 +250,13 @@ def test_run_job_matches_installed_api_contract(
         "query": "",
         "caption": "orchestral swell, cinematic strings",
         "lyrics": "[Instrumental]",
+        "negative": ["distorted", "lo-fi"],
         "instrumental": True,
         "bpm": 90,
         "keyscale": "D Minor",
         "duration_sec": 45,
+        "vocal_language": "fr",
+        "timesignature": "3/4",
     }
     job = {"action": "generate", "dit_profile": "iterate", "seed": -1, "src_audio": None}
 
@@ -252,10 +281,14 @@ def test_run_job_matches_installed_api_contract(
     assert kwargs["cpu_offload"] is False  # iterate does not need cpu_offload
 
     # LLMHandler is loaded through a *different* method with *different*
-    # argument names than the DiT handler (the bug the reviewer flagged).
+    # argument names than the DiT handler (the bug the reviewer flagged),
+    # including backend="pt" (SPEC.md sec 4.2 -- ACE-Step otherwise
+    # defaults to "vllm") and device.
     lm_init = next(e for e in log if e[0] == "lm.initialize")
     assert lm_init[1]["checkpoint_dir"] == str(acestep_worker.CHECKPOINTS_ROOT)
     assert lm_init[1]["lm_model_path"] == acestep_worker.DEFAULT_LM
+    assert lm_init[1]["backend"] == "pt"
+    assert lm_init[1]["device"] == acestep_worker.DEVICE
 
     generate_call = next(e for e in log if e[0] == "generate_music")
     params, config = generate_call[3], generate_call[4]
@@ -269,6 +302,11 @@ def test_run_job_matches_installed_api_contract(
     # ACE-Step defaults to FLAC; the adapter must request WAV explicitly
     # instead of silently relabeling whatever comes back as .wav.
     assert config.audio_format == "wav"
+    # Custom-mode plan metadata (negative prompts, language, time
+    # signature) must actually reach the renderer, not be dropped.
+    assert params.vocal_language == "fr"
+    assert params.timesignature == "3/4"
+    assert params.negative_tags == ["distorted", "lo-fi"]
 
 
 def test_simple_mode_uses_module_level_create_sample_and_persists_full_plan(
@@ -313,6 +351,10 @@ def test_simple_mode_uses_module_level_create_sample_and_persists_full_plan(
     params = generate_call[3]
     assert params.thinking is True
     assert params.use_cot_metas is True
+    # create_sample's result carries the language under "language", not
+    # "vocal_language" (Bard's own plan.json field name) -- confirms
+    # _plan_from_query maps it correctly before generation even runs.
+    assert params.vocal_language == "ja"
 
 
 def test_quality_profile_requests_cpu_offload(
@@ -450,6 +492,27 @@ def test_initialize_worker_reports_ordinary_runtime_failure_without_crashing(
     assert ready is False
     assert "out of memory" in message
     assert acestep_worker._STATE["handler"] is None
+
+
+def test_initialize_worker_reports_lm_init_failure_not_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """LLMHandler.initialize returns (status_message, success) -- a falsy
+    success (e.g. missing LM weights) must not be cached in _STATE and
+    reported as a successfully preloaded worker (exactly what the reviewer
+    flagged: the return value was previously ignored entirely)."""
+    log: list[tuple] = []
+    _install_fake_acestep(
+        monkeypatch, log, lm_init_result=("lm checkpoint not found", False)
+    )
+
+    ready, message = acestep_worker.initialize_worker()
+
+    assert ready is False
+    assert "lm checkpoint not found" in message
+    assert acestep_worker._STATE["lm"] is None
+    # the DiT handler *did* load fine -- only the LM failed
+    assert acestep_worker._STATE["handler"] is not None
 
 
 def test_unexpected_audio_format_is_a_clean_error_not_mislabeled(

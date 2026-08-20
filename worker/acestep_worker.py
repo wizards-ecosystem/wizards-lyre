@@ -19,23 +19,31 @@ ACE-Step's current API and keep Bard's HTTP schema stable with an
 adapter"): `AceStepHandler`/`LLMHandler` are constructed with no arguments.
 `AceStepHandler` is loaded via `initialize_service(project_root=...,
 config_path=<checkpoint name>, device=...)`; `LLMHandler` is loaded via
-`initialize(checkpoint_dir=..., lm_model_path=<lm name>)` -- a different
-method *and* different argument names than the DiT handler. Simple-mode
-planning goes through the module-level `acestep.inference.create_sample`
-(not a handler method). `GenerationParams` carries every per-request field
--- `inference_steps` and `guidance_scale` (not `num_inference_steps`/
-`use_cfg`), `duration` (not `duration_sec`) -- while `GenerationConfig`
-carries `batch_size` and `audio_format="wav"` (ACE-Step defaults to FLAC
-otherwise, which this adapter must not silently relabel as `.wav`);
-`generate_music` takes both plus `dit_handler` (not `handler`) and
-`lm_handler`. Its `GenerationResult` reports `success` plus generated files
-in `audios` (dicts) and LM/CoT-filled metadata in `extra_outputs`; the
-actual seed used lives nested at `audio["params"]["seed"]`, not top-level.
-Every acestep call below is wrapped so a further API drift raises
-`WorkerUnavailable` (job `error`, not a crash) instead of an unhandled
-exception; `tests/test_acestep_worker_adapter.py` exercises this whole call
-contract against fake acestep modules so a mismatch is caught without
-needing CUDA installed.
+`initialize(checkpoint_dir=..., lm_model_path=<lm name>, backend="pt",
+device=...)` -- a different method *and* different argument names than the
+DiT handler, and `backend="pt"` must be passed explicitly (SPEC.md sec 4.2:
+ACE-Step otherwise defaults it to `"vllm"`, not a reliable native-Windows
+backend). `LLMHandler.initialize` returns `(status_message, success)`; a
+falsy `success` is treated as a failed load, not cached as ready. Simple-
+mode planning goes through the module-level `acestep.inference.
+create_sample` (not a handler method); its result carries the language
+under `language`, which this adapter maps onto Bard's own `vocal_language`
+plan field. `GenerationParams` carries every per-request field --
+`inference_steps` and `guidance_scale` (not `num_inference_steps`/
+`use_cfg`), `duration` (not `duration_sec`), plus `vocal_language`,
+`timesignature`, and `negative_tags` (plan.json's `negative` list) so
+Custom-mode plan metadata actually reaches the renderer -- while
+`GenerationConfig` carries `batch_size` and `audio_format="wav"` (ACE-Step
+defaults to FLAC otherwise, which this adapter must not silently relabel
+as `.wav`); `generate_music` takes both plus `dit_handler` (not `handler`)
+and `lm_handler`. Its `GenerationResult` reports `success` plus generated
+files in `audios` (dicts) and LM/CoT-filled metadata in `extra_outputs`;
+the actual seed used lives nested at `audio["params"]["seed"]`, not
+top-level. Every acestep call below is wrapped so a further API drift
+raises `WorkerUnavailable` (job `error`, not a crash) instead of an
+unhandled exception; `tests/test_acestep_worker_adapter.py` exercises this
+whole call contract against fake acestep modules so a mismatch is caught
+without needing CUDA installed.
 """
 
 from __future__ import annotations
@@ -59,10 +67,10 @@ DIT_CHECKPOINTS = {
     "studio_ops": "acestep-v15-base",
 }
 DEFAULT_LM = "acestep-5Hz-lm-1.7B"
-# SPEC.md sec 4.2 locks the default LM backend to "pt" (vLLM is not a
-# reliable native-Windows backend), but LLMHandler.initialize's confirmed
-# signature (checkpoint_dir/lm_model_path) has no backend kwarg to carry
-# it -- nothing to pass here until that's confirmed upstream.
+# SPEC.md sec 4.2: locked default LM backend. ACE-Step defaults
+# LLMHandler.initialize's `backend` to "vllm", which is not a reliable
+# native-Windows backend -- must be passed explicitly on every call.
+LM_BACKEND = "pt"
 
 # SPEC.md sec 6: weights live under checkpoints/<name>/ (gitignored). This is
 # `project_root`; `config_path` is just the bare checkpoint name above, not a
@@ -152,6 +160,23 @@ def _api_method_call(step: str, obj: Any, method_name: str, *args, **kwargs):
             f"acestep API mismatch in {step}: {exc}. Update worker/acestep_worker.py to "
             "match the installed acestep version, or set BARD_WORKER=mock."
         ) from exc
+
+
+def _check_init_result(step: str, result: Any) -> None:
+    """ACE-Step's `LLMHandler.initialize` returns `(status_message,
+    success)` -- treat init as failed unless `success` is confirmed True,
+    instead of assuming any return value means success. Otherwise missing
+    weights or another init failure gets cached in `_STATE` and reported as
+    a successfully preloaded worker (exactly what the reviewer flagged)."""
+    try:
+        status_message, success = result
+    except (TypeError, ValueError):
+        raise WorkerUnavailable(
+            f"acestep API mismatch in {step}: expected an (status_message, success) "
+            f"tuple, got {result!r}."
+        ) from None
+    if not success:
+        raise WorkerUnavailable(f"{step} reported failure: {status_message}")
 
 
 def _handler_supports_cpu_offload(AceStepHandler: Any) -> bool:
@@ -285,14 +310,21 @@ def _ensure_loaded(dit_profile: str) -> tuple[Any, Any, Any]:
         # LLMHandler is loaded through `initialize`, not `initialize_service`
         # -- a different method *and* different argument names than the DiT
         # handler above (checkpoint_dir/lm_model_path, not project_root/
-        # config_path).
-        _api_method_call(
+        # config_path). backend=LM_BACKEND ("pt") is required: ACE-Step
+        # otherwise defaults to "vllm", violating SPEC.md sec 4.2's locked
+        # native-Windows default.
+        result = _api_method_call(
             "LLMHandler.initialize",
             lm,
             "initialize",
             checkpoint_dir=str(CHECKPOINTS_ROOT),
             lm_model_path=DEFAULT_LM,
+            backend=LM_BACKEND,
+            device=DEVICE,
         )
+        # Check the (status_message, success) result instead of assuming
+        # any return means success -- see _check_init_result.
+        _check_init_result("LLMHandler.initialize", result)
         _STATE["lm"] = lm
 
     return _STATE["handler"], _STATE["lm"], _STATE["dit_profile"]
@@ -342,7 +374,9 @@ def _plan_from_query(create_sample_fn: Any, lm: Any, plan: dict[str, Any]) -> di
         "bpm": _field("bpm", plan.get("bpm")),
         "keyscale": _field("keyscale", plan.get("keyscale")),
         "duration_sec": _field("duration", plan.get("duration_sec")),
-        "vocal_language": _field("vocal_language", plan.get("vocal_language")),
+        # create_sample's result field is "language", not "vocal_language"
+        # (that's Bard's own plan.json field name -- see storage.default_plan).
+        "vocal_language": _field("language", plan.get("vocal_language")),
         "timesignature": _field("timesignature", plan.get("timesignature")),
     }
 
@@ -396,6 +430,9 @@ def run_job(
             keyscale=effective_plan.get("keyscale"),
             duration=effective_plan.get("duration_sec"),
             instrumental=effective_plan.get("instrumental", False),
+            vocal_language=effective_plan.get("vocal_language"),
+            timesignature=effective_plan.get("timesignature"),
+            negative_tags=effective_plan.get("negative") or [],
             thinking=simple_mode,
             use_cot_metas=use_cot_metas,
             seed=job.get("seed", -1),
