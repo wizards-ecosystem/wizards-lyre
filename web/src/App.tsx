@@ -87,8 +87,21 @@ export default function App() {
     const runSave = saveChainRef.current.then(async () => {
       const pending = pendingSaveRef.current;
       if (!pending) return;
+      // Take ownership of this pending value before the request starts (not
+      // after) so a newer edit made while the request is in flight lands in
+      // a fresh slot instead of being clobbered when this save resolves.
       pendingSaveRef.current = null;
-      await api.savePlan(pending.projectId, pending.plan);
+      try {
+        await api.savePlan(pending.projectId, pending.plan);
+      } catch (err) {
+        // Put the failed edit back so a later flush can retry it -- but
+        // only if nothing newer has already claimed the slot, otherwise
+        // this would overwrite (and lose) that newer edit.
+        if (pendingSaveRef.current === null) {
+          pendingSaveRef.current = pending;
+        }
+        throw err;
+      }
     });
     saveChainRef.current = runSave.catch(() => {});
     lastSaveOutcomeRef.current = runSave;
