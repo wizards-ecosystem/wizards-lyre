@@ -637,6 +637,7 @@ def test_initialize_worker_preloads_default_iterate_dit_and_lm(
     assert acestep_worker._STATE["dit_profile"] == "iterate"
     assert acestep_worker._STATE["handler"] is not None
     assert acestep_worker._STATE["lm"] is not None
+    assert acestep_worker.is_fully_loaded() is True
 
 
 def test_initialize_worker_reports_failure_without_crashing(
@@ -708,6 +709,10 @@ def test_initialize_worker_reports_lm_init_failure_not_success(
     assert acestep_worker._STATE["lm"] is None
     # the DiT handler *did* load fine -- only the LM failed
     assert acestep_worker._STATE["handler"] is not None
+    # A DiT loaded with no LM must not read as "fully loaded" -- this is the
+    # partial-startup-read-as-full-recovery bug the reviewer flagged in
+    # worker/run_worker.py's readiness check.
+    assert acestep_worker.is_fully_loaded() is False
 
 
 def test_initialize_worker_reports_dit_init_failure_not_success(

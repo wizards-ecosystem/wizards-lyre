@@ -306,31 +306,15 @@ def publish_worker_status(ready: bool, message: str, loaded_dit_profile: str | N
         conn.commit()
 
 
-def touch_worker_heartbeat() -> None:
-    """Refresh `worker_status.updated_at` without changing readiness,
-    message, or loaded profile. `worker/run_worker.py`'s lease heartbeat
-    thread calls this on every lease renewal (`WORKER_LEASE_HEARTBEAT_INTERVAL_SEC`),
-    independent of the main poll loop -- that loop blocks inside
-    `process_one_queued_job()` for as long as a job takes to run, so a long
-    GPU generation would otherwise leave `worker_status` looking stale (and
-    therefore reported unavailable by `get_worker_status` below) even though
-    the worker is alive and busy, not dead. A no-op if no worker has ever
-    published (nothing to touch)."""
-    with closing(_connect()) as conn:
-        conn.execute("UPDATE worker_status SET updated_at = ? WHERE id = 1", (_now(),))
-        conn.commit()
-
-
 def get_worker_status(stale_after: float = WORKER_STATUS_STALE_AFTER_SEC) -> dict[str, Any] | None:
     """Last-published worker readiness, or None if no worker process has
     ever reported in (e.g. `worker/run_worker.py` hasn't started yet).
 
     Folds in a freshness check: `worker/run_worker.py` republishes this on
-    WORKER_STATUS_HEARTBEAT_INTERVAL_SEC even while idle, and keeps it fresh
-    with `touch_worker_heartbeat` even while busy running a job, specifically
-    so a worker that exited or hung stops reading as ready once its last
-    publish is older than `stale_after`, instead of `/api/health` repeating a
-    dead process's last-known-good status forever."""
+    WORKER_STATUS_HEARTBEAT_INTERVAL_SEC even while idle, specifically so a
+    worker that exited or hung stops reading as ready once its last publish
+    is older than `stale_after`, instead of `/api/health` repeating a dead
+    process's last-known-good status forever."""
     with closing(_connect()) as conn:
         row = conn.execute(
             "SELECT ready, message, loaded_dit_profile, updated_at FROM worker_status WHERE id = 1"

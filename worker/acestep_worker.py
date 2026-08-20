@@ -265,6 +265,19 @@ def get_loaded_dit_profile() -> str | None:
     return _STATE["dit_profile"]
 
 
+def is_fully_loaded() -> bool:
+    """True only once both a DiT and the LM are loaded in this process's
+    memory. `_ensure_loaded` commits `_STATE["dit_profile"]`/`["handler"]`
+    as soon as the DiT init succeeds, *before* it attempts the LM load, so
+    that switching DiT profiles doesn't force a redundant LM reload -- but
+    that means a DiT can be loaded while `_STATE["lm"]` is still None (the
+    LM failed to initialize right after a successful DiT load). Callers
+    computing overall readiness (`worker/run_worker.py`'s
+    `_current_readiness`) must check this instead of `get_loaded_dit_profile()`
+    alone, or a partial startup reads as full recovery."""
+    return _STATE["dit_profile"] is not None and _STATE["lm"] is not None
+
+
 def initialize_worker() -> tuple[bool, str]:
     """Worker-startup readiness (SPEC.md sec 10 point 1): detect CUDA, log
     VRAM, and preload the default `iterate` DiT + LM (`pt` backend) before

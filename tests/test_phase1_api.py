@@ -9,6 +9,9 @@ import json
 import re
 import threading
 import time
+import types
+from contextlib import closing
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +20,7 @@ from fastapi.testclient import TestClient
 
 from server import storage
 from server.app import app
+from worker import run_worker as run_worker_module
 from worker.run_worker import run_loop
 
 FORBIDDEN_IMPORTS = (
@@ -234,6 +238,135 @@ def test_worker_republishes_status_after_recovering_from_startup_failure(
     assert status_after["ready"] is True
     assert status_after["loaded_dit_profile"] == "iterate"
     assert jobs_module.get_worker_capability("iterate") == (True, None)
+
+
+def test_current_readiness_requires_full_load_not_just_dit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reviewer finding: a backend can commit a loaded DiT to its state
+    before the LM finishes initializing (see worker.acestep_worker's
+    _ensure_loaded), so worker/run_worker.py's readiness check must not
+    treat get_loaded_dit_profile() returning a profile name alone as
+    "ready" -- a partial startup must not read as full recovery."""
+    from server import jobs as jobs_module
+
+    fake_backend = types.SimpleNamespace(
+        get_loaded_dit_profile=lambda: "iterate",
+        is_fully_loaded=lambda: False,
+    )
+    monkeypatch.setattr(jobs_module, "resolve_worker_module", lambda: fake_backend)
+
+    ready, message = run_worker_module._current_readiness(False, "startup: LM failed to load")
+    assert ready is False
+    assert message == "startup: LM failed to load"
+
+
+def test_current_readiness_ready_once_dit_and_lm_both_loaded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from server import jobs as jobs_module
+
+    fake_backend = types.SimpleNamespace(
+        get_loaded_dit_profile=lambda: "iterate",
+        is_fully_loaded=lambda: True,
+    )
+    monkeypatch.setattr(jobs_module, "resolve_worker_module", lambda: fake_backend)
+
+    ready, message = run_worker_module._current_readiness(False, "irrelevant")
+    assert ready is True
+    assert "iterate" in message
+
+
+def test_get_worker_status_reports_stale_heartbeat_as_unavailable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SPEC.md sec 8: a worker_status row that stopped getting heartbeats
+    (the worker process crashed or was killed while idle) must not keep
+    reporting ready=True forever just because that's what it last
+    published -- /api/health has no other way to notice the worker is
+    gone."""
+    monkeypatch.setenv("BARD_PROJECTS_DIR", str(tmp_path / "projects"))
+    monkeypatch.setenv("BARD_DB_PATH", str(tmp_path / "bard.db"))
+
+    from server import jobs as jobs_module
+
+    jobs_module.init_db()
+    jobs_module.publish_worker_status(True, "worker: 'iterate' DiT + LM currently loaded", "iterate")
+
+    # Simulate the heartbeat having stopped a while ago instead of sleeping
+    # past STALE_AFTER_SEC in a test.
+    stale_at = datetime.now(timezone.utc) - timedelta(seconds=jobs_module.STALE_AFTER_SEC + 5)
+    with closing(jobs_module._connect()) as conn:
+        conn.execute("UPDATE worker_status SET updated_at = ? WHERE id = 1", (stale_at.isoformat(),))
+        conn.commit()
+
+    status = jobs_module.get_worker_status()
+    assert status["ready"] is False
+    assert status["loaded_dit_profile"] is None
+    assert "stale" in status["message"].lower()
+
+
+def test_touch_worker_heartbeat_keeps_busy_worker_reported_ready(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A worker that's alive but blocked running a long job -- so
+    publish_worker_status isn't called again until it finishes -- must stay
+    reported ready as long as its dedicated heartbeat thread keeps touching
+    worker_status (worker/run_worker.py's _heartbeat_loop)."""
+    monkeypatch.setenv("BARD_PROJECTS_DIR", str(tmp_path / "projects"))
+    monkeypatch.setenv("BARD_DB_PATH", str(tmp_path / "bard.db"))
+
+    from server import jobs as jobs_module
+
+    jobs_module.init_db()
+    jobs_module.publish_worker_status(True, "worker: 'iterate' DiT + LM currently loaded", "iterate")
+
+    stale_at = datetime.now(timezone.utc) - timedelta(seconds=jobs_module.STALE_AFTER_SEC + 5)
+    with closing(jobs_module._connect()) as conn:
+        conn.execute("UPDATE worker_status SET updated_at = ? WHERE id = 1", (stale_at.isoformat(),))
+        conn.commit()
+
+    jobs_module.touch_worker_heartbeat()
+
+    status = jobs_module.get_worker_status()
+    assert status["ready"] is True
+    assert status["loaded_dit_profile"] == "iterate"
+
+
+def test_run_loop_publishes_unavailable_on_shutdown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Graceful shutdown must invalidate published readiness immediately
+    instead of leaving the last "ready" state up for get_worker_status's
+    staleness check to eventually catch."""
+    monkeypatch.setenv("BARD_PROJECTS_DIR", str(tmp_path / "projects"))
+    monkeypatch.setenv("BARD_DB_PATH", str(tmp_path / "bard.db"))
+    monkeypatch.setenv("BARD_WORKER", "mock")
+
+    from server import jobs as jobs_module
+
+    jobs_module.init_db()
+
+    stop_event = threading.Event()
+    worker_thread = threading.Thread(target=run_loop, args=(stop_event, 0.01), daemon=True)
+    worker_thread.start()
+    try:
+        deadline = time.time() + 5.0
+        status = None
+        while time.time() < deadline:
+            status = jobs_module.get_worker_status()
+            if status is not None and status["ready"] is True:
+                break
+            time.sleep(0.01)
+        assert status is not None and status["ready"] is True
+    finally:
+        stop_event.set()
+        worker_thread.join(timeout=5)
+
+    status_after = jobs_module.get_worker_status()
+    assert status_after is not None
+    assert status_after["ready"] is False
+    assert status_after["loaded_dit_profile"] is None
 
 
 def test_project_create_and_plan_roundtrip(client: TestClient) -> None:

@@ -45,13 +45,7 @@ Before any of that, it acquires a cross-process singleton lease
 initializes ACE-Step or claims a job at a time (SPEC.md sec 4.3: one GPU
 occupant, jobs serialize). A second worker process waits out the first
 rather than loading a model alongside it -- it never touches the backend
-until it actually holds the lease. That same lease's heartbeat thread also
-keeps `worker_status.updated_at` fresh (`server.jobs.touch_worker_heartbeat`)
-independent of the main poll loop -- which blocks inside a long-running job
--- so `server.jobs.get_worker_status` never mistakes a busy-but-alive worker
-for a crashed one. On a clean shutdown (`stop_event` set), readiness is
-explicitly published as unavailable so `/api/health` reflects the stop
-immediately instead of waiting for that same staleness check to kick in.
+until it actually holds the lease.
 """
 
 from __future__ import annotations
@@ -63,7 +57,6 @@ import uuid
 from server import jobs, storage
 
 DEFAULT_POLL_INTERVAL_SEC = 0.5
-WORKER_HEARTBEAT_INTERVAL_SEC = 5.0
 
 
 def _startup_readiness() -> tuple[bool, str]:
@@ -78,23 +71,12 @@ def _current_readiness(startup_ready: bool, startup_message: str) -> tuple[bool,
     """Recompute readiness from what's actually loaded right now, via cheap
     read-only getters -- never re-runs the (possibly expensive, model
     -swapping) startup load. Falls back to the last known startup result
-    only when nothing has fully loaded successfully, so a genuine startup
-    failure still reads as one instead of a generic "nothing loaded".
-
-    Uses `is_fully_loaded()` (DiT *and* LM), not `get_loaded_dit_profile()`
-    alone: a backend can commit a loaded DiT to its state before the LM
-    finishes initializing, so checking the DiT alone would report `ready`
-    while generation still can't run (a partial startup read as full
-    recovery). Backends without the distinction (e.g. `worker.mock_worker`,
-    which has no separate LM state) fall back to the DiT-loaded check."""
+    only when nothing has ever loaded successfully, so a genuine startup
+    failure still reads as one instead of a generic "nothing loaded"."""
     module = jobs.resolve_worker_module()
     get_loaded = getattr(module, "get_loaded_dit_profile", None)
     loaded_dit_profile = get_loaded() if get_loaded is not None else None
-    is_fully_loaded = getattr(module, "is_fully_loaded", None)
-    fully_loaded = (
-        is_fully_loaded() if is_fully_loaded is not None else loaded_dit_profile is not None
-    )
-    if fully_loaded:
+    if loaded_dit_profile is not None:
         return True, f"worker: '{loaded_dit_profile}' DiT + LM currently loaded"
     return startup_ready, startup_message
 
@@ -130,7 +112,6 @@ def _refresh_published_state(startup_ready: bool, startup_message: str) -> None:
     _publish_capabilities(ready, message)
 
 
-<<<<<<< HEAD
 def _acquire_lease_or_wait(owner_id: str, stop_event: threading.Event) -> bool:
     """Block until we hold the single cross-process worker lease (SPEC.md
     sec 4.3: one GPU occupant), waiting out any live rival worker instead of
@@ -183,30 +164,6 @@ def run_loop(stop_event: threading.Event, poll_interval: float = DEFAULT_POLL_IN
         startup_ready, startup_message = _startup_readiness()
         _refresh_published_state(startup_ready, startup_message)
         last_status_refresh = time.monotonic()
-=======
-def _heartbeat_loop(stop_event: threading.Event, interval: float) -> None:
-    """Keep `worker_status.updated_at` fresh on a fixed cadence, independent
-    of the main loop below -- which can be blocked inside
-    `process_one_queued_job()` for as long as a job takes to run. Without
-    this, `server.jobs.get_worker_status()` would see a stale timestamp and
-    report a busy-but-alive worker as unavailable."""
-    while not stop_event.wait(interval):
-        jobs.touch_worker_heartbeat()
-
-
-def run_loop(stop_event: threading.Event, poll_interval: float = DEFAULT_POLL_INTERVAL_SEC) -> None:
-    """Claim and run queued jobs one at a time until `stop_event` is set."""
-    jobs.init_db()
-    jobs.reclaim_stale_jobs()  # recover anything a previous, now-dead worker left running
-    startup_ready, startup_message = _startup_readiness()
-    _refresh_published_state(startup_ready, startup_message)
-
-    heartbeat_thread = threading.Thread(
-        target=_heartbeat_loop, args=(stop_event, WORKER_HEARTBEAT_INTERVAL_SEC), daemon=True
-    )
-    heartbeat_thread.start()
-    try:
->>>>>>> b257fe9 ([conclave] fix round 1: Phase 1 README and runtime ignore rules)
         while not stop_event.is_set():
             jobs.reclaim_stale_jobs()
             did_work = jobs.process_one_queued_job()
@@ -216,7 +173,6 @@ def run_loop(stop_event: threading.Event, poll_interval: float = DEFAULT_POLL_IN
                 # startup failure is visible immediately, not just at process
                 # startup.
                 _refresh_published_state(startup_ready, startup_message)
-<<<<<<< HEAD
                 last_status_refresh = time.monotonic()
             else:
                 if time.monotonic() - last_status_refresh >= jobs.WORKER_STATUS_HEARTBEAT_INTERVAL_SEC:
@@ -230,21 +186,6 @@ def run_loop(stop_event: threading.Event, poll_interval: float = DEFAULT_POLL_IN
         stop_event.set()
         lease_thread.join(timeout=jobs.WORKER_LEASE_HEARTBEAT_INTERVAL_SEC)
         jobs.release_worker_lease(owner_id)
-=======
-            else:
-                stop_event.wait(poll_interval)
-    finally:
-        # Graceful shutdown: invalidate readiness immediately instead of
-        # leaving the last-published "ready" state for get_worker_status's
-        # staleness check to eventually catch (SPEC.md sec 10 point 4: the
-        # server only ever reads what this process published). Set
-        # stop_event here too (idempotent) so the heartbeat thread's own
-        # wait wakes immediately even on a KeyboardInterrupt path, where
-        # main() only sets it after run_loop has already unwound.
-        stop_event.set()
-        jobs.publish_worker_status(False, "worker stopped", None)
-        heartbeat_thread.join(timeout=WORKER_HEARTBEAT_INTERVAL_SEC)
->>>>>>> b257fe9 ([conclave] fix round 1: Phase 1 README and runtime ignore rules)
 
 
 def main() -> None:
