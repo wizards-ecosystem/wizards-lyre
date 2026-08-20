@@ -33,14 +33,26 @@ result. Otherwise a job that switches the loaded DiT profile would leave
 `/api/health` reporting the startup profile forever, and a worker that
 initially failed to load but later recovers (a job succeeds anyway) would
 stay reported unavailable with its capabilities still rejecting new jobs.
+It's also republished periodically while idle (not just after a job), so a
+genuinely-alive-but-idle worker doesn't fall foul of `server.jobs`'
+freshness check (`WORKER_STATUS_STALE_AFTER_SEC`) and start reading as dead.
 This worker process is the only one allowed to import acestep to find any
 of this out; the FastAPI server just reads what got published (SPEC.md sec
 10 point 4).
+
+Before any of that, it acquires a cross-process singleton lease
+(`server.jobs.acquire_worker_lease`) so at most one worker process ever
+initializes ACE-Step or claims a job at a time (SPEC.md sec 4.3: one GPU
+occupant, jobs serialize). A second worker process waits out the first
+rather than loading a model alongside it -- it never touches the backend
+until it actually holds the lease.
 """
 
 from __future__ import annotations
 
 import threading
+import time
+import uuid
 
 from server import jobs, storage
 
@@ -100,23 +112,80 @@ def _refresh_published_state(startup_ready: bool, startup_message: str) -> None:
     _publish_capabilities(ready, message)
 
 
-def run_loop(stop_event: threading.Event, poll_interval: float = DEFAULT_POLL_INTERVAL_SEC) -> None:
-    """Claim and run queued jobs one at a time until `stop_event` is set."""
-    jobs.init_db()
-    jobs.reclaim_stale_jobs()  # recover anything a previous, now-dead worker left running
-    startup_ready, startup_message = _startup_readiness()
-    _refresh_published_state(startup_ready, startup_message)
+def _acquire_lease_or_wait(owner_id: str, stop_event: threading.Event) -> bool:
+    """Block until we hold the single cross-process worker lease (SPEC.md
+    sec 4.3: one GPU occupant), waiting out any live rival worker instead of
+    initializing ACE-Step alongside it. Returns False only if `stop_event`
+    fires (e.g. Ctrl+C) before the lease was ever acquired."""
+    announced = False
     while not stop_event.is_set():
-        jobs.reclaim_stale_jobs()
-        did_work = jobs.process_one_queued_job()
-        if did_work:
-            # A job just ran (successfully or not) -- republish from live
-            # state so a DiT profile switch or a recovery from an earlier
-            # startup failure is visible immediately, not just at process
-            # startup.
-            _refresh_published_state(startup_ready, startup_message)
-        else:
-            stop_event.wait(poll_interval)
+        if jobs.acquire_worker_lease(owner_id):
+            return True
+        if not announced:
+            print(
+                "Wizard's Bard worker: another worker process already holds the "
+                "GPU lease; waiting for it to finish or go stale..."
+            )
+            announced = True
+        stop_event.wait(jobs.WORKER_LEASE_HEARTBEAT_INTERVAL_SEC)
+    return False
+
+
+def _lease_heartbeat_loop(owner_id: str, stop_event: threading.Event) -> None:
+    """Keep the lease alive while this process runs. If renewal ever fails
+    (our heartbeat went stale and another process claimed the lease first --
+    e.g. this process hung longer than WORKER_LEASE_STALE_AFTER_SEC), signal
+    `stop_event` so the main loop stops claiming/running jobs immediately
+    instead of risking two workers on the GPU at once."""
+    while not stop_event.wait(jobs.WORKER_LEASE_HEARTBEAT_INTERVAL_SEC):
+        if not jobs.renew_worker_lease(owner_id):
+            print("Wizard's Bard worker: lost the GPU lease to another worker; stopping.")
+            stop_event.set()
+            return
+
+
+def run_loop(stop_event: threading.Event, poll_interval: float = DEFAULT_POLL_INTERVAL_SEC) -> None:
+    """Claim and run queued jobs one at a time until `stop_event` is set.
+
+    Acquires the cross-process worker lease first (waiting out any live
+    rival) and never initializes the backend or touches the job queue until
+    it holds it."""
+    jobs.init_db()
+    owner_id = uuid.uuid4().hex
+    if not _acquire_lease_or_wait(owner_id, stop_event):
+        return
+
+    lease_thread = threading.Thread(
+        target=_lease_heartbeat_loop, args=(owner_id, stop_event), daemon=True
+    )
+    lease_thread.start()
+    try:
+        jobs.reclaim_stale_jobs()  # recover anything a previous, now-dead worker left running
+        startup_ready, startup_message = _startup_readiness()
+        _refresh_published_state(startup_ready, startup_message)
+        last_status_refresh = time.monotonic()
+        while not stop_event.is_set():
+            jobs.reclaim_stale_jobs()
+            did_work = jobs.process_one_queued_job()
+            if did_work:
+                # A job just ran (successfully or not) -- republish from live
+                # state so a DiT profile switch or a recovery from an earlier
+                # startup failure is visible immediately, not just at process
+                # startup.
+                _refresh_published_state(startup_ready, startup_message)
+                last_status_refresh = time.monotonic()
+            else:
+                if time.monotonic() - last_status_refresh >= jobs.WORKER_STATUS_HEARTBEAT_INTERVAL_SEC:
+                    # Idle, but still alive -- keep touching worker_status so
+                    # server.jobs' freshness check doesn't start reporting a
+                    # perfectly healthy worker as dead (see module docstring).
+                    _refresh_published_state(startup_ready, startup_message)
+                    last_status_refresh = time.monotonic()
+                stop_event.wait(poll_interval)
+    finally:
+        stop_event.set()
+        lease_thread.join(timeout=jobs.WORKER_LEASE_HEARTBEAT_INTERVAL_SEC)
+        jobs.release_worker_lease(owner_id)
 
 
 def main() -> None:

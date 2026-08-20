@@ -863,6 +863,77 @@ def test_quality_profile_allowed_when_worker_has_not_reported(
     assert job["status"] == "queued"
 
 
+def test_worker_lease_is_a_cross_process_singleton(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SPEC.md sec 4.3: one GPU occupant. Two worker processes must never
+    both hold the lease at once -- a live rival is refused, but a lease
+    whose heartbeat has gone stale (crashed/killed owner) can be taken
+    over, and the original owner can no longer renew it once that happens."""
+    monkeypatch.setenv("BARD_DB_PATH", str(tmp_path / "bard.db"))
+
+    from server import jobs as jobs_module
+
+    jobs_module.init_db()
+
+    assert jobs_module.acquire_worker_lease("worker-a") is True
+    # A second, live worker must not be able to acquire the same lease.
+    assert jobs_module.acquire_worker_lease("worker-b") is False
+    # The holder can keep renewing it; a non-holder never can.
+    assert jobs_module.renew_worker_lease("worker-a") is True
+    assert jobs_module.renew_worker_lease("worker-b") is False
+
+    # Releasing lets another worker take over immediately.
+    jobs_module.release_worker_lease("worker-a")
+    assert jobs_module.acquire_worker_lease("worker-b") is True
+    assert jobs_module.renew_worker_lease("worker-a") is False
+
+    # A crashed worker's lease must not block forever: stale_after=0 treats
+    # worker-b's just-set heartbeat as immediately stale, standing in for a
+    # heartbeat that actually went quiet.
+    assert jobs_module.acquire_worker_lease("worker-c", stale_after=0) is True
+    assert jobs_module.renew_worker_lease("worker-b") is False
+
+
+def test_worker_status_and_capability_read_as_stale_after_heartbeat_gap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A worker_status/worker_capabilities row from a worker that has since
+    exited or hung must not be trusted forever: /api/health (via
+    get_worker_status) and enqueue validation (via _check_worker_capability)
+    must both treat a stale publish as unknown/unavailable rather than
+    repeating a long-dead process's last report (SPEC.md sec 4.3 / sec 8)."""
+    monkeypatch.setenv("BARD_PROJECTS_DIR", str(tmp_path / "projects"))
+    monkeypatch.setenv("BARD_DB_PATH", str(tmp_path / "bard.db"))
+    monkeypatch.setenv("BARD_WORKER", "mock")
+
+    from server import jobs as jobs_module
+
+    jobs_module.init_db()
+    jobs_module.publish_worker_status(True, "worker: 'iterate' DiT + LM currently loaded", "iterate")
+    jobs_module.publish_worker_capability("quality", False, "quality requires CPU offload")
+
+    # Freshly published: trusted as-is.
+    fresh = jobs_module.get_worker_status()
+    assert fresh is not None
+    assert fresh["ready"] is True
+    assert fresh["loaded_dit_profile"] == "iterate"
+    with pytest.raises(jobs_module.JobError):
+        jobs_module._check_worker_capability("quality")
+
+    # stale_after=0 treats the publish above as immediately stale, standing
+    # in for a worker that has since exited or hung without republishing.
+    stale = jobs_module.get_worker_status(stale_after=0)
+    assert stale is not None
+    assert stale["ready"] is False
+    assert stale["loaded_dit_profile"] is None
+    assert "stale" in stale["message"].lower()
+
+    # A stale capability publish must no longer block enqueue -- it reads as
+    # unknown (same as never-published), not as a trusted rejection.
+    jobs_module._check_worker_capability("quality", stale_after=0)  # must not raise
+
+
 def test_reclaim_stale_running_job_requeues_then_errors(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
