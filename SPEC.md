@@ -346,6 +346,21 @@ Worker unload/load, extract / lego / complete, explicit loading UX, coerce `stud
 
 ACE-Step quality score on takes, LRC if upstream provides timestamps, LoRA train/load (8-song path from ACE-Step Gradio training, wrapped — not Gradio itself).
 
+### Phase 5 — Studio ergonomics
+
+Still ACE-Step only. Do not open cloud-music tasks.
+
+- A/B compare two takes (dual play or instant swap)
+- Export zip: `project.json`, `plan.json`, active mix, optional stems
+- Keyboard shortcuts for generate, play/pause, next/prev take, save plan
+- UI to walk `parent_take_id` (restore an earlier take as active without deleting history)
+
+### Phase 6 — Library and ingest
+
+- Search and favorite projects/takes; free-text take notes on `meta.json`
+- Loudness / peak meter on the player (no extra mastering chain)
+- Drag-drop a local WAV/MP3 in as a cover/repaint source (path-jailed under `projects/`)
+
 ---
 
 ## 13. Upstream references (do not re-research product scope)
