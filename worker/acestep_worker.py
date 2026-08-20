@@ -336,8 +336,10 @@ def run_job(
     job: dict[str, Any], plan: dict[str, Any], take_id: str, take_dir: Path
 ) -> tuple[dict, dict | None]:
     """Run one real ACE-Step job. Returns `(take_meta, plan_patch)`;
-    `plan_patch` is the LM-filled plan to persist when this was a simple-mode
-    generation, else None (SPEC.md sec 7.2: "Persist the filled plan.").
+    `plan_patch` is a delta of the LM-filled fields to persist when this was
+    a simple-mode generation, else None (SPEC.md sec 7.2: "Persist the
+    filled plan."). `server.jobs` merges it onto the plan that's current on
+    disk when the job finishes, not the stale snapshot passed in as `plan`.
 
     `job["src_audio"]` must already be a resolved, jailed filesystem path (or
     None for `generate`) -- `server.jobs` resolves `source_take_id` /
@@ -453,8 +455,13 @@ def run_job(
         # The LM filled caption/lyrics/metas from `query` -- persist them
         # onto plan.json instead of discarding them (SPEC.md sec 7.2),
         # including duration and any other metadata ACE-Step filled in.
+        #
+        # This is a patch, not a full plan: `plan` here was loaded before
+        # this (possibly long-running) generation started, so spreading it
+        # into the patch would let a stale snapshot clobber any edits saved
+        # while the job was running. server.jobs merges this onto whatever
+        # plan is current on disk when the job finishes instead.
         plan_patch = {
-            **plan,
             "caption": caption,
             "lyrics": lyrics,
             "bpm": bpm,

@@ -242,6 +242,11 @@ def enqueue_job(project_id: str, body: dict[str, Any]) -> dict:
     now = _now()
     payload = dict(body)
     payload["dit_profile"] = dit_profile
+    # SPEC.md sec 8.1: "batch_size > 1 is optional later; v1 may force 1 on
+    # 16 GB." Force it rather than trust an unvalidated client value straight
+    # into the GPU backend (0, negative, or huge batches -> invalid calls or
+    # avoidable OOMs), and phase 1 only ever consumes the first audio anyway.
+    payload["batch_size"] = 1
 
     with closing(_connect()) as conn:
         conn.execute(
@@ -377,7 +382,15 @@ def run_claimed_job(job: dict[str, Any]) -> None:
         storage.write_take_meta(project_id, take_id, meta)
         storage.set_active_take(project_id, take_id)
         if plan_patch is not None:
-            storage.save_plan(project_id, plan_patch)
+            # `plan` above was loaded before this (possibly long-running)
+            # generation started. Re-read the plan now and merge only the
+            # LM-filled fields onto whatever is current on disk, so edits
+            # saved while the job was running (sections, negative prompts,
+            # instrumental, etc.) aren't silently overwritten (SPEC.md sec
+            # 7.2). `plan_patch` is a delta, not a full plan replacement --
+            # see worker.mock_worker / worker.acestep_worker.
+            current_plan = storage.load_plan(project_id)
+            storage.save_plan(project_id, {**current_plan, **plan_patch})
         _set_status(job_id, "done", take_id=take_id)
     except Exception as exc:  # noqa: BLE001 - persist worker failure onto the job row
         if take_id is not None:

@@ -72,11 +72,15 @@ def _is_simple_mode(plan: dict[str, Any]) -> bool:
 def _plan_from_query(plan: dict[str, Any]) -> dict[str, Any]:
     """Deterministic stand-in for the 5Hz LM filling caption/lyrics/metas
     from a simple-mode query (SPEC.md sec 7.2: "Worker sets thinking=true.
-    LM fills caption, lyrics, metas. Persist the filled plan.")."""
+    LM fills caption, lyrics, metas. Persist the filled plan.").
+
+    Returns only the fields the LM filled in -- a patch, not a full plan --
+    so the caller (server.jobs) can merge it onto whatever plan is current
+    on disk when the job finishes, instead of overwriting concurrent edits
+    to unrelated fields with this stale snapshot."""
     query = plan["query"]
     instrumental = bool(plan.get("instrumental"))
     return {
-        **plan,
         "caption": f"auto: {query}",
         "lyrics": "[Instrumental]" if instrumental else f"[Verse]\n{query}",
         "bpm": plan.get("bpm") or 120,
@@ -88,7 +92,10 @@ def run_job(
     job: dict[str, Any], plan: dict[str, Any], take_id: str, take_dir: Path
 ) -> tuple[dict, dict | None]:
     """Run one mocked job. Returns `(take_meta, plan_patch)`; `plan_patch` is
-    the plan to persist when this job filled it in (simple mode), else None.
+    a delta of the fields to persist when this job filled the plan in
+    (simple mode), else None. `server.jobs` merges it onto the plan that's
+    current on disk when the job finishes, not the stale snapshot passed
+    in as `plan`.
 
     `take_dir` must already be inside the projects/ path jail; this function
     only ever writes files inside it.
@@ -98,8 +105,8 @@ def run_job(
     plan_patch: dict[str, Any] | None = None
     effective_plan = plan
     if job.get("action") == "generate" and _is_simple_mode(plan):
-        effective_plan = _plan_from_query(plan)
-        plan_patch = effective_plan
+        plan_patch = _plan_from_query(plan)
+        effective_plan = {**plan, **plan_patch}
 
     seed = job.get("seed", -1)
     if seed is None or seed == -1:

@@ -36,12 +36,30 @@ py -3.11 -m venv .venv
 pip install -e ".[dev]"
 ```
 
-Download ACE-Step 1.5 (turbo checkpoint + the default 1.7B 5Hz LM) once, per upstream's install
-docs (SPEC.md sec 4, sec 13):
+`pip install -e ".[dev]"` above only installs this repo's own dependencies (FastAPI, uvicorn,
+pytest) -- it does **not** install ACE-Step itself. ACE-Step 1.5 is a separate package (SPEC.md
+sec 4, sec 13) that `worker/acestep_worker.py` imports lazily, so it's only required on the
+machine that runs `worker.run_worker`, not on a server-only box. Install it before downloading
+weights:
 
 ```powershell
-uv run acestep-download   # or the equivalent from ACE-Step-1.5/docs/en/INSTALL.md
+git clone https://github.com/ace-step/ACE-Step-1.5 ..\ACE-Step-1.5
+cd ..\ACE-Step-1.5
+pip install -e .          # follow docs/en/INSTALL.md there if this repo's exact steps have drifted
+cd -
 ```
+
+Once `acestep` is importable and its download entry point is on PATH, pull the turbo checkpoint +
+the default 1.7B 5Hz LM once. The exact command name comes from
+`ACE-Step-1.5/docs/en/INSTALL.md`; if you installed ACE-Step with `uv` instead of `pip`, run it as
+`uv run acestep-download` there instead:
+
+```powershell
+acestep-download
+```
+
+Weights land under `checkpoints/` by default (override with `BARD_CHECKPOINTS_DIR`) -- see
+`worker/acestep_worker.py`'s `CHECKPOINTS_ROOT`.
 
 Without ACE-Step installed, the server still runs; `generate`/`cover`/... jobs will fail with a
 clear "acestep is not installed" error instead of crashing. Set `BARD_WORKER=mock` to force the

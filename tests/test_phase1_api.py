@@ -10,6 +10,7 @@ import re
 import threading
 import time
 from pathlib import Path
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -201,6 +202,54 @@ def test_simple_query_generation_fills_and_persists_plan(client: TestClient) -> 
 
     take = detail["takes"][0]
     assert take["caption"] == detail["plan"]["caption"]
+
+
+def test_plan_patch_merge_preserves_concurrent_edits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SPEC.md sec 7.2: a plan edit saved while a simple-mode generate job is
+    running (sections, negative prompts, instrumental, ...) must survive --
+    the job's plan_patch is a delta merged onto the *current* on-disk plan
+    when the job finishes, not a full-plan overwrite of the stale snapshot
+    loaded when the job started."""
+    monkeypatch.setenv("BARD_PROJECTS_DIR", str(tmp_path / "projects"))
+    monkeypatch.setenv("BARD_DB_PATH", str(tmp_path / "bard.db"))
+    monkeypatch.setenv("BARD_WORKER", "mock")
+
+    from server import jobs as jobs_module
+
+    jobs_module.init_db()
+    project = storage.create_project(title="Race", query="dreamy synthwave drive")
+    project_id = project["id"]
+
+    import worker.mock_worker as mock_worker_module
+
+    real_run_job = mock_worker_module.run_job
+
+    def _run_job_with_concurrent_edit(job, plan, take_id, take_dir):
+        # Simulate a user's PUT /plan landing while this "long-running" job
+        # is executing -- server.jobs loaded `plan` before this call.
+        current = storage.load_plan(project_id)
+        storage.save_plan(
+            project_id, {**current, "negative": ["concurrent edit"], "instrumental": True}
+        )
+        return real_run_job(job=job, plan=plan, take_id=take_id, take_dir=take_dir)
+
+    monkeypatch.setattr(mock_worker_module, "run_job", _run_job_with_concurrent_edit)
+
+    job = jobs_module.enqueue_job(project_id, {"action": "generate"})
+    claimed = jobs_module.claim_next_queued_job()
+    jobs_module.run_claimed_job(claimed)
+
+    final_job = jobs_module.get_job(job["id"])
+    assert final_job["status"] == "done", final_job.get("error")
+
+    final_plan = storage.load_plan(project_id)
+    # the concurrent edit to unrelated fields survived ...
+    assert final_plan["negative"] == ["concurrent edit"]
+    assert final_plan["instrumental"] is True
+    # ... and the LM-filled fields from the job were still applied on top
+    assert "dreamy synthwave drive" in final_plan["caption"]
 
 
 def test_worker_failure_writes_error_take_meta(
@@ -404,6 +453,36 @@ def test_cover_repaint_extract_require_a_real_source(client: TestClient) -> None
             },
         )
         assert resp.status_code == 400, action
+
+
+def test_batch_size_forced_to_one(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """SPEC.md sec 8.1: 'batch_size > 1 is optional later; v1 may force 1 on
+    16 GB.' An unvalidated client value (zero, negative, huge) must never
+    reach the GPU backend."""
+    project = client.post("/api/projects", json={"title": "Batch"}).json()
+    project_id = project["id"]
+    client.put(f"/api/projects/{project_id}/plan", json={**storage.default_plan(), "caption": "x"})
+
+    import worker.mock_worker as mock_worker_module
+
+    seen_batch_sizes: list[Any] = []
+    real_run_job = mock_worker_module.run_job
+
+    def _spy_run_job(job, plan, take_id, take_dir):
+        seen_batch_sizes.append(job.get("batch_size"))
+        return real_run_job(job=job, plan=plan, take_id=take_id, take_dir=take_dir)
+
+    monkeypatch.setattr(mock_worker_module, "run_job", _spy_run_job)
+
+    for requested in (0, -5, 999):
+        resp = client.post(
+            f"/api/projects/{project_id}/jobs",
+            json={"action": "generate", "batch_size": requested},
+        )
+        job = _wait_for_job(client, resp.json()["id"])
+        assert job["status"] == "done", job.get("error")
+
+    assert seen_batch_sizes == [1, 1, 1]
 
 
 def test_invalid_action_rejected(client: TestClient) -> None:

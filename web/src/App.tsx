@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, Job, Plan, ProjectDetail, ProjectSummary } from "./api";
 
 const JOB_POLL_INTERVAL_MS = 1000;
@@ -6,6 +6,11 @@ const JOB_POLL_INTERVAL_MS = 1000;
 // behind a dedicated worker process); give it a generous ceiling before
 // giving up on polling rather than declaring failure too early.
 const JOB_POLL_TIMEOUT_MS = 10 * 60 * 1000;
+
+// Coalesce rapid keystrokes into one PUT instead of firing one per
+// keystroke (which can complete out of order and let an older request
+// overwrite a newer edit on disk).
+const PLAN_SAVE_DEBOUNCE_MS = 500;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -38,6 +43,39 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [busyStatus, setBusyStatus] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  // Plan saves are debounced and serialized: at most one PUT /plan in
+  // flight at a time, always carrying the latest edit. Without this, one
+  // PUT per keystroke can complete out of order and let an older request
+  // clobber a newer edit on disk even though the UI already shows it.
+  const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingSaveRef = useRef<{ projectId: string; plan: Plan } | null>(null);
+  const savingRef = useRef(false);
+
+  useEffect(() => {
+    return () => {
+      if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+    };
+  }, []);
+
+  async function flushPlanSave() {
+    if (savingRef.current || !pendingSaveRef.current) return;
+    const { projectId, plan } = pendingSaveRef.current;
+    pendingSaveRef.current = null;
+    savingRef.current = true;
+    try {
+      await api.savePlan(projectId, plan);
+    } catch (err) {
+      setErrorMsg(String(err));
+    } finally {
+      savingRef.current = false;
+      // Another edit queued while this save was in flight -- send it next,
+      // never concurrently with the one that just finished.
+      if (pendingSaveRef.current) {
+        flushPlanSave();
+      }
+    }
+  }
 
   async function refreshProjects() {
     setProjects(await api.listProjects());
@@ -72,15 +110,16 @@ export default function App() {
     }
   }
 
-  async function savePlanField<K extends keyof Plan>(key: K, value: Plan[K]) {
+  function savePlanField<K extends keyof Plan>(key: K, value: Plan[K]) {
     if (!activeId || !detail) return;
     const plan = { ...detail.plan, [key]: value };
     setDetail({ ...detail, plan });
-    try {
-      await api.savePlan(activeId, plan);
-    } catch (err) {
-      setErrorMsg(String(err));
-    }
+
+    pendingSaveRef.current = { projectId: activeId, plan };
+    if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+    saveTimeoutRef.current = setTimeout(() => {
+      flushPlanSave().catch((err) => setErrorMsg(String(err)));
+    }, PLAN_SAVE_DEBOUNCE_MS);
   }
 
   async function generate() {
