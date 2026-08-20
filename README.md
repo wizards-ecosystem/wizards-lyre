@@ -1,6 +1,6 @@
 # Wizard's Bard
 
-Local generative music studio. ACE-Step 1.5 on the GPU. No cloud music APIs.
+Local generative music studio. ACE-Step 1.5 on the GPU. No cloud music APIs, no Gradio UI.
 
 The product spec is **[SPEC.md](SPEC.md)**. Implement that file. Do not invent extra engines.
 

@@ -25,6 +25,15 @@ checkpoints/
 *.m4a
 *.lrc
 
+# SQLite job databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Logs
+*.log
+logs/
+
 # Env / secrets
 .env
 .env.local
