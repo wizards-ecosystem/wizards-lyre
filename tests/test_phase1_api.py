@@ -308,6 +308,71 @@ def test_plan_patch_merge_preserves_concurrent_edits(
     assert "dreamy synthwave drive" in final_plan["caption"]
 
 
+def test_project_json_updates_are_serialized_across_threads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SPEC.md sec 5/10: save_plan/patch_project (HTTP server) and
+    set_active_take (worker, after a generation completes) all
+    read-modify-write project.json. Without serialization, one can read a
+    stale copy and overwrite the other's concurrent change -- e.g. a plan
+    save racing generation completion clobbering the newly assigned
+    active_take_id. This forces a genuine interleaving window (one writer
+    is paused mid-critical-section while the other attempts its own
+    update) and asserts neither update is lost."""
+    monkeypatch.setenv("BARD_PROJECTS_DIR", str(tmp_path / "projects"))
+
+    project = storage.create_project(title="Race")
+    project_id = project["id"]
+    take_id = storage.new_id()
+
+    real_write_json = storage._write_json
+    project_path = storage.project_json_path(project_id)
+    thread_a_writing = threading.Event()
+    thread_b_attempted = threading.Event()
+
+    def slow_write_json(path, data):
+        if path == project_path and not thread_a_writing.is_set():
+            thread_a_writing.set()
+            # Give thread B a real chance to race: it must block on the
+            # project lock here, not read a stale project dict.
+            thread_b_attempted.wait(timeout=2)
+            time.sleep(0.1)
+        real_write_json(path, data)
+
+    monkeypatch.setattr(storage, "_write_json", slow_write_json)
+
+    errors: list[Exception] = []
+
+    def run_patch():
+        try:
+            storage.patch_project(project_id, {"title": "renamed while racing"})
+        except Exception as exc:  # noqa: BLE001 - surfaced via `errors` below
+            errors.append(exc)
+
+    def run_set_active():
+        thread_a_writing.wait(timeout=2)
+        thread_b_attempted.set()
+        try:
+            storage.set_active_take(project_id, take_id)
+        except Exception as exc:  # noqa: BLE001 - surfaced via `errors` below
+            errors.append(exc)
+
+    t_patch = threading.Thread(target=run_patch)
+    t_active = threading.Thread(target=run_set_active)
+    t_patch.start()
+    t_active.start()
+    t_patch.join(timeout=5)
+    t_active.join(timeout=5)
+
+    assert not errors, errors
+    assert not t_patch.is_alive()
+    assert not t_active.is_alive()
+
+    final = storage.load_project(project_id)
+    assert final["title"] == "renamed while racing"
+    assert final["active_take_id"] == take_id
+
+
 def test_worker_failure_writes_error_take_meta(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:

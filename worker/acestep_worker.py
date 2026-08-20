@@ -500,7 +500,24 @@ def run_job(
     src_path_raw = _result_field(audio, "path", None) or _result_field(audio, "audio_path", None)
     if not src_path_raw:
         raise RuntimeError("ACE-Step reported success but returned no audio path")
-    src_path = Path(src_path_raw)
+    src_path = Path(src_path_raw).resolve()
+
+    # The returned path is untrusted: an upstream bug, API drift, or a
+    # compromised acestep install could point it anywhere on disk. Require
+    # it stay inside the take directory we handed to save_dir= above
+    # *before* even checking existence -- every generated-audio filesystem
+    # operation must stay jailed under projects/ or output/ (SPEC.md sec
+    # 8.1 / 11), and shutil.move below must never touch an arbitrary local
+    # file.
+    take_dir_resolved = take_dir.resolve()
+    try:
+        src_path.relative_to(take_dir_resolved)
+    except ValueError:
+        raise RuntimeError(
+            f"ACE-Step returned an audio path outside its allocated take directory "
+            f"('{src_path}' is not under '{take_dir_resolved}'); refusing to touch it."
+        ) from None
+
     if not src_path.exists():
         raise RuntimeError(f"ACE-Step reported audio at '{src_path}' but the file does not exist")
 

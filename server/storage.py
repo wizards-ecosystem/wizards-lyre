@@ -7,9 +7,13 @@ files under projects/<id>/ are the source of truth.
 from __future__ import annotations
 
 import json
+import os
+import time
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Callable, Iterator
 
 from server import config
 
@@ -89,6 +93,77 @@ def _write_json(path: Path, data: dict) -> None:
 
 def _read_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+# project.json is read-modify-written by both the HTTP server (save_plan,
+# patch_project) and the worker process (set_active_take, after a
+# generation completes) -- see SPEC.md sec 5/10. Without serialization, one
+# process can read a stale copy and overwrite the other's concurrent change
+# (e.g. a plan save racing generation completion can clobber the newly
+# assigned active_take_id, or vice versa). This is a plain lock-file mutex
+# (atomic exclusive create, `os.O_CREAT | os.O_EXCL`) rather than an
+# in-process lock, since it must work *across* the server/worker process
+# boundary, not just across threads within one of them.
+_PROJECT_LOCK_TIMEOUT_SEC = 10.0
+_PROJECT_LOCK_POLL_SEC = 0.05
+# A lock file older than this is assumed abandoned by a crashed process
+# (e.g. the worker was killed mid-write) and is reclaimed rather than
+# blocking every future update to this project forever.
+_PROJECT_LOCK_STALE_SEC = 30.0
+
+
+@contextmanager
+def _project_lock(project_id: str) -> Iterator[None]:
+    lock_path = jailed_path(project_id, ".project.lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    deadline = time.monotonic() + _PROJECT_LOCK_TIMEOUT_SEC
+    fd: int | None = None
+    while fd is None:
+        try:
+            fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except (FileExistsError, PermissionError):
+            # Someone else holds the lock. On Windows, a concurrent
+            # O_CREAT|O_EXCL attempt against a file another handle
+            # currently has open can raise PermissionError instead of
+            # FileExistsError (a sharing-violation quirk, not a real
+            # permissions problem) -- treat both as "still locked".
+            try:
+                age = time.time() - lock_path.stat().st_mtime
+            except FileNotFoundError:
+                continue  # released between our open() and stat(); retry immediately
+            except PermissionError:
+                time.sleep(_PROJECT_LOCK_POLL_SEC)  # transient Windows sharing violation
+                continue
+            if age > _PROJECT_LOCK_STALE_SEC:
+                try:
+                    lock_path.unlink()
+                except FileNotFoundError:
+                    pass
+                continue
+            if time.monotonic() > deadline:
+                raise TimeoutError(f"timed out waiting for project lock: {project_id}")
+            time.sleep(_PROJECT_LOCK_POLL_SEC)
+    try:
+        yield
+    finally:
+        os.close(fd)
+        try:
+            lock_path.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def _update_project(project_id: str, mutate: Callable[[dict], None]) -> dict:
+    """Atomically read-modify-write project.json: load it, apply `mutate`
+    in place, bump `updated_at`, and write it back, all under the
+    cross-process lock so a concurrent mutation from the other process
+    can't be lost."""
+    with _project_lock(project_id):
+        project = load_project(project_id)
+        mutate(project)
+        project["updated_at"] = _now()
+        _write_json(project_json_path(project_id), project)
+        return project
 
 
 def default_plan() -> dict:
@@ -176,38 +251,37 @@ def load_plan(project_id: str) -> dict:
 
 
 def save_plan(project_id: str, plan: dict) -> dict:
+    # Writing plan.json doesn't need the project.json lock, but bumping
+    # updated_at does -- do it via _update_project (a no-op mutation) so
+    # this can never race set_active_take/patch_project's read-modify-write
+    # of project.json (SPEC.md sec 5/10).
     load_project(project_id)
     _write_json(plan_json_path(project_id), plan)
-    touch_project(project_id)
+    _update_project(project_id, lambda project: None)
     return plan
 
 
 def touch_project(project_id: str) -> dict:
-    project = load_project(project_id)
-    project["updated_at"] = _now()
-    _write_json(project_json_path(project_id), project)
-    return project
+    return _update_project(project_id, lambda project: None)
 
 
 def patch_project(project_id: str, patch: dict) -> dict:
-    project = load_project(project_id)
-    if patch.get("title") is not None:
-        project["title"] = patch["title"]
-    if patch.get("dit_profile") is not None:
-        if patch["dit_profile"] not in VALID_DIT_PROFILES:
-            raise ValueError(f"invalid dit_profile: {patch['dit_profile']}")
-        project["dit_profile"] = patch["dit_profile"]
-    project["updated_at"] = _now()
-    _write_json(project_json_path(project_id), project)
-    return project
+    def mutate(project: dict) -> None:
+        if patch.get("title") is not None:
+            project["title"] = patch["title"]
+        if patch.get("dit_profile") is not None:
+            if patch["dit_profile"] not in VALID_DIT_PROFILES:
+                raise ValueError(f"invalid dit_profile: {patch['dit_profile']}")
+            project["dit_profile"] = patch["dit_profile"]
+
+    return _update_project(project_id, mutate)
 
 
 def set_active_take(project_id: str, take_id: str) -> dict:
-    project = load_project(project_id)
-    project["active_take_id"] = take_id
-    project["updated_at"] = _now()
-    _write_json(project_json_path(project_id), project)
-    return project
+    def mutate(project: dict) -> None:
+        project["active_take_id"] = take_id
+
+    return _update_project(project_id, mutate)
 
 
 def list_takes(project_id: str) -> list[dict]:

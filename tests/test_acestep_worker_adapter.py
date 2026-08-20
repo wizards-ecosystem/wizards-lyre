@@ -129,6 +129,7 @@ def _install_fake_acestep(
     returned_audio_suffix: str = ".wav",
     lm_init_result: tuple[str, bool] = ("lm ready", True),
     handler_init_result: tuple[str, bool] = ("dit ready", True),
+    audio_path_override: Path | None = None,
 ) -> None:
     """Register fake `acestep.*` modules so `worker.acestep_worker`'s lazy
     `from acestep... import ...` statements resolve to them instead of the
@@ -139,7 +140,8 @@ def _install_fake_acestep(
     `lm_init_result`/`handler_init_result` simulate LLMHandler.initialize /
     AceStepHandler.initialize_service's `(status_message, success)` return;
     pass a falsy `success` to simulate a failed load that must not be
-    cached as ready."""
+    cached as ready. `audio_path_override` simulates ACE-Step reporting an
+    audio file at an arbitrary path instead of writing into `save_dir`."""
 
     class DefaultFakeAceStepHandler:
         def __init__(self) -> None:
@@ -209,7 +211,10 @@ def _install_fake_acestep(
         log.append(("generate_music", dit_handler, lm_handler, params, config, save_dir))
         # ACE-Step writes its own output filename -- not mix.wav -- so the
         # adapter has to find and rename it (SPEC.md sec 7.3).
-        out_path = Path(save_dir) / f"output_0{returned_audio_suffix}"
+        if audio_path_override is not None:
+            out_path = audio_path_override
+        else:
+            out_path = Path(save_dir) / f"output_0{returned_audio_suffix}"
         _write_tiny_wav(out_path)  # fine as fixture bytes regardless of extension
         # Real ACE-Step audio entries are dicts, and the actual seed used is
         # nested under "params", not top-level -- exactly what the reviewer
@@ -610,3 +615,40 @@ def test_unexpected_audio_format_is_a_clean_error_not_mislabeled(
 
     # nothing got renamed/mislabeled
     assert not (tmp_path / "take5" / "mix.wav").exists()
+
+
+def test_audio_path_outside_take_dir_is_rejected_not_moved(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SPEC.md sec 8.1/11: generated-audio filesystem operations must stay
+    jailed under the take directory ACE-Step was told to use. The returned
+    path is untrusted -- an upstream bug, API drift, or a compromised
+    acestep install could point it anywhere -- so the adapter must refuse
+    to shutil.move a path outside take_dir instead of moving/deleting an
+    arbitrary local file."""
+    log: list[tuple] = []
+    outside_dir = tmp_path / "outside"
+    outside_dir.mkdir()
+    outside_path = outside_dir / "evil.wav"
+    _install_fake_acestep(monkeypatch, log, audio_path_override=outside_path)
+
+    plan = {
+        "query": "",
+        "caption": "orchestral swell, cinematic strings",
+        "lyrics": "[Instrumental]",
+        "instrumental": True,
+        "bpm": 90,
+        "keyscale": "D Minor",
+        "duration_sec": 45,
+    }
+    job = {"action": "generate", "dit_profile": "iterate", "seed": -1, "src_audio": None}
+    take_dir = tmp_path / "take-outside"
+
+    with pytest.raises(RuntimeError, match="outside its allocated take directory"):
+        acestep_worker.run_job(job=job, plan=plan, take_id="t-outside", take_dir=take_dir)
+
+    # the file outside the jail was left exactly where it was ...
+    assert outside_path.exists()
+    # ... and nothing was moved into (or created under) take_dir
+    assert not (take_dir / "mix.wav").exists()
+    assert not (take_dir / "evil.wav").exists()
