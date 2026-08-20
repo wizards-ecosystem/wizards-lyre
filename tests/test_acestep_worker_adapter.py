@@ -6,7 +6,11 @@ method name, wrong argument, a field on the wrong class) would go
 undetected. This module installs fake `acestep.*` modules with the
 signatures ACE-Step 1.5 actually exposes -- `AceStepHandler` loaded via
 `initialize_service(project_root=..., config_path=<checkpoint name>,
-device=...)`, `LLMHandler` loaded via a *different* method with *different*
+device=...)`, which the fake below resolves the same way ACE-Step itself
+does (`<project_root>/checkpoints/<config_path>`) so a test can assert the
+*real* weights directory is found, not just that some locally-assumed kwarg
+value was passed through unchanged, `LLMHandler` loaded via a *different*
+method with *different*
 argument names, `initialize(checkpoint_dir=..., lm_model_path=...,
 backend="pt", device=...)`, returning `(status_message, success)` (a falsy
 `success` must be treated as a failed load, not cached as ready), module-
@@ -159,6 +163,15 @@ def _install_fake_acestep(
         def initialize_service(
             self, *, project_root: str, config_path: str, device: str, offload_to_cpu: bool = False
         ) -> tuple[str, bool]:
+            # Mirrors ACE-Step 1.5's real resolution: the DiT checkpoint
+            # lives at <project_root>/checkpoints/<config_path>, not at
+            # <project_root>/<config_path> and not by treating project_root
+            # itself as the checkpoint directory. Exposing the resolved path
+            # lets tests assert the real weights location is found instead
+            # of merely accepting whatever project_root value was passed
+            # (exactly what the reviewer flagged the previous version of
+            # this test as unable to catch).
+            resolved_checkpoint_dir = Path(project_root) / "checkpoints" / config_path
             log.append(
                 (
                     "handler.initialize_service",
@@ -167,6 +180,7 @@ def _install_fake_acestep(
                         "config_path": config_path,
                         "device": device,
                         "offload_to_cpu": offload_to_cpu,
+                        "resolved_checkpoint_dir": resolved_checkpoint_dir,
                     },
                 )
             )
@@ -298,7 +312,13 @@ def test_run_job_matches_installed_api_contract(
 
     handler_init = next(e for e in log if e[0] == "handler.initialize_service")
     kwargs = handler_init[1]
-    assert kwargs["project_root"] == str(acestep_worker.CHECKPOINTS_ROOT)
+    # The real assertion that matters (reviewer-flagged): ACE-Step resolves
+    # the checkpoint at <project_root>/checkpoints/<config_path>, so this
+    # must land on Bard's actual weights directory -- not
+    # checkpoints/checkpoints/acestep-v15-turbo, which is what passing
+    # CHECKPOINTS_ROOT itself as project_root used to produce.
+    assert kwargs["resolved_checkpoint_dir"] == acestep_worker.CHECKPOINTS_ROOT / "acestep-v15-turbo"
+    assert kwargs["project_root"] == str(acestep_worker.CHECKPOINTS_ROOT.parent)
     assert kwargs["config_path"] == "acestep-v15-turbo"
     assert kwargs["device"] == acestep_worker.DEVICE
     assert kwargs["offload_to_cpu"] is False  # iterate does not need offload_to_cpu
@@ -339,6 +359,28 @@ def test_run_job_matches_installed_api_contract(
     # path, not a fixed request.
     assert params.seed == -1
     assert config.use_random_seed is True
+
+
+def test_checkpoints_project_root_matches_ace_step_resolution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Direct unit coverage for _checkpoints_project_root() (reviewer-
+    flagged): AceStepHandler.initialize_service resolves the checkpoint at
+    <project_root>/checkpoints/<config_path>, so project_root must be
+    CHECKPOINTS_ROOT's parent for that to land on CHECKPOINTS_ROOT itself --
+    and a BARD_CHECKPOINTS_DIR that isn't literally named 'checkpoints' can
+    never satisfy that upstream convention, so it must fail clearly instead
+    of silently resolving to the wrong directory."""
+    monkeypatch.setattr(acestep_worker, "CHECKPOINTS_ROOT", Path("some/where/checkpoints"))
+    project_root = acestep_worker._checkpoints_project_root()
+    assert project_root == Path("some/where")
+    assert project_root / "checkpoints" / "acestep-v15-turbo" == acestep_worker.CHECKPOINTS_ROOT / (
+        "acestep-v15-turbo"
+    )
+
+    monkeypatch.setattr(acestep_worker, "CHECKPOINTS_ROOT", Path("some/where/weights"))
+    with pytest.raises(acestep_worker.WorkerUnavailable, match="checkpoints"):
+        acestep_worker._checkpoints_project_root()
 
 
 def test_fixed_seed_disables_use_random_seed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

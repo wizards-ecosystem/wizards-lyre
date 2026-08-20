@@ -19,7 +19,14 @@ ACE-Step's current API and keep Bard's HTTP schema stable with an
 adapter"): `AceStepHandler`/`LLMHandler` are constructed with no arguments.
 `AceStepHandler` is loaded via `initialize_service(project_root=...,
 config_path=<checkpoint name>, device=..., offload_to_cpu=...)` -- CPU
-offload for `quality` (XL) is `offload_to_cpu`, not `cpu_offload`;
+offload for `quality` (XL) is `offload_to_cpu`, not `cpu_offload`. Upstream
+resolves the DiT checkpoint at `<project_root>/checkpoints/<config_path>`,
+*not* at `<project_root>/<config_path>` -- `project_root` and the checkpoint
+directory are two different things to ACE-Step, even though Bard only has
+one (`CHECKPOINTS_ROOT`, SPEC.md sec 6). Passing `CHECKPOINTS_ROOT` itself as
+`project_root` (an earlier version of this adapter did) resolves as
+`checkpoints/checkpoints/<name>` and can't find real weights; `project_root`
+must be `CHECKPOINTS_ROOT`'s *parent* instead, so see `_checkpoints_project_root()`.
 `LLMHandler` is loaded via `initialize(checkpoint_dir=..., lm_model_path=
 <lm name>, backend="pt", device=...)` -- a different method *and*
 different argument names than the DiT handler, and `backend="pt"` must be
@@ -81,9 +88,13 @@ DEFAULT_LM = "acestep-5Hz-lm-1.7B"
 # native-Windows backend -- must be passed explicitly on every call.
 LM_BACKEND = "pt"
 
-# SPEC.md sec 6: weights live under checkpoints/<name>/ (gitignored). This is
-# `project_root`; `config_path` is just the bare checkpoint name above, not a
-# filesystem path under it.
+# SPEC.md sec 6: weights live under checkpoints/<name>/ (gitignored).
+# CHECKPOINTS_ROOT *is* that checkpoints/ directory -- it is NOT the same
+# thing as AceStepHandler.initialize_service's `project_root` (see
+# _checkpoints_project_root() below and the module docstring above).
+# LLMHandler.initialize's `checkpoint_dir`, by contrast, *is* used directly
+# as CHECKPOINTS_ROOT with no extra nesting -- only the DiT handler has this
+# project_root/checkpoints/ indirection.
 CHECKPOINTS_ROOT = Path(os.environ.get("BARD_CHECKPOINTS_DIR", "checkpoints"))
 DEVICE = os.environ.get("BARD_DEVICE", "cuda")
 
@@ -192,6 +203,28 @@ def _check_init_result(step: str, result: Any) -> None:
         ) from None
     if not success:
         raise WorkerUnavailable(f"{step} reported failure: {status_message}")
+
+
+def _checkpoints_project_root() -> Path:
+    """The `project_root` to pass to `AceStepHandler.initialize_service`
+    (SPEC.md sec 6 / module docstring): upstream resolves each DiT checkpoint
+    at `<project_root>/checkpoints/<config_path>`, so `project_root` must be
+    `CHECKPOINTS_ROOT`'s *parent* for that to land on `CHECKPOINTS_ROOT`
+    itself -- which only lines up if `CHECKPOINTS_ROOT`'s own directory name
+    is literally `checkpoints` (true for the SPEC-locked default; required of
+    any `BARD_CHECKPOINTS_DIR` override too, since ACE-Step's `checkpoints/`
+    segment is fixed, not something this adapter can rename around). Raises
+    `WorkerUnavailable` instead of silently resolving to the wrong directory
+    (exactly the bug the reviewer flagged)."""
+    if CHECKPOINTS_ROOT.name != "checkpoints":
+        raise WorkerUnavailable(
+            f"BARD_CHECKPOINTS_DIR ('{CHECKPOINTS_ROOT}') must be a directory named "
+            "'checkpoints': AceStepHandler.initialize_service resolves DiT checkpoints "
+            "at <project_root>/checkpoints/<config_path>, and this adapter derives "
+            "project_root as CHECKPOINTS_ROOT's parent so that lands on the real "
+            "weights directory."
+        )
+    return CHECKPOINTS_ROOT.parent
 
 
 def _handler_supports_cpu_offload(AceStepHandler: Any) -> bool:
@@ -307,7 +340,7 @@ def _ensure_loaded(dit_profile: str) -> tuple[Any, Any, Any]:
 
         handler = _api_call("AceStepHandler()", AceStepHandler)
         init_kwargs: dict[str, Any] = {
-            "project_root": str(CHECKPOINTS_ROOT),
+            "project_root": str(_checkpoints_project_root()),
             "config_path": checkpoint,
             "device": DEVICE,
         }
