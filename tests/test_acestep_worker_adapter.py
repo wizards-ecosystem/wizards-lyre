@@ -12,9 +12,11 @@ backend="pt", device=...)`, returning `(status_message, success)` (a falsy
 `success` must be treated as a failed load, not cached as ready), module-
 level `create_sample` whose result carries the language under `language`
 (mapped onto Bard's own `vocal_language` plan field), `inference_steps`/
-`guidance_scale`/`vocal_language`/`timesignature`/`negative_tags` on
-`GenerationParams` (not `GenerationConfig`), `generate_music(dit_handler=...)`
-(not `handler=`), audio results as dicts with the actual seed nested at
+`guidance_scale`/`vocal_language`/`timesignature`/`instruction` on
+`GenerationParams` (not `GenerationConfig`, and *no* `negative_tags` or
+`track_name` field -- those don't exist upstream and previously raised
+TypeError on every real call), `generate_music(dit_handler=...)` (not
+`handler=`), audio results as dicts with the actual seed nested at
 `audio["params"]["seed"]`, and FLAC-by-default output unless
 `GenerationConfig(audio_format="wav")` is requested -- then runs `run_job`
 against them, so `worker/acestep_worker.py`'s exact calling convention is
@@ -54,8 +56,11 @@ def _write_tiny_wav(path: Path) -> None:
 class FakeGenerationParams:
     """Mirrors ACE-Step 1.5's real signature: every per-request field,
     including inference_steps/guidance_scale, lives here -- not on
-    GenerationConfig. A missing/extra/misplaced kwarg raises TypeError,
-    same as it would against the real class."""
+    GenerationConfig. There is no negative_tags or track_name field (the
+    real GenerationParams has neither -- passing them raised TypeError on
+    every real call); track selection for extract/lego/complete goes
+    through `instruction` instead. A missing/extra/misplaced kwarg raises
+    TypeError, same as it would against the real class."""
 
     def __init__(
         self,
@@ -69,7 +74,6 @@ class FakeGenerationParams:
         instrumental: bool,
         vocal_language: Any,
         timesignature: Any,
-        negative_tags: list[str],
         thinking: bool,
         use_cot_metas: bool,
         seed: int,
@@ -77,7 +81,7 @@ class FakeGenerationParams:
         audio_cover_strength: Any,
         repainting_start: Any,
         repainting_end: Any,
-        track_name: Any,
+        instruction: Any,
         inference_steps: int,
         guidance_scale: float,
     ) -> None:
@@ -90,7 +94,6 @@ class FakeGenerationParams:
         self.instrumental = instrumental
         self.vocal_language = vocal_language
         self.timesignature = timesignature
-        self.negative_tags = negative_tags
         self.thinking = thinking
         self.use_cot_metas = use_cot_metas
         self.seed = seed
@@ -98,7 +101,7 @@ class FakeGenerationParams:
         self.audio_cover_strength = audio_cover_strength
         self.repainting_start = repainting_start
         self.repainting_end = repainting_end
-        self.track_name = track_name
+        self.instruction = instruction
         self.inference_steps = inference_steps
         self.guidance_scale = guidance_scale
 
@@ -305,11 +308,16 @@ def test_run_job_matches_installed_api_contract(
     # ACE-Step defaults to FLAC; the adapter must request WAV explicitly
     # instead of silently relabeling whatever comes back as .wav.
     assert config.audio_format == "wav"
-    # Custom-mode plan metadata (negative prompts, language, time
-    # signature) must actually reach the renderer, not be dropped.
+    # Custom-mode plan metadata (language, time signature) must actually
+    # reach the renderer, not be dropped.
     assert params.vocal_language == "fr"
     assert params.timesignature == "3/4"
-    assert params.negative_tags == ["distorted", "lo-fi"]
+    # GenerationParams has no negative_tags/track_name field; plan.json's
+    # "negative" is not forwarded (no confirmed upstream field), and
+    # "generate" doesn't send an instruction (that's extract/lego/complete
+    # only -- see test_track_name_maps_to_instruction_for_studio_ops).
+    assert not hasattr(params, "negative_tags")
+    assert params.instruction is None
 
 
 def test_simple_mode_uses_module_level_create_sample_and_persists_full_plan(
@@ -390,6 +398,43 @@ def test_quality_profile_requests_cpu_offload(
     params = generate_call[3]
     assert params.inference_steps == 8
     assert params.guidance_scale == 1.0
+
+
+def test_track_name_maps_to_instruction_for_studio_ops(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SPEC.md sec 4.4: extract/lego/complete's track selection must reach
+    GenerationParams' task-specific `instruction` field -- the real class
+    has no `track_name` kwarg (passing one raised TypeError on every real
+    call, exactly what the reviewer flagged)."""
+    log: list[tuple] = []
+    _install_fake_acestep(monkeypatch, log)
+
+    plan = {
+        "query": "",
+        "caption": "orchestral",
+        "lyrics": "[Instrumental]",
+        "instrumental": True,
+        "bpm": 90,
+        "keyscale": "D Minor",
+        "duration_sec": 20,
+    }
+
+    for action in ("extract", "lego", "complete"):
+        log.clear()
+        job = {
+            "action": action,
+            "dit_profile": "studio_ops",
+            "seed": -1,
+            "src_audio": "/some/source.wav",
+            "track_name": "vocals",
+        }
+        acestep_worker.run_job(
+            job=job, plan=plan, take_id=f"t-{action}", take_dir=tmp_path / f"take-{action}"
+        )
+        generate_call = next(e for e in log if e[0] == "generate_music")
+        params = generate_call[3]
+        assert params.instruction == "vocals", action
 
 
 def test_api_mismatch_raises_worker_unavailable_not_a_crash(

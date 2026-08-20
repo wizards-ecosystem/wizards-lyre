@@ -32,12 +32,16 @@ inference.create_sample` (not a handler method); its result carries the
 language under `language`, which this adapter maps onto Bard's own
 `vocal_language` plan field. `GenerationParams` carries every per-request
 field -- `inference_steps` and `guidance_scale` (not `num_inference_steps`/
-`use_cfg`), `duration` (not `duration_sec`), plus `vocal_language`,
-`timesignature`, and `negative_tags` (plan.json's `negative` list) so
-Custom-mode plan metadata actually reaches the renderer -- while
-`GenerationConfig` carries `batch_size` and `audio_format="wav"` (ACE-Step
-defaults to FLAC otherwise, which this adapter must not silently relabel
-as `.wav`); `generate_music` takes both plus `dit_handler` (not `handler`)
+`use_cfg`), `duration` (not `duration_sec`), plus `vocal_language` and
+`timesignature` so Custom-mode plan metadata actually reaches the
+renderer. It has no `negative_tags` or `track_name` field (both raised
+TypeError on every real call): plan.json's `negative` list is not sent
+until a real ACE-Step field name is confirmed, and `track_name` maps to
+the task-specific `instruction` field, sent only for extract/lego/complete
+(SPEC.md sec 4.4). `GenerationConfig` carries `batch_size` and
+`audio_format="wav"` (ACE-Step defaults to FLAC otherwise, which this
+adapter must not silently relabel as `.wav`); `generate_music` takes both
+plus `dit_handler` (not `handler`)
 and `lm_handler`. Its `GenerationResult` reports `success` plus generated
 files in `audios` (dicts) and LM/CoT-filled metadata in `extra_outputs`;
 the actual seed used lives nested at `audio["params"]["seed"]`, not
@@ -107,6 +111,11 @@ TASK_TYPE_BY_ACTION = {
     "lego": "lego",
     "complete": "complete",
 }
+
+# SPEC.md sec 4.4 studio_ops task map: extract/lego/complete pass their
+# track selection through GenerationParams' task-specific `instruction`
+# field; generate/cover/repaint don't take one.
+TRACK_INSTRUCTION_ACTIONS = {"extract", "lego", "complete"}
 
 
 class WorkerUnavailable(RuntimeError):
@@ -428,6 +437,11 @@ def run_job(
             effective_plan.get(k) is None for k in ("bpm", "keyscale", "duration_sec")
         )
 
+        # plan.json's `negative` (negative prompts) has no confirmed
+        # equivalent in the installed ACE-Step's GenerationParams -- the
+        # previous `negative_tags` kwarg didn't exist and raised TypeError
+        # on every real call. Not sent until upstream confirms a field name
+        # (SPEC.md sec 13: adapt as the real API is confirmed).
         params = _api_call(
             "GenerationParams",
             GenerationParams,
@@ -440,7 +454,6 @@ def run_job(
             instrumental=effective_plan.get("instrumental", False),
             vocal_language=effective_plan.get("vocal_language"),
             timesignature=effective_plan.get("timesignature"),
-            negative_tags=effective_plan.get("negative") or [],
             thinking=simple_mode,
             use_cot_metas=use_cot_metas,
             seed=job.get("seed", -1),
@@ -448,7 +461,13 @@ def run_job(
             audio_cover_strength=job.get("audio_cover_strength"),
             repainting_start=job.get("repainting_start"),
             repainting_end=job.get("repainting_end"),
-            track_name=job.get("track_name"),
+            # extract/lego/complete's track selection goes through the
+            # task-specific `instruction` field, not a `track_name` kwarg
+            # (GenerationParams has no such field -- passing it raised
+            # TypeError on every real call, converted to WorkerUnavailable).
+            instruction=(
+                job.get("track_name") if job["action"] in TRACK_INSTRUCTION_ACTIONS else None
+            ),
             inference_steps=GENERATION_STEPS[dit_profile],
             guidance_scale=GENERATION_GUIDANCE_SCALE[dit_profile],
         )
