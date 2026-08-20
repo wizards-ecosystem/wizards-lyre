@@ -125,6 +125,7 @@ def _install_fake_acestep(
     handler_cls: type | None = None,
     returned_audio_suffix: str = ".wav",
     lm_init_result: tuple[str, bool] = ("lm ready", True),
+    handler_init_result: tuple[str, bool] = ("dit ready", True),
 ) -> None:
     """Register fake `acestep.*` modules so `worker.acestep_worker`'s lazy
     `from acestep... import ...` statements resolve to them instead of the
@@ -132,18 +133,19 @@ def _install_fake_acestep(
     `generate_music` hands back regardless of the requested
     `audio_format` -- default `.wav` (the request honored); pass `.flac`
     to simulate ACE-Step ignoring it and still defaulting to FLAC.
-    `lm_init_result` simulates LLMHandler.initialize's `(status_message,
-    success)` return; pass a falsy `success` to simulate a failed LM load
-    that must not be cached as ready."""
+    `lm_init_result`/`handler_init_result` simulate LLMHandler.initialize /
+    AceStepHandler.initialize_service's `(status_message, success)` return;
+    pass a falsy `success` to simulate a failed load that must not be
+    cached as ready."""
 
     class DefaultFakeAceStepHandler:
         def __init__(self) -> None:
             self.config_path: str | None = None
-            self.cpu_offload = False
+            self.offload_to_cpu = False
 
         def initialize_service(
-            self, *, project_root: str, config_path: str, device: str, cpu_offload: bool = False
-        ) -> None:
+            self, *, project_root: str, config_path: str, device: str, offload_to_cpu: bool = False
+        ) -> tuple[str, bool]:
             log.append(
                 (
                     "handler.initialize_service",
@@ -151,14 +153,15 @@ def _install_fake_acestep(
                         "project_root": project_root,
                         "config_path": config_path,
                         "device": device,
-                        "cpu_offload": cpu_offload,
+                        "offload_to_cpu": offload_to_cpu,
                     },
                 )
             )
             self.project_root = project_root
             self.config_path = config_path
             self.device = device
-            self.cpu_offload = cpu_offload
+            self.offload_to_cpu = offload_to_cpu
+            return handler_init_result
 
     class FakeLLMHandler:
         def __init__(self) -> None:
@@ -278,7 +281,7 @@ def test_run_job_matches_installed_api_contract(
     assert kwargs["project_root"] == str(acestep_worker.CHECKPOINTS_ROOT)
     assert kwargs["config_path"] == "acestep-v15-turbo"
     assert kwargs["device"] == acestep_worker.DEVICE
-    assert kwargs["cpu_offload"] is False  # iterate does not need cpu_offload
+    assert kwargs["offload_to_cpu"] is False  # iterate does not need offload_to_cpu
 
     # LLMHandler is loaded through a *different* method with *different*
     # argument names than the DiT handler (the bug the reviewer flagged),
@@ -381,7 +384,7 @@ def test_quality_profile_requests_cpu_offload(
     assert meta["dit_profile"] == "quality"
 
     handler_init = next(e for e in log if e[0] == "handler.initialize_service")
-    assert handler_init[1]["cpu_offload"] is True  # requested for XL
+    assert handler_init[1]["offload_to_cpu"] is True  # requested for XL
 
     generate_call = next(e for e in log if e[0] == "generate_music")
     params = generate_call[3]
@@ -513,6 +516,27 @@ def test_initialize_worker_reports_lm_init_failure_not_success(
     assert acestep_worker._STATE["lm"] is None
     # the DiT handler *did* load fine -- only the LM failed
     assert acestep_worker._STATE["handler"] is not None
+
+
+def test_initialize_worker_reports_dit_init_failure_not_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AceStepHandler.initialize_service also returns (status_message,
+    success) -- a falsy success (e.g. missing/incompatible DiT weights)
+    must not be cached in _STATE and reported as a successfully preloaded
+    worker (the return value was previously discarded entirely)."""
+    log: list[tuple] = []
+    _install_fake_acestep(
+        monkeypatch, log, handler_init_result=("dit checkpoint incompatible", False)
+    )
+
+    ready, message = acestep_worker.initialize_worker()
+
+    assert ready is False
+    assert "dit checkpoint incompatible" in message
+    assert acestep_worker._STATE["handler"] is None
+    assert acestep_worker._STATE["dit_profile"] is None
+    assert acestep_worker._STATE["lm"] is None  # never reached the LM step
 
 
 def test_unexpected_audio_format_is_a_clean_error_not_mislabeled(

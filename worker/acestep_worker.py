@@ -18,18 +18,20 @@ Adapter notes (installed ACE-Step 1.5 Python API, SPEC.md sec 13 -- "follow
 ACE-Step's current API and keep Bard's HTTP schema stable with an
 adapter"): `AceStepHandler`/`LLMHandler` are constructed with no arguments.
 `AceStepHandler` is loaded via `initialize_service(project_root=...,
-config_path=<checkpoint name>, device=...)`; `LLMHandler` is loaded via
-`initialize(checkpoint_dir=..., lm_model_path=<lm name>, backend="pt",
-device=...)` -- a different method *and* different argument names than the
-DiT handler, and `backend="pt"` must be passed explicitly (SPEC.md sec 4.2:
-ACE-Step otherwise defaults it to `"vllm"`, not a reliable native-Windows
-backend). `LLMHandler.initialize` returns `(status_message, success)`; a
-falsy `success` is treated as a failed load, not cached as ready. Simple-
-mode planning goes through the module-level `acestep.inference.
-create_sample` (not a handler method); its result carries the language
-under `language`, which this adapter maps onto Bard's own `vocal_language`
-plan field. `GenerationParams` carries every per-request field --
-`inference_steps` and `guidance_scale` (not `num_inference_steps`/
+config_path=<checkpoint name>, device=..., offload_to_cpu=...)` -- CPU
+offload for `quality` (XL) is `offload_to_cpu`, not `cpu_offload`;
+`LLMHandler` is loaded via `initialize(checkpoint_dir=..., lm_model_path=
+<lm name>, backend="pt", device=...)` -- a different method *and*
+different argument names than the DiT handler, and `backend="pt"` must be
+passed explicitly (SPEC.md sec 4.2: ACE-Step otherwise defaults it to
+`"vllm"`, not a reliable native-Windows backend). Both
+`initialize_service` and `LLMHandler.initialize` return `(status_message,
+success)`; a falsy `success` is treated as a failed load, not cached as
+ready. Simple-mode planning goes through the module-level `acestep.
+inference.create_sample` (not a handler method); its result carries the
+language under `language`, which this adapter maps onto Bard's own
+`vocal_language` plan field. `GenerationParams` carries every per-request
+field -- `inference_steps` and `guidance_scale` (not `num_inference_steps`/
 `use_cfg`), `duration` (not `duration_sec`), plus `vocal_language`,
 `timesignature`, and `negative_tags` (plan.json's `negative` list) so
 Custom-mode plan metadata actually reaches the renderer -- while
@@ -163,11 +165,12 @@ def _api_method_call(step: str, obj: Any, method_name: str, *args, **kwargs):
 
 
 def _check_init_result(step: str, result: Any) -> None:
-    """ACE-Step's `LLMHandler.initialize` returns `(status_message,
-    success)` -- treat init as failed unless `success` is confirmed True,
-    instead of assuming any return value means success. Otherwise missing
-    weights or another init failure gets cached in `_STATE` and reported as
-    a successfully preloaded worker (exactly what the reviewer flagged)."""
+    """Both `AceStepHandler.initialize_service` and `LLMHandler.initialize`
+    return `(status_message, success)` -- treat init as failed unless
+    `success` is confirmed True, instead of assuming any return value means
+    success. Otherwise missing/incompatible weights or another init failure
+    gets cached in `_STATE` and reported as a successfully preloaded worker
+    (exactly what the reviewer flagged)."""
     try:
         status_message, success = result
     except (TypeError, ValueError):
@@ -184,7 +187,7 @@ def _handler_supports_cpu_offload(AceStepHandler: Any) -> bool:
         params = inspect.signature(AceStepHandler.initialize_service).parameters
     except (TypeError, ValueError, AttributeError):
         return False
-    return "cpu_offload" in params
+    return "offload_to_cpu" in params
 
 
 def _log_cuda_status() -> str:
@@ -269,7 +272,7 @@ def supports_dit_profile(dit_profile: str) -> tuple[bool, str | None]:
         return False, (
             f"dit_profile 'quality' ({DIT_CHECKPOINTS['quality']}) requires a "
             "CPU-offload-capable AceStepHandler.initialize_service() on a 16 GB GPU; "
-            "the installed acestep does not support cpu_offload. Use 'iterate' or "
+            "the installed acestep does not support offload_to_cpu. Use 'iterate' or "
             "'polish' instead."
         )
     return True, None
@@ -297,10 +300,15 @@ def _ensure_loaded(dit_profile: str) -> tuple[Any, Any, Any]:
             "device": DEVICE,
         }
         if cpu_offload:
-            init_kwargs["cpu_offload"] = True
-        _api_method_call(
+            init_kwargs["offload_to_cpu"] = True
+        result = _api_method_call(
             "AceStepHandler.initialize_service", handler, "initialize_service", **init_kwargs
         )
+        # AceStepHandler.initialize_service returns (status_message,
+        # success) just like LLMHandler.initialize -- check it instead of
+        # assuming any return means success, or missing/incompatible
+        # weights get cached in _STATE and reported as a ready worker.
+        _check_init_result("AceStepHandler.initialize_service", result)
 
         _STATE["handler"] = handler
         _STATE["dit_profile"] = dit_profile
