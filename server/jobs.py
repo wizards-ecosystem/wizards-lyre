@@ -381,7 +381,17 @@ def _resolve_dit_profile(action: str, dit_profile: str | None, project_dit_profi
                 f"action '{action}' requires dit_profile='studio_ops' (got '{dit_profile}')"
             )
         return "studio_ops"
-    return dit_profile or project_dit_profile
+    # studio_ops is reserved for extract/lego/complete (SPEC.md sec 8.1) --
+    # reject it here for every other action instead of loading the base
+    # model for ordinary generation, whether it came from an explicit
+    # override or (reviewer-flagged) a project's persisted default.
+    resolved = dit_profile or project_dit_profile
+    if resolved == "studio_ops":
+        raise JobError(
+            f"action '{action}' cannot use dit_profile='studio_ops' -- that profile is "
+            "reserved for extract/lego/complete"
+        )
+    return resolved
 
 
 def _resolve_source_audio(project_id: str, action: str, body: dict[str, Any]) -> str | None:
