@@ -4,11 +4,13 @@ version = "0.1.0"
 description = "Local ACE-Step generative music studio"
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
-# App dependencies land in phase 1 (fastapi, acestep, ...). Keep the bootstrap install light.
-dependencies = []
+dependencies = [
+    "fastapi>=0.111",
+    "uvicorn[standard]>=0.29",
+]
 
 [project.optional-dependencies]
-dev = ["pytest>=8"]
+dev = ["pytest>=8", "httpx>=0.27"]
 
 [build-system]
 requires = ["setuptools>=69"]
