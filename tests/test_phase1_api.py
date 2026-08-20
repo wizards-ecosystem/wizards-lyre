@@ -179,11 +179,11 @@ def test_worker_republishes_status_after_recovering_from_startup_failure(
     project = storage.create_project(title="Recovery")
     project_id = project["id"]
 
-    # Enqueue *before* the worker publishes anything: enqueue_job rejects a
-    # request outright once "unavailable" capability is published (SPEC.md
-    # sec 8.1), so the realistic "recovers after processing a queued job"
-    # case is a job that was already queued when the worker's claim/run
-    # loop -- which never re-checks capability -- picks it up.
+    # Enqueue before the worker publishes anything, purely so the ordering
+    # below is deterministic (the job's claim/run loop never re-checks
+    # capability once queued, regardless of when it was enqueued -- ordinary
+    # 'generate' requests are never capability-gated in the first place,
+    # see test_ordinary_profiles_queue_despite_total_worker_startup_failure).
     job = jobs_module.enqueue_job(project_id, {"action": "generate"})
     assert job["status"] == "queued"
 
@@ -551,6 +551,53 @@ def test_plan_json_updates_are_serialized_across_threads(
     assert final_plan["keyscale"] == "C Major"
 
 
+def test_active_take_not_promoted_when_plan_patch_merge_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SPEC.md sec 10 point 5: a failed job must leave the project's
+    active_take_id untouched, not pointing at the take that just failed.
+    The worker must promote a take to active only after every fallible
+    persistence step (write_take_meta, merge_plan_patch) has actually
+    succeeded (reviewer-flagged: merge_plan_patch used to run *after*
+    set_active_take, so a merge failure -- e.g. a lock timeout or disk
+    error -- left active_take_id pointing at a take whose meta.json says
+    `error`)."""
+    monkeypatch.setenv("BARD_PROJECTS_DIR", str(tmp_path / "projects"))
+    monkeypatch.setenv("BARD_DB_PATH", str(tmp_path / "bard.db"))
+    monkeypatch.setenv("BARD_WORKER", "mock")
+
+    from server import jobs as jobs_module
+
+    jobs_module.init_db()
+    # Simple mode (query set, caption/lyrics empty via default_plan) so
+    # mock_worker returns a plan_patch and merge_plan_patch actually runs.
+    project = storage.create_project(title="Patch Merge Failure", query="dreamy synthwave drive")
+    project_id = project["id"]
+    assert storage.load_project(project_id)["active_take_id"] is None
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("disk error")
+
+    monkeypatch.setattr(storage, "merge_plan_patch", boom)
+
+    job = jobs_module.enqueue_job(project_id, {"action": "generate"})
+    claimed = jobs_module.claim_next_queued_job()
+    assert claimed["id"] == job["id"]
+    jobs_module.run_claimed_job(claimed)
+
+    final_job = jobs_module.get_job(job["id"])
+    assert final_job["status"] == "error"
+    assert "disk error" in final_job["error"]
+
+    # never promoted -- must not point at the take that just failed
+    assert storage.load_project(project_id)["active_take_id"] is None
+
+    takes = storage.list_takes(project_id)
+    assert len(takes) == 1
+    assert takes[0]["id"] == final_job["take_id"]
+    assert takes[0]["error"] is not None
+
+
 def test_worker_failure_writes_error_take_meta(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -661,12 +708,17 @@ def test_smoke_gpu_script_writes_under_output_dir(
     assert written[0].is_relative_to(output_root)
 
 
-def test_studio_ops_required_for_extract_lego_complete(client: TestClient) -> None:
-    project = client.post("/api/projects", json={"title": "Ops Test"}).json()
+def test_phase_gated_actions_rejected_until_their_phase(client: TestClient) -> None:
+    """SPEC.md sec 12 (phase order): phase 1 is 'generate' only. cover/repaint
+    (phase 2) and extract/lego/complete (phase 3) each need frontend
+    workflow this build doesn't have yet -- source selection, repaint
+    regions, base-model-swap confirmation/loading UX -- so the API must
+    reject them outright instead of accepting a job the UI can't drive,
+    regardless of how well-formed the rest of the request is."""
+    project = client.post("/api/projects", json={"title": "Phase Gate Test"}).json()
     project_id = project["id"]
     client.put(f"/api/projects/{project_id}/plan", json=storage.default_plan())
 
-    # a source take to extract/lego/complete from
     resp = client.post(
         f"/api/projects/{project_id}/jobs",
         json={"action": "generate", "dit_profile": "iterate"},
@@ -675,35 +727,10 @@ def test_studio_ops_required_for_extract_lego_complete(client: TestClient) -> No
     assert gen["status"] == "done", gen.get("error")
     source_take_id = gen["take_id"]
 
-    for action in ("extract", "lego", "complete"):
-        # explicit wrong profile is rejected outright
-        resp = client.post(
-            f"/api/projects/{project_id}/jobs",
-            json={
-                "action": action,
-                "dit_profile": "iterate",
-                "source_take_id": source_take_id,
-                "track_name": "vocals",
-            },
-        )
-        assert resp.status_code == 400, action
-
-        # omitting dit_profile is coerced to studio_ops and the job runs
-        resp = client.post(
-            f"/api/projects/{project_id}/jobs",
-            json={
-                "action": action,
-                "source_take_id": source_take_id,
-                "track_name": "vocals",
-            },
-        )
-        assert resp.status_code == 200, action
-        queued = resp.json()
-        assert queued["dit_profile"] == "studio_ops"
-        job = _wait_for_job(client, queued["id"])
-        assert job["status"] == "done", job.get("error")
-
-        # explicit studio_ops is accepted
+    for action in ("cover", "repaint", "extract", "lego", "complete"):
+        # Well-formed in every other respect (real source, studio_ops
+        # profile where that would otherwise be required) -- still rejected
+        # purely because this action isn't available yet.
         resp = client.post(
             f"/api/projects/{project_id}/jobs",
             json={
@@ -713,45 +740,104 @@ def test_studio_ops_required_for_extract_lego_complete(client: TestClient) -> No
                 "track_name": "vocals",
             },
         )
-        assert resp.status_code == 200, action
-        job = _wait_for_job(client, resp.json()["id"])
-        assert job["status"] == "done", job.get("error")
+        assert resp.status_code == 400, action
+        assert "not available yet" in resp.json()["detail"], action
+
+        # No job row is left behind for a rejected action.
+        assert all(j["action"] != action for j in client.get("/api/jobs").json())
 
 
-def test_cover_repaint_extract_require_a_real_source(client: TestClient) -> None:
-    project = client.post("/api/projects", json={"title": "Source Test"}).json()
+def test_resolve_dit_profile_studio_ops_enforcement() -> None:
+    """Direct unit coverage for _resolve_dit_profile's studio_ops coercion
+    (SPEC.md sec 8.1) -- currently unreachable via enqueue_job (see
+    test_phase_gated_actions_rejected_until_their_phase) because
+    extract/lego/complete are phase-3-gated, but the logic stays correct and
+    tested so enabling those actions later is just a PHASE_GATED_ACTIONS
+    edit, not new/unverified logic."""
+    from server import jobs as jobs_module
+
+    for action in ("extract", "lego", "complete"):
+        assert jobs_module._resolve_dit_profile(action, None, "iterate") == "studio_ops"
+        assert jobs_module._resolve_dit_profile(action, "studio_ops", "iterate") == "studio_ops"
+        with pytest.raises(jobs_module.JobError):
+            jobs_module._resolve_dit_profile(action, "iterate", "iterate")
+
+    # An explicit job-level dit_profile always wins over the project default.
+    assert jobs_module._resolve_dit_profile("generate", "polish", "iterate") == "polish"
+    # An omitted job-level dit_profile must fall back to the *project's*
+    # persisted default, not a hardcoded "iterate" (reviewer-flagged: the
+    # included frontend always omits it, so this is the only thing that
+    # makes PATCH .../dit_profile have any effect on generation).
+    assert jobs_module._resolve_dit_profile("generate", None, "polish") == "polish"
+    assert jobs_module._resolve_dit_profile("generate", None, "iterate") == "iterate"
+
+
+def test_resolve_source_audio_requires_a_real_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Direct unit coverage for _resolve_source_audio's source validation
+    (SPEC.md sec 8.1/11) -- see test_resolve_dit_profile_studio_ops_enforcement
+    for why this is tested below enqueue_job rather than through it."""
+    monkeypatch.setenv("BARD_PROJECTS_DIR", str(tmp_path / "projects"))
+    monkeypatch.setenv("BARD_DB_PATH", str(tmp_path / "bard.db"))
+
+    from server import jobs as jobs_module
+
+    project = storage.create_project(title="Source Unit Test")
     project_id = project["id"]
-    client.put(f"/api/projects/{project_id}/plan", json=storage.default_plan())
 
     for action in ("cover", "repaint", "extract", "lego", "complete"):
         # no source_take_id and no upload_path at all
-        resp = client.post(
-            f"/api/projects/{project_id}/jobs",
-            json={"action": action, "track_name": "vocals"},
-        )
-        assert resp.status_code == 400, action
+        with pytest.raises(jobs_module.JobError):
+            jobs_module._resolve_source_audio(project_id, action, {"track_name": "vocals"})
 
         # a source_take_id that doesn't exist
-        resp = client.post(
-            f"/api/projects/{project_id}/jobs",
-            json={
-                "action": action,
-                "source_take_id": "does-not-exist",
-                "track_name": "vocals",
-            },
-        )
-        assert resp.status_code == 400, action
+        with pytest.raises(jobs_module.JobError):
+            jobs_module._resolve_source_audio(
+                project_id, action, {"source_take_id": "does-not-exist"}
+            )
 
         # an upload_path that escapes the project's jail
-        resp = client.post(
-            f"/api/projects/{project_id}/jobs",
-            json={
-                "action": action,
-                "upload_path": "../../../../evil.wav",
-                "track_name": "vocals",
-            },
-        )
-        assert resp.status_code == 400, action
+        with pytest.raises(storage.PathJailError):
+            jobs_module._resolve_source_audio(
+                project_id, action, {"upload_path": "../../../../evil.wav"}
+            )
+
+    # generate never requires a source
+    assert jobs_module._resolve_source_audio(project_id, "generate", {}) is None
+
+
+def test_enqueue_uses_project_dit_profile_when_job_omits_it(client: TestClient) -> None:
+    """SPEC.md: a project's dit_profile (set via PATCH /api/projects/{id})
+    must actually affect generation. The included frontend never sends a
+    job-level dit_profile, so enqueue_job's fallback for an omitted one must
+    be the project's own persisted profile, not a hardcoded 'iterate'
+    (reviewer-flagged: otherwise PATCH .../dit_profile is silently
+    ineffective for every real generate request)."""
+    project = client.post("/api/projects", json={"title": "Polish Project"}).json()
+    project_id = project["id"]
+    assert project["dit_profile"] == "iterate"  # default, before the PATCH below
+    client.put(f"/api/projects/{project_id}/plan", json={**storage.default_plan(), "caption": "x"})
+
+    patch_resp = client.patch(f"/api/projects/{project_id}", json={"dit_profile": "polish"})
+    assert patch_resp.status_code == 200
+    assert patch_resp.json()["dit_profile"] == "polish"
+
+    resp = client.post(f"/api/projects/{project_id}/jobs", json={"action": "generate"})
+    assert resp.status_code == 200
+    queued = resp.json()
+    assert queued["dit_profile"] == "polish"
+
+    job = _wait_for_job(client, queued["id"])
+    assert job["status"] == "done", job.get("error")
+    take = next(t for t in client.get(f"/api/projects/{project_id}").json()["takes"] if t["id"] == job["take_id"])
+    assert take["dit_profile"] == "polish"
+
+    # An explicit job-level dit_profile still overrides the project default.
+    resp = client.post(
+        f"/api/projects/{project_id}/jobs", json={"action": "generate", "dit_profile": "iterate"}
+    )
+    assert resp.json()["dit_profile"] == "iterate"
 
 
 def test_batch_size_forced_to_one(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -845,6 +931,53 @@ def test_quality_profile_rejected_without_cpu_offload_support(client: TestClient
     assert resp.status_code == 200
 
 
+def test_ordinary_profiles_queue_despite_total_worker_startup_failure(
+    client: TestClient,
+) -> None:
+    """When the *whole worker* fails to start (missing ACE-Step/CUDA/
+    weights), worker/run_worker.py's _publish_capabilities marks every DiT
+    profile unsupported, not just quality. SPEC.md sec 4.1/8.1 only calls
+    for early rejection of quality (CPU-offload support); rejecting an
+    ordinary 'iterate' generate request the same way would mean it can never
+    reach the queue, so it can never become a recoverable `error` job with
+    failure metadata (SPEC.md sec 10 point 5 / README's documented "jobs
+    fail cleanly instead of being rejected" contract), and a transient
+    startup failure could never self-heal since no job would ever reach
+    _ensure_loaded to retry it (reviewer-flagged)."""
+    from server import jobs as jobs_module
+
+    project = client.post("/api/projects", json={"title": "Startup Failure"}).json()
+    project_id = project["id"]
+    client.put(
+        f"/api/projects/{project_id}/plan",
+        json={**storage.default_plan(), "caption": "x"},
+    )
+
+    # Simulate worker/run_worker.py._publish_capabilities' blanket-failure
+    # publish: every profile marked unsupported, exactly as it does when
+    # initialize_worker() fails.
+    for dit_profile in storage.VALID_DIT_PROFILES:
+        jobs_module.publish_worker_capability(
+            dit_profile, False, "worker startup: failed to preload default 'iterate' DiT + LM: boom"
+        )
+    jobs_module.publish_worker_status(False, "boom: no GPU found", None)
+
+    resp = client.post(
+        f"/api/projects/{project_id}/jobs",
+        json={"action": "generate", "dit_profile": "iterate"},
+    )
+    assert resp.status_code == 200, resp.json()
+    assert resp.json()["status"] == "queued"
+
+    # quality remains gated even in this scenario -- it's the one profile
+    # SPEC.md actually calls for early rejection of.
+    resp = client.post(
+        f"/api/projects/{project_id}/jobs",
+        json={"action": "generate", "dit_profile": "quality"},
+    )
+    assert resp.status_code == 400
+
+
 def test_quality_profile_allowed_when_worker_has_not_reported(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -861,6 +994,77 @@ def test_quality_profile_allowed_when_worker_has_not_reported(
     project = storage.create_project(title="No Worker Yet")
     job = jobs_module.enqueue_job(project["id"], {"action": "generate", "dit_profile": "quality"})
     assert job["status"] == "queued"
+
+
+def test_worker_lease_is_a_cross_process_singleton(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SPEC.md sec 4.3: one GPU occupant. Two worker processes must never
+    both hold the lease at once -- a live rival is refused, but a lease
+    whose heartbeat has gone stale (crashed/killed owner) can be taken
+    over, and the original owner can no longer renew it once that happens."""
+    monkeypatch.setenv("BARD_DB_PATH", str(tmp_path / "bard.db"))
+
+    from server import jobs as jobs_module
+
+    jobs_module.init_db()
+
+    assert jobs_module.acquire_worker_lease("worker-a") is True
+    # A second, live worker must not be able to acquire the same lease.
+    assert jobs_module.acquire_worker_lease("worker-b") is False
+    # The holder can keep renewing it; a non-holder never can.
+    assert jobs_module.renew_worker_lease("worker-a") is True
+    assert jobs_module.renew_worker_lease("worker-b") is False
+
+    # Releasing lets another worker take over immediately.
+    jobs_module.release_worker_lease("worker-a")
+    assert jobs_module.acquire_worker_lease("worker-b") is True
+    assert jobs_module.renew_worker_lease("worker-a") is False
+
+    # A crashed worker's lease must not block forever: stale_after=0 treats
+    # worker-b's just-set heartbeat as immediately stale, standing in for a
+    # heartbeat that actually went quiet.
+    assert jobs_module.acquire_worker_lease("worker-c", stale_after=0) is True
+    assert jobs_module.renew_worker_lease("worker-b") is False
+
+
+def test_worker_status_and_capability_read_as_stale_after_heartbeat_gap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A worker_status/worker_capabilities row from a worker that has since
+    exited or hung must not be trusted forever: /api/health (via
+    get_worker_status) and enqueue validation (via _check_worker_capability)
+    must both treat a stale publish as unknown/unavailable rather than
+    repeating a long-dead process's last report (SPEC.md sec 4.3 / sec 8)."""
+    monkeypatch.setenv("BARD_PROJECTS_DIR", str(tmp_path / "projects"))
+    monkeypatch.setenv("BARD_DB_PATH", str(tmp_path / "bard.db"))
+    monkeypatch.setenv("BARD_WORKER", "mock")
+
+    from server import jobs as jobs_module
+
+    jobs_module.init_db()
+    jobs_module.publish_worker_status(True, "worker: 'iterate' DiT + LM currently loaded", "iterate")
+    jobs_module.publish_worker_capability("quality", False, "quality requires CPU offload")
+
+    # Freshly published: trusted as-is.
+    fresh = jobs_module.get_worker_status()
+    assert fresh is not None
+    assert fresh["ready"] is True
+    assert fresh["loaded_dit_profile"] == "iterate"
+    with pytest.raises(jobs_module.JobError):
+        jobs_module._check_worker_capability("quality")
+
+    # stale_after=0 treats the publish above as immediately stale, standing
+    # in for a worker that has since exited or hung without republishing.
+    stale = jobs_module.get_worker_status(stale_after=0)
+    assert stale is not None
+    assert stale["ready"] is False
+    assert stale["loaded_dit_profile"] is None
+    assert "stale" in stale["message"].lower()
+
+    # A stale capability publish must no longer block enqueue -- it reads as
+    # unknown (same as never-published), not as a trusted rejection.
+    jobs_module._check_worker_capability("quality", stale_after=0)  # must not raise
 
 
 def test_reclaim_stale_running_job_requeues_then_errors(

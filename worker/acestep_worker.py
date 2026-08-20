@@ -19,7 +19,14 @@ ACE-Step's current API and keep Bard's HTTP schema stable with an
 adapter"): `AceStepHandler`/`LLMHandler` are constructed with no arguments.
 `AceStepHandler` is loaded via `initialize_service(project_root=...,
 config_path=<checkpoint name>, device=..., offload_to_cpu=...)` -- CPU
-offload for `quality` (XL) is `offload_to_cpu`, not `cpu_offload`;
+offload for `quality` (XL) is `offload_to_cpu`, not `cpu_offload`. Upstream
+resolves the DiT checkpoint at `<project_root>/checkpoints/<config_path>`,
+*not* at `<project_root>/<config_path>` -- `project_root` and the checkpoint
+directory are two different things to ACE-Step, even though Bard only has
+one (`CHECKPOINTS_ROOT`, SPEC.md sec 6). Passing `CHECKPOINTS_ROOT` itself as
+`project_root` (an earlier version of this adapter did) resolves as
+`checkpoints/checkpoints/<name>` and can't find real weights; `project_root`
+must be `CHECKPOINTS_ROOT`'s *parent* instead, so see `_checkpoints_project_root()`.
 `LLMHandler` is loaded via `initialize(checkpoint_dir=..., lm_model_path=
 <lm name>, backend="pt", device=...)` -- a different method *and*
 different argument names than the DiT handler, and `backend="pt"` must be
@@ -38,9 +45,12 @@ renderer. It has no `negative_tags` or `track_name` field (both raised
 TypeError on every real call): plan.json's `negative` list is not sent
 until a real ACE-Step field name is confirmed, and `track_name` maps to
 the task-specific `instruction` field, sent only for extract/lego/complete
-(SPEC.md sec 4.4). `GenerationConfig` carries `batch_size` and
+(SPEC.md sec 4.4). `GenerationConfig` carries `batch_size`,
 `audio_format="wav"` (ACE-Step defaults to FLAC otherwise, which this
-adapter must not silently relabel as `.wav`); `generate_music` takes both
+adapter must not silently relabel as `.wav`), and `use_random_seed` --
+`GenerationParams.seed` alone is not enough to reproduce a take: this must
+be explicitly `False` whenever a fixed (non--1) seed is requested, or
+ACE-Step's own default (`True`) ignores it; `generate_music` takes both
 plus `dit_handler` (not `handler`)
 and `lm_handler`. Its `GenerationResult` reports `success` plus generated
 files in `audios` (dicts) and LM/CoT-filled metadata in `extra_outputs`;
@@ -78,9 +88,13 @@ DEFAULT_LM = "acestep-5Hz-lm-1.7B"
 # native-Windows backend -- must be passed explicitly on every call.
 LM_BACKEND = "pt"
 
-# SPEC.md sec 6: weights live under checkpoints/<name>/ (gitignored). This is
-# `project_root`; `config_path` is just the bare checkpoint name above, not a
-# filesystem path under it.
+# SPEC.md sec 6: weights live under checkpoints/<name>/ (gitignored).
+# CHECKPOINTS_ROOT *is* that checkpoints/ directory -- it is NOT the same
+# thing as AceStepHandler.initialize_service's `project_root` (see
+# _checkpoints_project_root() below and the module docstring above).
+# LLMHandler.initialize's `checkpoint_dir`, by contrast, *is* used directly
+# as CHECKPOINTS_ROOT with no extra nesting -- only the DiT handler has this
+# project_root/checkpoints/ indirection.
 CHECKPOINTS_ROOT = Path(os.environ.get("BARD_CHECKPOINTS_DIR", "checkpoints"))
 DEVICE = os.environ.get("BARD_DEVICE", "cuda")
 
@@ -189,6 +203,28 @@ def _check_init_result(step: str, result: Any) -> None:
         ) from None
     if not success:
         raise WorkerUnavailable(f"{step} reported failure: {status_message}")
+
+
+def _checkpoints_project_root() -> Path:
+    """The `project_root` to pass to `AceStepHandler.initialize_service`
+    (SPEC.md sec 6 / module docstring): upstream resolves each DiT checkpoint
+    at `<project_root>/checkpoints/<config_path>`, so `project_root` must be
+    `CHECKPOINTS_ROOT`'s *parent* for that to land on `CHECKPOINTS_ROOT`
+    itself -- which only lines up if `CHECKPOINTS_ROOT`'s own directory name
+    is literally `checkpoints` (true for the SPEC-locked default; required of
+    any `BARD_CHECKPOINTS_DIR` override too, since ACE-Step's `checkpoints/`
+    segment is fixed, not something this adapter can rename around). Raises
+    `WorkerUnavailable` instead of silently resolving to the wrong directory
+    (exactly the bug the reviewer flagged)."""
+    if CHECKPOINTS_ROOT.name != "checkpoints":
+        raise WorkerUnavailable(
+            f"BARD_CHECKPOINTS_DIR ('{CHECKPOINTS_ROOT}') must be a directory named "
+            "'checkpoints': AceStepHandler.initialize_service resolves DiT checkpoints "
+            "at <project_root>/checkpoints/<config_path>, and this adapter derives "
+            "project_root as CHECKPOINTS_ROOT's parent so that lands on the real "
+            "weights directory."
+        )
+    return CHECKPOINTS_ROOT.parent
 
 
 def _handler_supports_cpu_offload(AceStepHandler: Any) -> bool:
@@ -304,7 +340,7 @@ def _ensure_loaded(dit_profile: str) -> tuple[Any, Any, Any]:
 
         handler = _api_call("AceStepHandler()", AceStepHandler)
         init_kwargs: dict[str, Any] = {
-            "project_root": str(CHECKPOINTS_ROOT),
+            "project_root": str(_checkpoints_project_root()),
             "config_path": checkpoint,
             "device": DEVICE,
         }
@@ -377,12 +413,25 @@ def _plan_from_query(create_sample_fn: Any, lm: Any, plan: dict[str, Any]) -> di
         lm_handler=lm,
         query=plan.get("query"),
         instrumental=plan.get("instrumental", False),
+        # Without this, create_sample is free to pick any language for the
+        # lyrics it writes -- the plan's own vocal_language (default "en",
+        # SPEC.md sec 7.2) is what's supposed to constrain that.
+        vocal_language=plan.get("vocal_language"),
     )
 
     def _field(name: str, fallback: Any) -> Any:
         if isinstance(sample, dict):
             return sample.get(name, fallback)
         return getattr(sample, name, fallback)
+
+    # Mirrors generate_music's GenerationResult.success handling further
+    # down in this module: absent means the installed acestep predates this
+    # field (treated as success, matching the fakes/tests below), but an
+    # explicit False must fail the job instead of silently generating from
+    # an empty/fallback caption and lyrics.
+    if not _field("success", True):
+        detail = _field("error", None) or _field("message", None) or _field("status", None)
+        raise RuntimeError(f"create_sample reported failure: {detail or 'no detail provided'}")
 
     return {
         **plan,
@@ -437,6 +486,16 @@ def run_job(
             effective_plan.get(k) is None for k in ("bpm", "keyscale", "duration_sec")
         )
 
+        # SPEC.md sec 7.3: "-1 from the user means worker picks and records
+        # it" -- any other value is a fixed seed the user expects to be able
+        # to reproduce. Passing `seed` on GenerationParams is not enough by
+        # itself: ACE-Step's GenerationConfig.use_random_seed defaults True
+        # upstream and overrides it, so a fixed seed must also flip that off
+        # or a "regenerate with this seed" request can silently come back
+        # different every time.
+        seed = job.get("seed", -1)
+        use_random_seed = seed == -1
+
         # plan.json's `negative` (negative prompts) has no confirmed
         # equivalent in the installed ACE-Step's GenerationParams -- the
         # previous `negative_tags` kwarg didn't exist and raised TypeError
@@ -456,7 +515,7 @@ def run_job(
             timesignature=effective_plan.get("timesignature"),
             thinking=simple_mode,
             use_cot_metas=use_cot_metas,
-            seed=job.get("seed", -1),
+            seed=seed,
             src_audio=job.get("src_audio"),
             audio_cover_strength=job.get("audio_cover_strength"),
             repainting_start=job.get("repainting_start"),
@@ -479,6 +538,7 @@ def run_job(
             # archive we rename to mix.wav below actually is one (SPEC.md
             # sec 7: mix.wav is "preferred archive").
             audio_format="wav",
+            use_random_seed=use_random_seed,
         )
         result = _api_call(
             "generate_music",

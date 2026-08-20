@@ -31,13 +31,36 @@ from typing import Any, Callable
 from server import config, storage
 from worker import mock_worker
 
-VALID_ACTIONS = {"generate", "cover", "repaint", "extract", "lego", "complete"}
+# SPEC.md sec 12 (phase order): phase 1 is generate only. cover/repaint
+# (phase 2) and extract/lego/complete (phase 3) each need frontend workflow
+# phase 1 doesn't have -- source selection, repaint regions, and a
+# base-model-swap confirmation/loading UX -- so the API must not accept them
+# yet even though worker/acestep_worker.py's adapter already implements
+# their call contract (exercised directly by
+# tests/test_acestep_worker_adapter.py, independent of this gate). Moving an
+# action from PHASE_GATED_ACTIONS to VALID_ACTIONS is the one-line change
+# that turns it on once its phase's UI/workflow lands.
+VALID_ACTIONS = {"generate"}
+PHASE_GATED_ACTIONS = {"cover", "repaint", "extract", "lego", "complete"}
 STUDIO_OPS_ACTIONS = {"extract", "lego", "complete"}
 SOURCE_REQUIRED_ACTIONS = {"cover", "repaint", "extract", "lego", "complete"}
 
 HEARTBEAT_INTERVAL_SEC = 5.0
 STALE_AFTER_SEC = 60.0
 MAX_ATTEMPTS = 3
+
+# SPEC.md sec 4.3: one GPU occupant. worker/run_worker.py must hold this
+# lease before it initializes ACE-Step or starts polling the job queue, so
+# two worker processes can never load models / run jobs concurrently.
+WORKER_LEASE_HEARTBEAT_INTERVAL_SEC = 5.0
+WORKER_LEASE_STALE_AFTER_SEC = 30.0
+
+# worker/run_worker.py republishes worker_status/worker_capabilities on this
+# cadence even while idle (not just after a job runs), so a worker that has
+# died or hung stops reading as ready once its last publish is older than
+# WORKER_STATUS_STALE_AFTER_SEC -- see get_worker_status / _check_worker_capability.
+WORKER_STATUS_HEARTBEAT_INTERVAL_SEC = 5.0
+WORKER_STATUS_STALE_AFTER_SEC = 30.0
 
 # A worker returns the take's meta.json plus an optional plan.json patch
 # (simple-mode generation fills caption/lyrics/metas from the LM and the
@@ -55,6 +78,19 @@ class JobNotFound(LookupError):
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _is_stale(reference: str | None, stale_after: float) -> bool:
+    """True if `reference` (an ISO-8601 timestamp, or None/unparseable) is
+    older than `stale_after` seconds ago. Shared by job heartbeat reclaim,
+    worker-lease staleness, and worker-status freshness checks."""
+    if not reference:
+        return True
+    try:
+        ref_ts = datetime.fromisoformat(reference).timestamp()
+    except ValueError:
+        return True
+    return ref_ts < datetime.now(timezone.utc).timestamp() - stale_after
 
 
 def _connect() -> sqlite3.Connection:
@@ -124,6 +160,19 @@ def init_db() -> None:
             )
             """
         )
+        # SPEC.md sec 4.3: one GPU occupant. A single row that a worker
+        # process must hold (see acquire_worker_lease) before it may
+        # initialize ACE-Step or start claiming jobs.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS worker_lease (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                owner_id TEXT NOT NULL,
+                acquired_at TEXT NOT NULL,
+                heartbeat_at TEXT NOT NULL
+            )
+            """
+        )
         conn.commit()
 
 
@@ -143,6 +192,63 @@ def resolve_worker_module():
 
         return acestep_worker
     raise JobError(f"unknown BARD_WORKER backend: {backend}")
+
+
+def acquire_worker_lease(
+    owner_id: str, stale_after: float = WORKER_LEASE_STALE_AFTER_SEC
+) -> bool:
+    """Atomically claim the single cross-process worker lease (SPEC.md sec
+    4.3: one GPU occupant / serialized jobs). Succeeds if no lease is held,
+    we already hold it, or the current holder's heartbeat has gone stale
+    (crashed/killed). Returns False if a live worker -- fresh heartbeat,
+    different owner -- currently holds it; the caller must not initialize
+    ACE-Step or start claiming jobs in that case."""
+    now = _now()
+    with closing(_connect()) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT owner_id, heartbeat_at FROM worker_lease WHERE id = 1"
+        ).fetchone()
+        if (
+            row is not None
+            and row["owner_id"] != owner_id
+            and not _is_stale(row["heartbeat_at"], stale_after)
+        ):
+            conn.commit()
+            return False
+        conn.execute(
+            "INSERT INTO worker_lease (id, owner_id, acquired_at, heartbeat_at) "
+            "VALUES (1, ?, ?, ?) "
+            "ON CONFLICT(id) DO UPDATE SET owner_id = excluded.owner_id, "
+            "acquired_at = excluded.acquired_at, heartbeat_at = excluded.heartbeat_at",
+            (owner_id, now, now),
+        )
+        conn.commit()
+        return True
+
+
+def renew_worker_lease(owner_id: str) -> bool:
+    """Refresh the lease heartbeat. Returns False if this process no longer
+    owns the lease (it went stale and another worker already claimed it) --
+    the caller must stop claiming/running jobs immediately in that case."""
+    with closing(_connect()) as conn:
+        cur = conn.execute(
+            "UPDATE worker_lease SET heartbeat_at = ? WHERE id = 1 AND owner_id = ?",
+            (_now(), owner_id),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+
+
+def release_worker_lease(owner_id: str) -> None:
+    """Give up the lease on clean shutdown so a restart doesn't have to wait
+    out WORKER_LEASE_STALE_AFTER_SEC. A no-op if we don't currently hold it
+    (e.g. it already went stale and was taken over)."""
+    with closing(_connect()) as conn:
+        conn.execute(
+            "DELETE FROM worker_lease WHERE id = 1 AND owner_id = ?", (owner_id,)
+        )
+        conn.commit()
 
 
 def _resolve_worker() -> WorkerFn:
@@ -200,15 +306,28 @@ def publish_worker_status(ready: bool, message: str, loaded_dit_profile: str | N
         conn.commit()
 
 
-def get_worker_status() -> dict[str, Any] | None:
+def get_worker_status(stale_after: float = WORKER_STATUS_STALE_AFTER_SEC) -> dict[str, Any] | None:
     """Last-published worker readiness, or None if no worker process has
-    ever reported in (e.g. `worker/run_worker.py` hasn't started yet)."""
+    ever reported in (e.g. `worker/run_worker.py` hasn't started yet).
+
+    Folds in a freshness check: `worker/run_worker.py` republishes this on
+    WORKER_STATUS_HEARTBEAT_INTERVAL_SEC even while idle, specifically so a
+    worker that exited or hung stops reading as ready once its last publish
+    is older than `stale_after`, instead of `/api/health` repeating a dead
+    process's last-known-good status forever."""
     with closing(_connect()) as conn:
         row = conn.execute(
             "SELECT ready, message, loaded_dit_profile, updated_at FROM worker_status WHERE id = 1"
         ).fetchone()
     if row is None:
         return None
+    if _is_stale(row["updated_at"], stale_after):
+        return {
+            "ready": False,
+            "message": f"worker heartbeat stale since {row['updated_at']} -- is worker.run_worker still running?",
+            "loaded_dit_profile": None,
+            "updated_at": row["updated_at"],
+        }
     return {
         "ready": bool(row["ready"]),
         "message": row["message"],
@@ -217,22 +336,39 @@ def get_worker_status() -> dict[str, Any] | None:
     }
 
 
-def _check_worker_capability(dit_profile: str) -> None:
+def _check_worker_capability(
+    dit_profile: str, stale_after: float = WORKER_STATUS_STALE_AFTER_SEC
+) -> None:
     """SPEC.md sec 4.1/8.1: `quality` (XL) needs CPU offload on a 16 GB
     card; reject it up front instead of risking an uncontrolled OOM deep
     inside a job run. Reads capability the worker process already published
     to SQLite -- if it hasn't published anything yet, the job is allowed to
     queue and the worker's own `_ensure_loaded` guard still enforces this
-    when the job actually runs."""
-    capability = get_worker_capability(dit_profile)
-    if capability is None:
+    when the job actually runs.
+
+    Also treats a stale publish (worker exited or hung -- see
+    WORKER_STATUS_STALE_AFTER_SEC) as unknown-capability rather than
+    trusting it: an unknown capability still allows the job to queue (same
+    as never-published), instead of enqueue validation acting on a
+    potentially wrong, long-dead process's last report."""
+    with closing(_connect()) as conn:
+        row = conn.execute(
+            "SELECT supported, reason, updated_at FROM worker_capabilities WHERE dit_profile = ?",
+            (dit_profile,),
+        ).fetchone()
+    if row is None or _is_stale(row["updated_at"], stale_after):
         return
-    supported, reason = capability
-    if not supported:
-        raise JobError(reason or f"worker cannot currently load dit_profile '{dit_profile}'")
+    if not row["supported"]:
+        raise JobError(row["reason"] or f"worker cannot currently load dit_profile '{dit_profile}'")
 
 
-def _resolve_dit_profile(action: str, dit_profile: str | None) -> str:
+def _resolve_dit_profile(action: str, dit_profile: str | None, project_dit_profile: str) -> str:
+    """`dit_profile` is the job body's explicit override, if any;
+    `project_dit_profile` is project.json's persisted default (PATCH
+    /api/projects/{id}) -- an omitted job-level profile must fall back to
+    that, not silently to 'iterate', or a project switched to e.g. 'polish'
+    keeps generating with 'iterate' the moment a client omits the field
+    (reviewer-flagged: the included frontend always omits it)."""
     if dit_profile is not None and dit_profile not in storage.VALID_DIT_PROFILES:
         raise JobError(f"invalid dit_profile: {dit_profile}")
     if action in STUDIO_OPS_ACTIONS:
@@ -245,7 +381,7 @@ def _resolve_dit_profile(action: str, dit_profile: str | None) -> str:
                 f"action '{action}' requires dit_profile='studio_ops' (got '{dit_profile}')"
             )
         return "studio_ops"
-    return dit_profile or "iterate"
+    return dit_profile or project_dit_profile
 
 
 def _resolve_source_audio(project_id: str, action: str, body: dict[str, Any]) -> str | None:
@@ -275,14 +411,33 @@ def _resolve_source_audio(project_id: str, action: str, body: dict[str, Any]) ->
 
 
 def enqueue_job(project_id: str, body: dict[str, Any]) -> dict:
-    storage.load_project(project_id)
+    project = storage.load_project(project_id)
 
     action = body.get("action")
+    if action in PHASE_GATED_ACTIONS:
+        raise JobError(
+            f"action '{action}' is not available yet -- phase 1 only implements "
+            "'generate' (SPEC.md sec 12: cover/repaint land in phase 2, "
+            "extract/lego/complete in phase 3, each with required UI this build "
+            "doesn't have yet)"
+        )
     if action not in VALID_ACTIONS:
         raise JobError(f"invalid action: {action}")
 
-    dit_profile = _resolve_dit_profile(action, body.get("dit_profile"))
-    _check_worker_capability(dit_profile)
+    dit_profile = _resolve_dit_profile(action, body.get("dit_profile"), project["dit_profile"])
+    # SPEC.md sec 4.1/8.1 only calls for early rejection of 'quality' (XL
+    # needs CPU offload on a 16 GB card) -- every other profile always
+    # reports supported=True from the real supports_dit_profile() and only
+    # ever shows up as unsupported here because the *whole worker* failed to
+    # start (worker/run_worker.py's _publish_capabilities marks every
+    # profile unsupported in that case, not just quality). Gating ordinary
+    # profiles on that blocks them from ever reaching the queue -- so they
+    # can never become a recoverable `error` job with failure metadata
+    # (SPEC.md sec 10 point 5, README's documented contract) -- and blocks
+    # recovery from a transient startup failure entirely, since no job can
+    # reach _ensure_loaded to retry it (reviewer-flagged).
+    if dit_profile == "quality":
+        _check_worker_capability(dit_profile)
     _resolve_source_audio(project_id, action, body)
 
     job_id = uuid.uuid4().hex
@@ -427,7 +582,6 @@ def run_claimed_job(job: dict[str, Any]) -> None:
             take_dir=tdir,
         )
         storage.write_take_meta(project_id, take_id, meta)
-        storage.set_active_take(project_id, take_id)
         if plan_patch is not None:
             # `plan` above was loaded before this (possibly long-running)
             # generation started. merge_plan_patch re-reads the plan and
@@ -438,6 +592,11 @@ def run_claimed_job(job: dict[str, Any]) -> None:
             # delta, not a full plan replacement -- see worker.mock_worker
             # / worker.acestep_worker.
             storage.merge_plan_patch(project_id, plan_patch)
+        # Promote the take to active only after every fallible persistence
+        # step above has actually succeeded (reviewer-flagged): if
+        # merge_plan_patch raised, the except block below marks this take
+        # `error`, and active_take_id must not be left pointing at it.
+        storage.set_active_take(project_id, take_id)
         _set_status(job_id, "done", take_id=take_id)
     except Exception as exc:  # noqa: BLE001 - persist worker failure onto the job row
         if take_id is not None:
@@ -463,7 +622,6 @@ def reclaim_stale_jobs(stale_after: float = STALE_AFTER_SEC) -> list[str]:
     its heartbeat went stale) is not tracked here and is left on disk; only
     the job's queue state is recovered.
     """
-    cutoff = datetime.now(timezone.utc).timestamp() - stale_after
     reclaimed: list[str] = []
     with closing(_connect()) as conn:
         conn.execute("BEGIN IMMEDIATE")
@@ -472,11 +630,7 @@ def reclaim_stale_jobs(stale_after: float = STALE_AFTER_SEC) -> list[str]:
         ).fetchall()
         for row in rows:
             reference = row["heartbeat_at"] or row["updated_at"]
-            try:
-                ref_ts = datetime.fromisoformat(reference).timestamp()
-            except (TypeError, ValueError):
-                ref_ts = 0.0
-            if ref_ts >= cutoff:
+            if not _is_stale(reference, stale_after):
                 continue
 
             if row["attempts"] >= MAX_ATTEMPTS:

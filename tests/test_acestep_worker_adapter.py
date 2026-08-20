@@ -6,7 +6,11 @@ method name, wrong argument, a field on the wrong class) would go
 undetected. This module installs fake `acestep.*` modules with the
 signatures ACE-Step 1.5 actually exposes -- `AceStepHandler` loaded via
 `initialize_service(project_root=..., config_path=<checkpoint name>,
-device=...)`, `LLMHandler` loaded via a *different* method with *different*
+device=...)`, which the fake below resolves the same way ACE-Step itself
+does (`<project_root>/checkpoints/<config_path>`) so a test can assert the
+*real* weights directory is found, not just that some locally-assumed kwarg
+value was passed through unchanged, `LLMHandler` loaded via a *different*
+method with *different*
 argument names, `initialize(checkpoint_dir=..., lm_model_path=...,
 backend="pt", device=...)`, returning `(status_message, success)` (a falsy
 `success` must be treated as a failed load, not cached as ready), module-
@@ -107,12 +111,16 @@ class FakeGenerationParams:
 
 
 class FakeGenerationConfig:
-    """Only batch_size -- inference_steps/guidance_scale belong on
-    GenerationParams instead (this is exactly what the reviewer flagged)."""
+    """batch_size/audio_format/use_random_seed -- inference_steps/
+    guidance_scale belong on GenerationParams instead (this is exactly what
+    the reviewer flagged). use_random_seed defaults True upstream and must
+    be explicitly False for a fixed (non--1) seed to actually be honored --
+    also reviewer-flagged."""
 
-    def __init__(self, *, batch_size: int, audio_format: str) -> None:
+    def __init__(self, *, batch_size: int, audio_format: str, use_random_seed: bool) -> None:
         self.batch_size = batch_size
         self.audio_format = audio_format
+        self.use_random_seed = use_random_seed
 
 
 class FakeResult:
@@ -130,6 +138,7 @@ def _install_fake_acestep(
     lm_init_result: tuple[str, bool] = ("lm ready", True),
     handler_init_result: tuple[str, bool] = ("dit ready", True),
     audio_path_override: Path | None = None,
+    create_sample_result: dict | None = None,
 ) -> None:
     """Register fake `acestep.*` modules so `worker.acestep_worker`'s lazy
     `from acestep... import ...` statements resolve to them instead of the
@@ -141,7 +150,10 @@ def _install_fake_acestep(
     AceStepHandler.initialize_service's `(status_message, success)` return;
     pass a falsy `success` to simulate a failed load that must not be
     cached as ready. `audio_path_override` simulates ACE-Step reporting an
-    audio file at an arbitrary path instead of writing into `save_dir`."""
+    audio file at an arbitrary path instead of writing into `save_dir`.
+    `create_sample_result` overrides module-level `create_sample`'s default
+    successful return -- pass e.g. `{"success": False, "error": "..."}` to
+    simulate a documented planning failure."""
 
     class DefaultFakeAceStepHandler:
         def __init__(self) -> None:
@@ -151,6 +163,15 @@ def _install_fake_acestep(
         def initialize_service(
             self, *, project_root: str, config_path: str, device: str, offload_to_cpu: bool = False
         ) -> tuple[str, bool]:
+            # Mirrors ACE-Step 1.5's real resolution: the DiT checkpoint
+            # lives at <project_root>/checkpoints/<config_path>, not at
+            # <project_root>/<config_path> and not by treating project_root
+            # itself as the checkpoint directory. Exposing the resolved path
+            # lets tests assert the real weights location is found instead
+            # of merely accepting whatever project_root value was passed
+            # (exactly what the reviewer flagged the previous version of
+            # this test as unable to catch).
+            resolved_checkpoint_dir = Path(project_root) / "checkpoints" / config_path
             log.append(
                 (
                     "handler.initialize_service",
@@ -159,6 +180,7 @@ def _install_fake_acestep(
                         "config_path": config_path,
                         "device": device,
                         "offload_to_cpu": offload_to_cpu,
+                        "resolved_checkpoint_dir": resolved_checkpoint_dir,
                     },
                 )
             )
@@ -191,8 +213,12 @@ def _install_fake_acestep(
             self.lm_model_path = lm_model_path
             return lm_init_result
 
-    def create_sample(*, lm_handler: Any, query: str, instrumental: bool) -> dict:
-        log.append(("create_sample", lm_handler, query, instrumental))
+    def create_sample(
+        *, lm_handler: Any, query: str, instrumental: bool, vocal_language: Any
+    ) -> dict:
+        log.append(("create_sample", lm_handler, query, instrumental, vocal_language))
+        if create_sample_result is not None:
+            return create_sample_result
         return {
             "caption": f"auto: {query}",
             "lyrics": "[Instrumental]" if instrumental else f"[Verse]\n{query}",
@@ -286,7 +312,13 @@ def test_run_job_matches_installed_api_contract(
 
     handler_init = next(e for e in log if e[0] == "handler.initialize_service")
     kwargs = handler_init[1]
-    assert kwargs["project_root"] == str(acestep_worker.CHECKPOINTS_ROOT)
+    # The real assertion that matters (reviewer-flagged): ACE-Step resolves
+    # the checkpoint at <project_root>/checkpoints/<config_path>, so this
+    # must land on Bard's actual weights directory -- not
+    # checkpoints/checkpoints/acestep-v15-turbo, which is what passing
+    # CHECKPOINTS_ROOT itself as project_root used to produce.
+    assert kwargs["resolved_checkpoint_dir"] == acestep_worker.CHECKPOINTS_ROOT / "acestep-v15-turbo"
+    assert kwargs["project_root"] == str(acestep_worker.CHECKPOINTS_ROOT.parent)
     assert kwargs["config_path"] == "acestep-v15-turbo"
     assert kwargs["device"] == acestep_worker.DEVICE
     assert kwargs["offload_to_cpu"] is False  # iterate does not need offload_to_cpu
@@ -323,6 +355,77 @@ def test_run_job_matches_installed_api_contract(
     # only -- see test_track_name_maps_to_instruction_for_studio_ops).
     assert not hasattr(params, "negative_tags")
     assert params.instruction is None
+    # SPEC.md sec 7.3: -1 means "worker picks" -- ACE-Step's own random-seed
+    # path, not a fixed request.
+    assert params.seed == -1
+    assert config.use_random_seed is True
+
+
+def test_checkpoints_project_root_matches_ace_step_resolution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Direct unit coverage for _checkpoints_project_root() (reviewer-
+    flagged): AceStepHandler.initialize_service resolves the checkpoint at
+    <project_root>/checkpoints/<config_path>, so project_root must be
+    CHECKPOINTS_ROOT's parent for that to land on CHECKPOINTS_ROOT itself --
+    and a BARD_CHECKPOINTS_DIR that isn't literally named 'checkpoints' can
+    never satisfy that upstream convention, so it must fail clearly instead
+    of silently resolving to the wrong directory."""
+    monkeypatch.setattr(acestep_worker, "CHECKPOINTS_ROOT", Path("some/where/checkpoints"))
+    project_root = acestep_worker._checkpoints_project_root()
+    assert project_root == Path("some/where")
+    assert project_root / "checkpoints" / "acestep-v15-turbo" == acestep_worker.CHECKPOINTS_ROOT / (
+        "acestep-v15-turbo"
+    )
+
+    monkeypatch.setattr(acestep_worker, "CHECKPOINTS_ROOT", Path("some/where/weights"))
+    with pytest.raises(acestep_worker.WorkerUnavailable, match="checkpoints"):
+        acestep_worker._checkpoints_project_root()
+
+
+def test_fixed_seed_disables_use_random_seed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A positive job seed must actually be reproducible: GenerationParams.seed
+    alone is not enough upstream -- GenerationConfig.use_random_seed defaults
+    True and overrides it unless explicitly turned off (reviewer-flagged:
+    'consequently regenerating with a recorded seed can produce different
+    audio'). -1 keeps ACE-Step's own random path."""
+    log: list[tuple] = []
+    _install_fake_acestep(monkeypatch, log)
+
+    plan = {
+        "query": "",
+        "caption": "orchestral swell",
+        "lyrics": "[Instrumental]",
+        "instrumental": True,
+        "bpm": 90,
+        "keyscale": "D Minor",
+        "duration_sec": 45,
+        "vocal_language": "en",
+        "timesignature": "3/4",
+    }
+
+    acestep_worker.run_job(
+        job={"action": "generate", "dit_profile": "iterate", "seed": 12345, "src_audio": None},
+        plan=plan,
+        take_id="tfixed",
+        take_dir=tmp_path / "take_fixed",
+    )
+    generate_call = next(e for e in log if e[0] == "generate_music")
+    params, config = generate_call[3], generate_call[4]
+    assert params.seed == 12345
+    assert config.use_random_seed is False
+
+    log.clear()
+    acestep_worker.run_job(
+        job={"action": "generate", "dit_profile": "iterate", "seed": -1, "src_audio": None},
+        plan=plan,
+        take_id="trandom",
+        take_dir=tmp_path / "take_random",
+    )
+    generate_call = next(e for e in log if e[0] == "generate_music")
+    params, config = generate_call[3], generate_call[4]
+    assert params.seed == -1
+    assert config.use_random_seed is True
 
 
 def test_simple_mode_uses_module_level_create_sample_and_persists_full_plan(
@@ -339,7 +442,7 @@ def test_simple_mode_uses_module_level_create_sample_and_persists_full_plan(
         "bpm": None,
         "keyscale": None,
         "duration_sec": None,
-        "vocal_language": None,
+        "vocal_language": "es",
         "timesignature": None,
     }
     job = {"action": "generate", "dit_profile": "iterate", "seed": -1, "src_audio": None}
@@ -351,6 +454,9 @@ def test_simple_mode_uses_module_level_create_sample_and_persists_full_plan(
     create_call = next(e for e in log if e[0] == "create_sample")
     assert create_call[2] == "dreamy synthwave drive"  # query passed through
     assert create_call[3] is False  # instrumental
+    # the plan's vocal_language must constrain create_sample's own lyrics
+    # generation, not just get applied after the fact (reviewer-flagged).
+    assert create_call[4] == "es"
 
     assert plan_patch is not None
     assert "dreamy synthwave drive" in plan_patch["caption"]
@@ -371,6 +477,42 @@ def test_simple_mode_uses_module_level_create_sample_and_persists_full_plan(
     # "vocal_language" (Bard's own plan.json field name) -- confirms
     # _plan_from_query maps it correctly before generation even runs.
     assert params.vocal_language == "ja"
+
+
+def test_create_sample_failure_fails_job_instead_of_generating(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If create_sample reports success=False (e.g. ACE-Step's planner
+    itself failed), the adapter must fail the job with that detail instead
+    of proceeding to generate_music from an empty/fallback caption and
+    lyrics -- mirrors how generate_music's own GenerationResult.success is
+    already checked below."""
+    log: list[tuple] = []
+    _install_fake_acestep(
+        monkeypatch,
+        log,
+        create_sample_result={"success": False, "error": "planner overloaded"},
+    )
+
+    plan = {
+        "query": "dreamy synthwave drive",
+        "caption": "",
+        "lyrics": "",
+        "instrumental": False,
+        "bpm": None,
+        "keyscale": None,
+        "duration_sec": None,
+        "vocal_language": None,
+        "timesignature": None,
+    }
+    job = {"action": "generate", "dit_profile": "iterate", "seed": -1, "src_audio": None}
+
+    with pytest.raises(RuntimeError, match="planner overloaded"):
+        acestep_worker.run_job(job=job, plan=plan, take_id="t2b", take_dir=tmp_path / "take2b")
+
+    # Must fail before ever reaching generate_music -- no audio should have
+    # been produced from the empty/fallback plan.
+    assert not any(e[0] == "generate_music" for e in log)
 
 
 def test_quality_profile_requests_cpu_offload(
