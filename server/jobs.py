@@ -362,7 +362,13 @@ def _check_worker_capability(
         raise JobError(row["reason"] or f"worker cannot currently load dit_profile '{dit_profile}'")
 
 
-def _resolve_dit_profile(action: str, dit_profile: str | None) -> str:
+def _resolve_dit_profile(action: str, dit_profile: str | None, project_dit_profile: str) -> str:
+    """`dit_profile` is the job body's explicit override, if any;
+    `project_dit_profile` is project.json's persisted default (PATCH
+    /api/projects/{id}) -- an omitted job-level profile must fall back to
+    that, not silently to 'iterate', or a project switched to e.g. 'polish'
+    keeps generating with 'iterate' the moment a client omits the field
+    (reviewer-flagged: the included frontend always omits it)."""
     if dit_profile is not None and dit_profile not in storage.VALID_DIT_PROFILES:
         raise JobError(f"invalid dit_profile: {dit_profile}")
     if action in STUDIO_OPS_ACTIONS:
@@ -375,7 +381,7 @@ def _resolve_dit_profile(action: str, dit_profile: str | None) -> str:
                 f"action '{action}' requires dit_profile='studio_ops' (got '{dit_profile}')"
             )
         return "studio_ops"
-    return dit_profile or "iterate"
+    return dit_profile or project_dit_profile
 
 
 def _resolve_source_audio(project_id: str, action: str, body: dict[str, Any]) -> str | None:
@@ -405,7 +411,7 @@ def _resolve_source_audio(project_id: str, action: str, body: dict[str, Any]) ->
 
 
 def enqueue_job(project_id: str, body: dict[str, Any]) -> dict:
-    storage.load_project(project_id)
+    project = storage.load_project(project_id)
 
     action = body.get("action")
     if action in PHASE_GATED_ACTIONS:
@@ -418,7 +424,7 @@ def enqueue_job(project_id: str, body: dict[str, Any]) -> dict:
     if action not in VALID_ACTIONS:
         raise JobError(f"invalid action: {action}")
 
-    dit_profile = _resolve_dit_profile(action, body.get("dit_profile"))
+    dit_profile = _resolve_dit_profile(action, body.get("dit_profile"), project["dit_profile"])
     _check_worker_capability(dit_profile)
     _resolve_source_audio(project_id, action, body)
 

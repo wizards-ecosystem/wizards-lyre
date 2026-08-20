@@ -710,13 +710,19 @@ def test_resolve_dit_profile_studio_ops_enforcement() -> None:
     from server import jobs as jobs_module
 
     for action in ("extract", "lego", "complete"):
-        assert jobs_module._resolve_dit_profile(action, None) == "studio_ops"
-        assert jobs_module._resolve_dit_profile(action, "studio_ops") == "studio_ops"
+        assert jobs_module._resolve_dit_profile(action, None, "iterate") == "studio_ops"
+        assert jobs_module._resolve_dit_profile(action, "studio_ops", "iterate") == "studio_ops"
         with pytest.raises(jobs_module.JobError):
-            jobs_module._resolve_dit_profile(action, "iterate")
+            jobs_module._resolve_dit_profile(action, "iterate", "iterate")
 
-    assert jobs_module._resolve_dit_profile("generate", None) == "iterate"
-    assert jobs_module._resolve_dit_profile("generate", "polish") == "polish"
+    # An explicit job-level dit_profile always wins over the project default.
+    assert jobs_module._resolve_dit_profile("generate", "polish", "iterate") == "polish"
+    # An omitted job-level dit_profile must fall back to the *project's*
+    # persisted default, not a hardcoded "iterate" (reviewer-flagged: the
+    # included frontend always omits it, so this is the only thing that
+    # makes PATCH .../dit_profile have any effect on generation).
+    assert jobs_module._resolve_dit_profile("generate", None, "polish") == "polish"
+    assert jobs_module._resolve_dit_profile("generate", None, "iterate") == "iterate"
 
 
 def test_resolve_source_audio_requires_a_real_source(
@@ -752,6 +758,39 @@ def test_resolve_source_audio_requires_a_real_source(
 
     # generate never requires a source
     assert jobs_module._resolve_source_audio(project_id, "generate", {}) is None
+
+
+def test_enqueue_uses_project_dit_profile_when_job_omits_it(client: TestClient) -> None:
+    """SPEC.md: a project's dit_profile (set via PATCH /api/projects/{id})
+    must actually affect generation. The included frontend never sends a
+    job-level dit_profile, so enqueue_job's fallback for an omitted one must
+    be the project's own persisted profile, not a hardcoded 'iterate'
+    (reviewer-flagged: otherwise PATCH .../dit_profile is silently
+    ineffective for every real generate request)."""
+    project = client.post("/api/projects", json={"title": "Polish Project"}).json()
+    project_id = project["id"]
+    assert project["dit_profile"] == "iterate"  # default, before the PATCH below
+    client.put(f"/api/projects/{project_id}/plan", json={**storage.default_plan(), "caption": "x"})
+
+    patch_resp = client.patch(f"/api/projects/{project_id}", json={"dit_profile": "polish"})
+    assert patch_resp.status_code == 200
+    assert patch_resp.json()["dit_profile"] == "polish"
+
+    resp = client.post(f"/api/projects/{project_id}/jobs", json={"action": "generate"})
+    assert resp.status_code == 200
+    queued = resp.json()
+    assert queued["dit_profile"] == "polish"
+
+    job = _wait_for_job(client, queued["id"])
+    assert job["status"] == "done", job.get("error")
+    take = next(t for t in client.get(f"/api/projects/{project_id}").json()["takes"] if t["id"] == job["take_id"])
+    assert take["dit_profile"] == "polish"
+
+    # An explicit job-level dit_profile still overrides the project default.
+    resp = client.post(
+        f"/api/projects/{project_id}/jobs", json={"action": "generate", "dit_profile": "iterate"}
+    )
+    assert resp.json()["dit_profile"] == "iterate"
 
 
 def test_batch_size_forced_to_one(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
