@@ -10,8 +10,12 @@ Phase 1 (SPEC.md sec 12): FastAPI health/projects/plan/takes/jobs API, a SQLite
 `queued -> running -> done|error` job queue, a dedicated worker process (`worker/run_worker.py`)
 that drains it, a minimal React shell (library, plan, takes, generate), and a mocked worker for
 tests. The production job backend is `worker/acestep_worker.py`, which calls ACE-Step 1.5's
-`generate_music` -- it requires ACE-Step installed and weights downloaded (see below). Phases
-2-4 (studio loop, base-model swap, LoRA/polish) are not implemented yet.
+`generate_music` -- it requires ACE-Step installed and weights downloaded (see below).
+
+Phase 2 (SPEC.md sec 12, studio loop) is landing incrementally: `cover` (take source select +
+strength) is enabled end-to-end (API + React), reusing generate's plan-save/poll UX. The rest of
+phase 2 -- waveform + region display, repaint, richer project library -- is not implemented yet.
+Phases 3-4 (base-model swap, LoRA/polish) are not implemented yet either.
 
 ## Machine
 
@@ -68,10 +72,10 @@ was run from (override the worker's read side with `BARD_CHECKPOINTS_DIR` if you
 at weights downloaded elsewhere, e.g. the `ACE-Step-1.5` checkout's own `checkpoints/`) -- see
 `worker/acestep_worker.py`'s `CHECKPOINTS_ROOT`.
 
-Without ACE-Step installed, the server still runs; `generate` jobs (phase 1's only accepted
-action -- see Status above) will fail with a clear "acestep is not installed" error instead of
-crashing. Set `BARD_WORKER=mock` to force the mocked worker (silent WAV, no GPU) for local
-UI/API poking without a GPU.
+Without ACE-Step installed, the server still runs; `generate` and `cover` jobs (the only actions
+accepted so far -- see Status above) will fail with a clear "acestep is not installed" error
+instead of crashing. Set `BARD_WORKER=mock` to force the mocked worker (silent WAV, no GPU) for
+local UI/API poking without a GPU.
 
 ## Run the server + worker
 

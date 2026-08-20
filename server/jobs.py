@@ -600,11 +600,20 @@ def run_claimed_job(job: dict[str, Any]) -> None:
         _set_status(job_id, "done", take_id=take_id)
     except Exception as exc:  # noqa: BLE001 - persist worker failure onto the job row
         if take_id is not None:
-            storage.write_take_meta(
-                project_id,
-                take_id,
-                _error_take_meta(take_id, action, dit_profile, payload, str(exc)),
-            )
+            try:
+                storage.write_take_meta(
+                    project_id,
+                    take_id,
+                    _error_take_meta(take_id, action, dit_profile, payload, str(exc)),
+                )
+            except Exception:  # noqa: BLE001 - best-effort cleanup only
+                # Writing the take's error metadata is a courtesy (surfaces
+                # the failure on the take, not just the job row) -- if disk
+                # I/O itself is failing (full disk, permissions, lock), that
+                # must not stop the job row below from being marked `error`,
+                # or the job is left `running` until a later worker process
+                # times it out via reclaim_stale_jobs instead of failing fast.
+                pass
         _set_status(job_id, "error", take_id=take_id, error=str(exc))
     finally:
         stop_heartbeat.set()

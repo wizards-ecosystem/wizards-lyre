@@ -264,6 +264,11 @@ export default function App() {
     setBusyStatus("queued");
     setErrorMsg(null);
     try {
+      // Same race as generate(): the plan can still be mid-debounce (or an
+      // earlier save still in flight) when Cover is clicked -- the worker
+      // reads the on-disk plan, so a stale caption/lyrics edit would
+      // otherwise silently leak into the cover job.
+      await flushPendingPlanSave();
       const queued = await api.cover(activeId, selectedTakeId, coverStrength);
       const job = await pollJob(queued.id, (update) => setBusyStatus(update.status));
       if (job.status === "error") {
