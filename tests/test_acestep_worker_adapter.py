@@ -352,7 +352,8 @@ def test_run_job_matches_installed_api_contract(
     # GenerationParams has no negative_tags/track_name field; plan.json's
     # "negative" is not forwarded (no confirmed upstream field), and
     # "generate" doesn't send an instruction (that's extract/lego/complete
-    # only -- see test_track_name_maps_to_instruction_for_studio_ops).
+    # only, which aren't implemented yet -- see
+    # test_instruction_is_always_none_in_phase_1).
     assert not hasattr(params, "negative_tags")
     assert params.instruction is None
     # SPEC.md sec 7.3: -1 means "worker picks" -- ACE-Step's own random-seed
@@ -547,13 +548,15 @@ def test_quality_profile_requests_cpu_offload(
     assert params.guidance_scale == 1.0
 
 
-def test_track_name_maps_to_instruction_for_studio_ops(
+def test_instruction_is_always_none_in_phase_1(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """SPEC.md sec 4.4: extract/lego/complete's track selection must reach
-    GenerationParams' task-specific `instruction` field -- the real class
-    has no `track_name` kwarg (passing one raised TypeError on every real
-    call, exactly what the reviewer flagged)."""
+    """SPEC.md sec 4.4: extract/lego/complete's track selection would reach
+    GenerationParams' task-specific `instruction` field -- the real class has
+    no `track_name` kwarg (passing one raised TypeError on every real call).
+    Those actions are Phase 3 and not implemented yet (server.jobs rejects
+    them before a job reaches this worker), so `run_job` always sends
+    `instruction=None` for the `generate` jobs it does handle."""
     log: list[tuple] = []
     _install_fake_acestep(monkeypatch, log)
 
@@ -566,22 +569,12 @@ def test_track_name_maps_to_instruction_for_studio_ops(
         "keyscale": "D Minor",
         "duration_sec": 20,
     }
+    job = {"action": "generate", "dit_profile": "iterate", "seed": -1, "src_audio": None}
 
-    for action in ("extract", "lego", "complete"):
-        log.clear()
-        job = {
-            "action": action,
-            "dit_profile": "studio_ops",
-            "seed": -1,
-            "src_audio": "/some/source.wav",
-            "track_name": "vocals",
-        }
-        acestep_worker.run_job(
-            job=job, plan=plan, take_id=f"t-{action}", take_dir=tmp_path / f"take-{action}"
-        )
-        generate_call = next(e for e in log if e[0] == "generate_music")
-        params = generate_call[3]
-        assert params.instruction == "vocals", action
+    acestep_worker.run_job(job=job, plan=plan, take_id="t-instr", take_dir=tmp_path / "take-instr")
+    generate_call = next(e for e in log if e[0] == "generate_music")
+    params = generate_call[3]
+    assert params.instruction is None
 
 
 def test_api_mismatch_raises_worker_unavailable_not_a_crash(

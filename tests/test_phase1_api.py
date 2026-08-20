@@ -708,6 +708,7 @@ def test_smoke_gpu_script_writes_under_output_dir(
     assert written[0].is_relative_to(output_root)
 
 
+<<<<<<< HEAD
 def test_phase_gated_actions_rejected_until_their_phase(client: TestClient) -> None:
     """SPEC.md sec 12 (phase order): phase 1 is 'generate' only. cover/repaint
     (phase 2) and extract/lego/complete (phase 3) each need frontend
@@ -784,9 +785,18 @@ def test_resolve_source_audio_requires_a_real_source(
     from server import jobs as jobs_module
 
     project = storage.create_project(title="Source Unit Test")
+=======
+def test_phase2_and_phase3_actions_are_not_implemented(client: TestClient) -> None:
+    """SPEC.md sec 12 / AGENTS.md: implement the spec in phase order. Phase 1
+    is text2music `generate` only -- cover / repaint (Phase 2) and the
+    studio_ops extract / lego / complete actions (Phase 3) must be rejected,
+    not dispatched, until their own phase lands."""
+    project = client.post("/api/projects", json={"title": "Phase Test"}).json()
+>>>>>>> bfbe6a4 ([conclave] fix round 1: Expand static safety tests for forbidden engines and public bind)
     project_id = project["id"]
 
     for action in ("cover", "repaint", "extract", "lego", "complete"):
+<<<<<<< HEAD
         # no source_take_id and no upload_path at all
         with pytest.raises(jobs_module.JobError):
             jobs_module._resolve_source_audio(project_id, action, {"track_name": "vocals"})
@@ -838,6 +848,14 @@ def test_enqueue_uses_project_dit_profile_when_job_omits_it(client: TestClient) 
         f"/api/projects/{project_id}/jobs", json={"action": "generate", "dit_profile": "iterate"}
     )
     assert resp.json()["dit_profile"] == "iterate"
+=======
+        resp = client.post(
+            f"/api/projects/{project_id}/jobs",
+            json={"action": action, "track_name": "vocals"},
+        )
+        assert resp.status_code == 400, action
+        assert "invalid action" in resp.json()["detail"].lower()
+>>>>>>> bfbe6a4 ([conclave] fix round 1: Expand static safety tests for forbidden engines and public bind)
 
 
 def test_batch_size_forced_to_one(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:

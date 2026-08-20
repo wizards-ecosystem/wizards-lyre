@@ -21,13 +21,12 @@ from typing import Any
 SAMPLE_RATE = 8000
 DURATION_SEC = 0.5
 
+# Phase 1 (SPEC.md sec 12) is text2music generation only. cover / repaint
+# (Phase 2) and the studio_ops extract / lego / complete actions (Phase 3)
+# are not implemented yet -- server.jobs.VALID_ACTIONS rejects them before a
+# job ever reaches this worker.
 TASK_TYPE_BY_ACTION = {
     "generate": "text2music",
-    "cover": "cover",
-    "repaint": "repaint",
-    "extract": "extract",
-    "lego": "lego",
-    "complete": "complete",
 }
 
 
@@ -39,15 +38,6 @@ def _write_silent_wav(path: Path) -> float:
         wf.setframerate(SAMPLE_RATE)
         wf.writeframes(b"\x00\x00" * n_frames)
     return n_frames / SAMPLE_RATE
-
-
-def _repaint_meta(job: dict[str, Any]) -> dict | None:
-    if job.get("action") != "repaint":
-        return None
-    return {
-        "start": job.get("repainting_start", 0),
-        "end": job.get("repainting_end", -1),
-    }
 
 
 def supports_dit_profile(dit_profile: str) -> tuple[bool, str | None]:
@@ -155,7 +145,10 @@ def run_job(
         "created_at": datetime.now(timezone.utc).isoformat(),
         "score": None,
         "error": None,
-        "repaint": _repaint_meta(job),
-        "track_name": job.get("track_name"),
+        # repaint / track_name (SPEC.md sec 7.3 meta.json schema) are only
+        # ever populated by the repaint / studio_ops actions, which aren't
+        # implemented yet (Phase 2/3) -- always null for now.
+        "repaint": None,
+        "track_name": None,
     }
     return meta, plan_patch
