@@ -21,9 +21,50 @@ body {
 }
 
 .app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 16px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
+}
+
+.topbar h1 {
+  font-size: 15px;
+  margin: 0;
+}
+
+.health {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.health .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #ff5c66;
+}
+
+.health.ok .dot {
+  background: #4fd67a;
+}
+
+.body {
   display: grid;
   grid-template-columns: 260px 1fr;
-  height: 100vh;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .library {
@@ -33,9 +74,12 @@ body {
   overflow-y: auto;
 }
 
-.library h1 {
-  font-size: 16px;
+.library h2 {
+  font-size: 14px;
   margin: 0 0 12px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 .new-project {
@@ -52,10 +96,13 @@ body {
 }
 
 .project-list li {
-  padding: 8px;
+  padding: 6px 8px;
   border-radius: 4px;
-  cursor: pointer;
   color: var(--muted);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
 }
 
 .project-list li:hover {
@@ -67,18 +114,57 @@ body {
   color: #0a0a0d;
 }
 
+.project-row {
+  display: flex;
+  flex-direction: column;
+  cursor: pointer;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.project-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-updated {
+  font-size: 11px;
+  opacity: 0.8;
+}
+
+.open-btn {
+  font-size: 11px;
+  padding: 3px 6px;
+  flex: 0 0 auto;
+}
+
 .workspace {
   padding: 20px;
   overflow-y: auto;
 }
 
-.plan,
-.takes {
+.panes {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 16px;
   margin-top: 16px;
+  align-items: start;
+}
+
+.pane {
   padding: 12px;
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 6px;
+}
+
+.pane h3 {
+  margin: 0 0 10px;
+  font-size: 13px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 .plan label {
@@ -87,6 +173,35 @@ body {
   gap: 4px;
   margin-bottom: 10px;
   color: var(--muted);
+}
+
+.plan label.checkbox {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+
+.plan-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.waveform-canvas {
+  height: 120px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #101116;
+  border: 1px dashed var(--border);
+  border-radius: 4px;
+  margin-bottom: 12px;
+}
+
+.waveform-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 input,
