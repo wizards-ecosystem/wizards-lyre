@@ -1,5 +1,11 @@
 // Thin client for the FastAPI backend. See SPEC.md sec 8 for the contract.
 
+export interface Health {
+  ok: boolean;
+  gpu: string;
+  dit_loaded: string | null;
+}
+
 export interface ProjectSummary {
   id: string;
   title: string;
@@ -81,7 +87,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  health: () => request<{ ok: boolean; gpu: string; dit_loaded: string | null }>("/api/health"),
+  health: () => request<Health>("/api/health"),
   listProjects: () => request<ProjectSummary[]>("/api/projects"),
   createProject: (title: string, query: string) =>
     request<Project>("/api/projects", {

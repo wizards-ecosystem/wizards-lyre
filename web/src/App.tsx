@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { api, Job, Plan, ProjectDetail, ProjectSummary } from "./api";
+import { api, Health, Job, Plan, ProjectDetail, ProjectSummary } from "./api";
 
+const HEALTH_POLL_INTERVAL_MS = 5000;
 const JOB_POLL_INTERVAL_MS = 1000;
 // Real ACE-Step generation can take a while (SPEC.md sec 5: it queues
 // behind a dedicated worker process); give it a generous ceiling before
@@ -43,6 +44,8 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [busyStatus, setBusyStatus] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [health, setHealth] = useState<Health | null>(null);
+  const [healthError, setHealthError] = useState<string | null>(null);
 
   // Plan saves are debounced and serialized: at most one PUT /plan in
   // flight at a time, always carrying the latest edit. Without this, one
@@ -163,6 +166,33 @@ export default function App() {
     refreshProjects().catch((err) => setErrorMsg(String(err)));
   }, []);
 
+  // Server (and worker) may not be running at all -- a fetch failure here
+  // is a normal, expected state (shown as "offline"), not something to
+  // surface via the generic errorMsg banner.
+  useEffect(() => {
+    let cancelled = false;
+    async function poll() {
+      try {
+        const result = await api.health();
+        if (!cancelled) {
+          setHealth(result);
+          setHealthError(null);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setHealth(null);
+          setHealthError(String(err));
+        }
+      }
+    }
+    poll();
+    const interval = setInterval(poll, HEALTH_POLL_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, []);
+
   useEffect(() => {
     if (activeId) {
       refreshDetail(activeId).catch((err) => setErrorMsg(String(err)));
@@ -227,105 +257,194 @@ export default function App() {
 
   return (
     <div className="app">
-      <aside className="library">
+      <header className="topbar">
         <h1>Wizard's Bard</h1>
-        <div className="new-project">
-          <input
-            placeholder="title"
-            value={newTitle}
-            onChange={(e) => setNewTitle(e.target.value)}
-          />
-          <input
-            placeholder="simple query (optional)"
-            value={newQuery}
-            onChange={(e) => setNewQuery(e.target.value)}
-          />
-          <button onClick={createProject}>New project</button>
+        <div className={`health ${health?.ok ? "ok" : "down"}`} title={healthError ?? undefined}>
+          <span className="dot" />
+          {health ? `${health.gpu}${health.dit_loaded ? ` · ${health.dit_loaded}` : ""}` : "server offline"}
         </div>
-        <ul className="project-list">
-          {projects.map((p) => (
-            <li
-              key={p.id}
-              className={p.id === activeId ? "active" : ""}
-              onClick={() => switchActiveProject(p.id)}
-            >
-              {p.title}
-            </li>
-          ))}
-        </ul>
-      </aside>
+      </header>
 
-      <main className="workspace">
-        {errorMsg && <div className="error">{errorMsg}</div>}
-        {!detail && <p className="hint">Select or create a project.</p>}
-        {detail && (
-          <>
-            <h2>{detail.project.title}</h2>
+      <div className="body">
+        <aside className="library">
+          <h2>Library</h2>
+          <div className="new-project">
+            <input
+              placeholder="title"
+              value={newTitle}
+              onChange={(e) => setNewTitle(e.target.value)}
+            />
+            <input
+              placeholder="simple query (optional)"
+              value={newQuery}
+              onChange={(e) => setNewQuery(e.target.value)}
+            />
+            <button onClick={createProject}>New project</button>
+          </div>
+          <ul className="project-list">
+            {projects.map((p) => (
+              <li key={p.id} className={p.id === activeId ? "active" : ""}>
+                <div className="project-row" onClick={() => switchActiveProject(p.id)}>
+                  <span className="project-title">{p.title}</span>
+                  <span className="project-updated">
+                    {p.updated_at ? new Date(p.updated_at).toLocaleString() : ""}
+                  </span>
+                </div>
+                <button className="open-btn" onClick={() => switchActiveProject(p.id)}>
+                  Open
+                </button>
+              </li>
+            ))}
+          </ul>
+        </aside>
 
-            <section className="plan">
-              <h3>Plan</h3>
-              <label>
-                Simple query
-                <input
-                  value={detail.plan.query}
-                  onChange={(e) => savePlanField("query", e.target.value)}
-                />
-              </label>
-              <label>
-                Caption
-                <input
-                  value={detail.plan.caption}
-                  onChange={(e) => savePlanField("caption", e.target.value)}
-                />
-              </label>
-              <label>
-                Lyrics
-                <textarea
-                  value={detail.plan.lyrics}
-                  onChange={(e) => savePlanField("lyrics", e.target.value)}
-                />
-              </label>
-              <button onClick={generate} disabled={busy}>
-                {busy ? `Generating… (${busyStatus ?? "queued"})` : "Generate"}
-              </button>
-            </section>
+        <main className="workspace">
+          {errorMsg && <div className="error">{errorMsg}</div>}
+          {!detail && <p className="hint">Select or create a project.</p>}
+          {detail && (
+            <>
+              <h2>{detail.project.title}</h2>
 
-            <section className="takes">
-              <h3>Takes</h3>
-              {detail.takes.length === 0 && <p className="hint">No takes yet.</p>}
-              <ul>
-                {detail.takes.map((take) => (
-                  <li key={take.id}>
-                    <div className="take-meta">
-                      <span>{take.task_type}</span>
-                      <span>seed {take.seed}</span>
-                      <span>
-                        {take.duration_sec != null ? `${take.duration_sec.toFixed(1)}s` : "—"}
-                      </span>
-                    </div>
-                    {take.error ? (
-                      // A take whose generation failed has no audio file
-                      // (SPEC.md sec 10 point 5) -- show the error instead
-                      // of an <audio> that would just 404.
-                      <span className="take-error">failed: {take.error}</span>
-                    ) : (
-                      <>
-                        <audio controls src={api.takeAudioUrl(detail.project.id, take.id)} />
-                        <a
-                          href={api.takeAudioUrl(detail.project.id, take.id)}
-                          download={`${take.id}.wav`}
-                        >
-                          download
-                        </a>
-                      </>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            </section>
-          </>
-        )}
-      </main>
+              <div className="panes">
+                <section className="pane plan">
+                  <h3>Plan</h3>
+                  <label>
+                    Simple query
+                    <input
+                      value={detail.plan.query}
+                      onChange={(e) => savePlanField("query", e.target.value)}
+                    />
+                  </label>
+                  <label>
+                    Caption
+                    <input
+                      value={detail.plan.caption}
+                      onChange={(e) => savePlanField("caption", e.target.value)}
+                    />
+                  </label>
+                  <label>
+                    Lyrics
+                    <textarea
+                      value={detail.plan.lyrics}
+                      onChange={(e) => savePlanField("lyrics", e.target.value)}
+                    />
+                  </label>
+                  <label className="checkbox">
+                    <input
+                      type="checkbox"
+                      checked={detail.plan.instrumental}
+                      onChange={(e) => savePlanField("instrumental", e.target.checked)}
+                    />
+                    Instrumental
+                  </label>
+                  <div className="plan-grid">
+                    <label>
+                      BPM
+                      <input
+                        type="number"
+                        value={detail.plan.bpm ?? ""}
+                        onChange={(e) =>
+                          savePlanField("bpm", e.target.value === "" ? null : Number(e.target.value))
+                        }
+                      />
+                    </label>
+                    <label>
+                      Key
+                      <input
+                        value={detail.plan.keyscale ?? ""}
+                        onChange={(e) =>
+                          savePlanField("keyscale", e.target.value === "" ? null : e.target.value)
+                        }
+                      />
+                    </label>
+                    <label>
+                      Time signature
+                      <input
+                        value={detail.plan.timesignature}
+                        onChange={(e) => savePlanField("timesignature", e.target.value)}
+                      />
+                    </label>
+                    <label>
+                      Duration (sec)
+                      <input
+                        type="number"
+                        value={detail.plan.duration_sec}
+                        onChange={(e) => savePlanField("duration_sec", Number(e.target.value))}
+                      />
+                    </label>
+                    <label>
+                      Language
+                      <input
+                        value={detail.plan.vocal_language}
+                        onChange={(e) => savePlanField("vocal_language", e.target.value)}
+                      />
+                    </label>
+                  </div>
+                </section>
+
+                <section className="pane takes">
+                  <h3>Takes</h3>
+                  {detail.takes.length === 0 && <p className="hint">No takes yet.</p>}
+                  <ul>
+                    {detail.takes.map((take) => (
+                      <li key={take.id}>
+                        <div className="take-meta">
+                          <span>{take.task_type}</span>
+                          <span>seed {take.seed}</span>
+                          <span>
+                            {take.duration_sec != null ? `${take.duration_sec.toFixed(1)}s` : "—"}
+                          </span>
+                          <span>score {take.score ?? "—"}</span>
+                        </div>
+                        {take.error ? (
+                          // A take whose generation failed has no audio file
+                          // (SPEC.md sec 10 point 5) -- show the error instead
+                          // of an <audio> that would just 404.
+                          <span className="take-error">failed: {take.error}</span>
+                        ) : (
+                          <>
+                            <audio controls src={api.takeAudioUrl(detail.project.id, take.id)} />
+                            <a
+                              href={api.takeAudioUrl(detail.project.id, take.id)}
+                              download={`${take.id}.wav`}
+                            >
+                              download
+                            </a>
+                          </>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+
+                <section className="pane waveform">
+                  <h3>Waveform</h3>
+                  <div className="waveform-canvas">
+                    <p className="hint">no active take</p>
+                  </div>
+                  <div className="waveform-actions">
+                    <button onClick={generate} disabled={busy}>
+                      {busy ? `Generating… (${busyStatus ?? "queued"})` : "Generate"}
+                    </button>
+                    <button disabled title="Phase 2">
+                      Cover
+                    </button>
+                    <button disabled title="Phase 3 (requires studio_ops)">
+                      Extract
+                    </button>
+                    <button disabled title="Phase 3 (requires studio_ops)">
+                      Lego
+                    </button>
+                    <button disabled title="Phase 3 (requires studio_ops)">
+                      Complete
+                    </button>
+                  </div>
+                </section>
+              </div>
+            </>
+          )}
+        </main>
+      </div>
     </div>
   );
 }

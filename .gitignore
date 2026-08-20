@@ -13,6 +13,8 @@ web/node_modules/
 web/dist/
 web/.vite/
 web/*.tsbuildinfo
+web/.dev-vendor/
+web/.dev-vendor-src/
 
 # Runtime audio and weights (never commit)
 projects/
