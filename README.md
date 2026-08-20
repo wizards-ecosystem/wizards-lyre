@@ -115,6 +115,31 @@ python scripts/smoke-gpu.py
 Loads ACE-Step turbo, generates ~10s of instrumental `text2music`, prints the output path, exits
 0. Not part of `pytest`; requires a real GPU and installed weights.
 
+## Run
+
+Backend (FastAPI):
+
+```powershell
+py -3.11 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -e ".[dev]"
+python -m server.app
+```
+
+Binds `127.0.0.1:8421` by default. Override with the `BARD_PORT` env var (SPEC §5).
+
+Worker: the real GPU worker needs ACE-Step 1.5 installed separately (`uv run acestep-download` or equivalent, SPEC §3) and is not started by `pytest`. `scripts/smoke-gpu.py` is a manual GPU smoke test, run by hand, not part of the test suite.
+
+Web (Vite + React):
+
+```powershell
+cd web
+npm install
+npm run dev
+```
+
+The dev server proxies `/api` to the FastAPI backend at `127.0.0.1:8421`.
+
 ## Conclave / jail
 
 The canonical clone lives at `wizards-conclave/.projects/wizards-bard`. That `.projects/` folder
