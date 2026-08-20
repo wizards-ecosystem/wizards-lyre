@@ -87,20 +87,34 @@ def plan_json_path(project_id: str) -> Path:
 
 
 def _write_json(path: Path, data: dict) -> None:
+    """Write atomically: serialize to a temp file in the same directory,
+    then `os.replace` over the destination. A plain `write_text` can be
+    observed mid-write by a concurrent reader (the worker loading a plan
+    the HTTP server is saving, or vice versa) -- `os.replace` is a single
+    filesystem-level rename, so readers only ever see the old or the new
+    content, never a partial file (SPEC.md sec 5/10)."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    tmp_path = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
+    tmp_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    os.replace(tmp_path, path)
 
 
 def _read_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-# project.json is read-modify-written by both the HTTP server (save_plan,
-# patch_project) and the worker process (set_active_take, after a
-# generation completes) -- see SPEC.md sec 5/10. Without serialization, one
-# process can read a stale copy and overwrite the other's concurrent change
-# (e.g. a plan save racing generation completion can clobber the newly
-# assigned active_take_id, or vice versa). This is a plain lock-file mutex
+# project.json and plan.json are both read-modify-written by the HTTP
+# server (save_plan, patch_project) and by the worker process (merging a
+# simple-mode plan_patch, and set_active_take, after a generation
+# completes) -- see SPEC.md sec 5/10. Without serialization, one process
+# can read a stale copy and overwrite the other's concurrent change (e.g. a
+# plan PUT landing between the worker's read and write of a plan_patch
+# merge silently disappears; a plan save racing generation completion can
+# clobber the newly assigned active_take_id). One lock per project_id
+# guards *all* metadata mutations for that project, project.json and
+# plan.json alike -- they're small, infrequent writes, so sharing a single
+# lock is simpler than two independent ones and still lets different
+# projects proceed fully in parallel. This is a plain lock-file mutex
 # (atomic exclusive create, `os.O_CREAT | os.O_EXCL`) rather than an
 # in-process lock, since it must work *across* the server/worker process
 # boundary, not just across threads within one of them.
@@ -164,6 +178,31 @@ def _update_project(project_id: str, mutate: Callable[[dict], None]) -> dict:
         project["updated_at"] = _now()
         _write_json(project_json_path(project_id), project)
         return project
+
+
+def _read_plan_or_default(project_id: str) -> dict:
+    path = plan_json_path(project_id)
+    if not path.exists():
+        return default_plan()
+    return _read_json(path)
+
+
+def _update_plan(project_id: str, mutate: Callable[[dict], dict]) -> dict:
+    """Atomically read-modify-write plan.json: load the project (raises if
+    missing), load the *current* plan.json, apply `mutate` to get the new
+    plan, write it back, and bump project.json's `updated_at` -- all in one
+    locked critical section. `save_plan` (a PUT /plan) and
+    `merge_plan_patch` (the worker merging a simple-mode plan_patch after a
+    job finishes) both go through here, so the two can never interleave and
+    silently drop one side's change (SPEC.md sec 5/7.2)."""
+    with _project_lock(project_id):
+        project = load_project(project_id)
+        current_plan = _read_plan_or_default(project_id)
+        new_plan = mutate(current_plan)
+        _write_json(plan_json_path(project_id), new_plan)
+        project["updated_at"] = _now()
+        _write_json(project_json_path(project_id), project)
+        return new_plan
 
 
 def default_plan() -> dict:
@@ -244,21 +283,22 @@ def load_project(project_id: str) -> dict:
 
 def load_plan(project_id: str) -> dict:
     load_project(project_id)
-    path = plan_json_path(project_id)
-    if not path.exists():
-        return default_plan()
-    return _read_json(path)
+    return _read_plan_or_default(project_id)
 
 
 def save_plan(project_id: str, plan: dict) -> dict:
-    # Writing plan.json doesn't need the project.json lock, but bumping
-    # updated_at does -- do it via _update_project (a no-op mutation) so
-    # this can never race set_active_take/patch_project's read-modify-write
-    # of project.json (SPEC.md sec 5/10).
-    load_project(project_id)
-    _write_json(plan_json_path(project_id), plan)
-    _update_project(project_id, lambda project: None)
-    return plan
+    """Replace plan.json outright (PUT /api/projects/{id}/plan). Locked and
+    atomic -- see the module-level note above `_project_lock`."""
+    return _update_plan(project_id, lambda _current: plan)
+
+
+def merge_plan_patch(project_id: str, patch: dict) -> dict:
+    """Merge `patch` onto whatever plan is current on disk, atomically: the
+    read of "current" and the write both happen inside the same lock, so a
+    plan PUT landing between the read and the write can never be silently
+    clobbered (SPEC.md sec 7.2). Used by `server.jobs` to apply a
+    simple-mode `plan_patch` after a job finishes."""
+    return _update_plan(project_id, lambda current: {**current, **patch})
 
 
 def touch_project(project_id: str) -> dict:

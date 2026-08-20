@@ -17,7 +17,7 @@ instead of leaving the job `running` forever.
 
 Before polling, it runs the backend's startup readiness check (SPEC.md sec
 10 point 1: detect CUDA, log VRAM, preload the default `iterate` DiT + LM)
-via `<backend>.initialize_worker()`, then publishes:
+via `<backend>.initialize_worker()`. It then publishes:
 
 - overall readiness + which DiT (if any) is loaded, via
   `server.jobs.publish_worker_status` -- this is what `/api/health` reports
@@ -26,9 +26,13 @@ via `<backend>.initialize_worker()`, then publishes:
   `quality` (XL) CPU-offload support (SPEC.md sec 4.1/8.1) is reported
   honestly
 
-based on that *actual* startup result, not an optimistic guess, so a
-startup failure (missing ACE-Step/CUDA/weights) is visible immediately
-instead of only surfacing on the first job or a static health response.
+That publish is *not* a one-time startup snapshot: after every claimed job
+(success or failure), it republishes from the backend's current live state
+(`get_loaded_dit_profile` / `supports_dit_profile`), not the frozen startup
+result. Otherwise a job that switches the loaded DiT profile would leave
+`/api/health` reporting the startup profile forever, and a worker that
+initially failed to load but later recovers (a job succeeds anyway) would
+stay reported unavailable with its capabilities still rejecting new jobs.
 This worker process is the only one allowed to import acestep to find any
 of this out; the FastAPI server just reads what got published (SPEC.md sec
 10 point 4).
@@ -51,24 +55,38 @@ def _startup_readiness() -> tuple[bool, str]:
     return init_fn()
 
 
-def _publish_status(startup_ready: bool, startup_message: str) -> None:
+def _current_readiness(startup_ready: bool, startup_message: str) -> tuple[bool, str]:
+    """Recompute readiness from what's actually loaded right now, via cheap
+    read-only getters -- never re-runs the (possibly expensive, model
+    -swapping) startup load. Falls back to the last known startup result
+    only when nothing has ever loaded successfully, so a genuine startup
+    failure still reads as one instead of a generic "nothing loaded"."""
     module = jobs.resolve_worker_module()
     get_loaded = getattr(module, "get_loaded_dit_profile", None)
     loaded_dit_profile = get_loaded() if get_loaded is not None else None
-    jobs.publish_worker_status(startup_ready, startup_message, loaded_dit_profile)
+    if loaded_dit_profile is not None:
+        return True, f"worker: '{loaded_dit_profile}' DiT + LM currently loaded"
+    return startup_ready, startup_message
 
 
-def _publish_capabilities(startup_ready: bool, startup_message: str) -> None:
+def _publish_status(ready: bool, message: str) -> None:
+    module = jobs.resolve_worker_module()
+    get_loaded = getattr(module, "get_loaded_dit_profile", None)
+    loaded_dit_profile = get_loaded() if get_loaded is not None else None
+    jobs.publish_worker_status(ready, message, loaded_dit_profile)
+
+
+def _publish_capabilities(ready: bool, message: str) -> None:
     module = jobs.resolve_worker_module()
     check = getattr(module, "supports_dit_profile", None)
     for dit_profile in storage.VALID_DIT_PROFILES:
-        if not startup_ready:
-            # Startup couldn't even load the default profile -- ACE-Step,
-            # CUDA, or weights are unavailable, so nothing else will load
-            # either. Publish that honestly instead of letting a per-profile
-            # check (which may not import acestep at all, e.g. non-quality
-            # profiles) report "supported" only to fail on the first job.
-            jobs.publish_worker_capability(dit_profile, False, startup_message)
+        if not ready:
+            # Nothing has loaded (startup failed and nothing since has
+            # recovered) -- publish that honestly instead of letting a
+            # per-profile check (which may not import acestep at all, e.g.
+            # non-quality profiles) report "supported" only to fail on the
+            # first job.
+            jobs.publish_worker_capability(dit_profile, False, message)
         elif check is not None:
             supported, reason = check(dit_profile)
             jobs.publish_worker_capability(dit_profile, supported, reason)
@@ -76,17 +94,28 @@ def _publish_capabilities(startup_ready: bool, startup_message: str) -> None:
             jobs.publish_worker_capability(dit_profile, True, None)
 
 
+def _refresh_published_state(startup_ready: bool, startup_message: str) -> None:
+    ready, message = _current_readiness(startup_ready, startup_message)
+    _publish_status(ready, message)
+    _publish_capabilities(ready, message)
+
+
 def run_loop(stop_event: threading.Event, poll_interval: float = DEFAULT_POLL_INTERVAL_SEC) -> None:
     """Claim and run queued jobs one at a time until `stop_event` is set."""
     jobs.init_db()
     jobs.reclaim_stale_jobs()  # recover anything a previous, now-dead worker left running
     startup_ready, startup_message = _startup_readiness()
-    _publish_status(startup_ready, startup_message)
-    _publish_capabilities(startup_ready, startup_message)
+    _refresh_published_state(startup_ready, startup_message)
     while not stop_event.is_set():
         jobs.reclaim_stale_jobs()
         did_work = jobs.process_one_queued_job()
-        if not did_work:
+        if did_work:
+            # A job just ran (successfully or not) -- republish from live
+            # state so a DiT profile switch or a recovery from an earlier
+            # startup failure is visible immediately, not just at process
+            # startup.
+            _refresh_published_state(startup_ready, startup_message)
+        else:
             stop_event.wait(poll_interval)
 
 

@@ -430,14 +430,14 @@ def run_claimed_job(job: dict[str, Any]) -> None:
         storage.set_active_take(project_id, take_id)
         if plan_patch is not None:
             # `plan` above was loaded before this (possibly long-running)
-            # generation started. Re-read the plan now and merge only the
-            # LM-filled fields onto whatever is current on disk, so edits
-            # saved while the job was running (sections, negative prompts,
-            # instrumental, etc.) aren't silently overwritten (SPEC.md sec
-            # 7.2). `plan_patch` is a delta, not a full plan replacement --
-            # see worker.mock_worker / worker.acestep_worker.
-            current_plan = storage.load_plan(project_id)
-            storage.save_plan(project_id, {**current_plan, **plan_patch})
+            # generation started. merge_plan_patch re-reads the plan and
+            # merges only the LM-filled fields onto whatever is current on
+            # disk -- atomically, under storage's per-project lock, so a
+            # PUT /plan landing between the read and the write can't be
+            # silently overwritten (SPEC.md sec 5/7.2). `plan_patch` is a
+            # delta, not a full plan replacement -- see worker.mock_worker
+            # / worker.acestep_worker.
+            storage.merge_plan_patch(project_id, plan_patch)
         _set_status(job_id, "done", take_id=take_id)
     except Exception as exc:  # noqa: BLE001 - persist worker failure onto the job row
         if take_id is not None:

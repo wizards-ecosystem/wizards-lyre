@@ -29,6 +29,20 @@ FORBIDDEN_IMPORTS = (
 )
 
 
+@pytest.fixture(autouse=True)
+def _reset_mock_worker_state():
+    """worker.mock_worker tracks a simulated "loaded" flag at module scope
+    (mirroring worker.acestep_worker's real _STATE) so tests can exercise
+    worker/run_worker.py's republish-after-recovery behavior; reset it
+    between tests or an earlier test's job run would leak into a later
+    test expecting a fresh "nothing loaded yet" state."""
+    import worker.mock_worker as mock_worker_module
+
+    mock_worker_module._simulated_loaded_dit_profile = None
+    yield
+    mock_worker_module._simulated_loaded_dit_profile = None
+
+
 @pytest.fixture()
 def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("BARD_PROJECTS_DIR", str(tmp_path / "projects"))
@@ -125,6 +139,101 @@ def test_health_reports_unavailable_when_worker_startup_fails(
         assert body["dit_loaded"] is None
         assert "unavailable" in body["gpu"].lower()
         assert "boom" in body["gpu"]
+
+
+def test_worker_republishes_status_after_recovering_from_startup_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SPEC.md sec 8: a worker that initially reports unavailable (e.g. a
+    transient CUDA error at startup) but goes on to successfully process a
+    queued job must have its published readiness/loaded-profile/
+    capabilities updated to reflect that recovery -- not stay stuck
+    reporting unavailable (and rejecting new jobs) forever."""
+    monkeypatch.setenv("BARD_PROJECTS_DIR", str(tmp_path / "projects"))
+    monkeypatch.setenv("BARD_DB_PATH", str(tmp_path / "bard.db"))
+    monkeypatch.setenv("BARD_WORKER", "mock")
+
+    import worker.mock_worker as mock_worker_module
+
+    monkeypatch.setattr(
+        mock_worker_module, "initialize_worker", lambda: (False, "boom: no GPU yet")
+    )
+
+    # The mock is fast enough that, left unblocked, the worker thread can
+    # publish the startup failure *and* finish the job before this test's
+    # poll loop ever observes the transient "unavailable" state. Block the
+    # job until the test has confirmed it, so the ordering is deterministic
+    # instead of a timing race.
+    proceed_with_job = threading.Event()
+    real_run_job = mock_worker_module.run_job
+
+    def blocking_run_job(job, plan, take_id, take_dir):
+        proceed_with_job.wait(timeout=5)
+        return real_run_job(job, plan, take_id, take_dir)
+
+    monkeypatch.setattr(mock_worker_module, "run_job", blocking_run_job)
+
+    from server import jobs as jobs_module
+
+    jobs_module.init_db()
+    project = storage.create_project(title="Recovery")
+    project_id = project["id"]
+
+    # Enqueue *before* the worker publishes anything: enqueue_job rejects a
+    # request outright once "unavailable" capability is published (SPEC.md
+    # sec 8.1), so the realistic "recovers after processing a queued job"
+    # case is a job that was already queued when the worker's claim/run
+    # loop -- which never re-checks capability -- picks it up.
+    job = jobs_module.enqueue_job(project_id, {"action": "generate"})
+    assert job["status"] == "queued"
+
+    stop_event = threading.Event()
+    worker_thread = threading.Thread(target=run_loop, args=(stop_event, 0.01), daemon=True)
+    worker_thread.start()
+    try:
+        # The simulated startup failure must be published first (the job
+        # is still blocked in run_job, so this can't have raced ahead).
+        deadline = time.time() + 5.0
+        status = None
+        while time.time() < deadline:
+            status = jobs_module.get_worker_status()
+            if status is not None and status["ready"] is False:
+                break
+            time.sleep(0.01)
+        assert status is not None and status["ready"] is False
+        assert "boom" in status["message"]
+
+        # Now let the already-queued job run (claiming never re-checks
+        # published capability) -- it succeeds, and the worker recovers.
+        proceed_with_job.set()
+        deadline = time.time() + 5.0
+        current_job = None
+        while time.time() < deadline:
+            current_job = jobs_module.get_job(job["id"])
+            if current_job["status"] in ("done", "error"):
+                break
+            time.sleep(0.01)
+        assert current_job is not None and current_job["status"] == "done", (
+            current_job and current_job.get("error")
+        )
+
+        # Readiness/capabilities must be republished to reflect the
+        # recovery, not stay stuck on the startup failure.
+        deadline = time.time() + 5.0
+        status_after = None
+        while time.time() < deadline:
+            status_after = jobs_module.get_worker_status()
+            if status_after is not None and status_after["ready"] is True:
+                break
+            time.sleep(0.01)
+    finally:
+        stop_event.set()
+        worker_thread.join(timeout=5)
+
+    assert status_after is not None
+    assert status_after["ready"] is True
+    assert status_after["loaded_dit_profile"] == "iterate"
+    assert jobs_module.get_worker_capability("iterate") == (True, None)
 
 
 def test_project_create_and_plan_roundtrip(client: TestClient) -> None:
@@ -371,6 +480,75 @@ def test_project_json_updates_are_serialized_across_threads(
     final = storage.load_project(project_id)
     assert final["title"] == "renamed while racing"
     assert final["active_take_id"] == take_id
+
+
+def test_plan_json_updates_are_serialized_across_threads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SPEC.md sec 5/10: save_plan (a PUT /plan from the HTTP server) and
+    merge_plan_patch (the worker's read-merge-write of a simple-mode
+    plan_patch after a job finishes) both mutate plan.json. Without
+    serialization, the worker can read a plan.json snapshot from before a
+    concurrent PUT lands and then overwrite that PUT when it writes its
+    merged result back. This forces a genuine interleaving window (one
+    writer is paused mid-critical-section while the other attempts its own
+    update) and asserts neither update is lost."""
+    monkeypatch.setenv("BARD_PROJECTS_DIR", str(tmp_path / "projects"))
+
+    project = storage.create_project(title="PlanRace")
+    project_id = project["id"]
+    storage.save_plan(project_id, {**storage.default_plan(), "caption": "original"})
+
+    real_write_json = storage._write_json
+    plan_path = storage.plan_json_path(project_id)
+    thread_a_writing = threading.Event()
+    thread_b_attempted = threading.Event()
+
+    def slow_write_json(path, data):
+        if path == plan_path and not thread_a_writing.is_set():
+            thread_a_writing.set()
+            # Give thread B (the worker's patch merge) a real chance to
+            # race: it must block on the plan lock here, reading plan.json
+            # only after thread A's write below actually lands.
+            thread_b_attempted.wait(timeout=2)
+            time.sleep(0.1)
+        real_write_json(path, data)
+
+    monkeypatch.setattr(storage, "_write_json", slow_write_json)
+
+    errors: list[Exception] = []
+
+    def run_save():
+        try:
+            storage.save_plan(project_id, {**storage.default_plan(), "caption": "user edit"})
+        except Exception as exc:  # noqa: BLE001 - surfaced via `errors` below
+            errors.append(exc)
+
+    def run_merge():
+        thread_a_writing.wait(timeout=2)
+        thread_b_attempted.set()
+        try:
+            storage.merge_plan_patch(project_id, {"bpm": 120, "keyscale": "C Major"})
+        except Exception as exc:  # noqa: BLE001 - surfaced via `errors` below
+            errors.append(exc)
+
+    t_save = threading.Thread(target=run_save)
+    t_merge = threading.Thread(target=run_merge)
+    t_save.start()
+    t_merge.start()
+    t_save.join(timeout=5)
+    t_merge.join(timeout=5)
+
+    assert not errors, errors
+    assert not t_save.is_alive()
+    assert not t_merge.is_alive()
+
+    final_plan = storage.load_plan(project_id)
+    # the user's PUT survived ...
+    assert final_plan["caption"] == "user edit"
+    # ... and so did the worker's merged patch, on top of it
+    assert final_plan["bpm"] == 120
+    assert final_plan["keyscale"] == "C Major"
 
 
 def test_worker_failure_writes_error_take_meta(

@@ -57,23 +57,32 @@ def supports_dit_profile(dit_profile: str) -> tuple[bool, str | None]:
     return True, None
 
 
+DEFAULT_SIMULATED_DIT_PROFILE = "iterate"
+
+# Tracks a simple simulated "loaded" flag, mirroring worker.acestep_worker's
+# real _STATE closely enough that tests can exercise worker/run_worker.py's
+# republish-after-recovery behavior (SPEC.md sec 8) against this mock too:
+# None until initialize_worker() or run_job() has "loaded" something --
+# never a hardcoded constant, or a test simulating a startup failure (by
+# monkeypatching initialize_worker) would still see this report ready.
+_simulated_loaded_dit_profile: str | None = None
+
+
 def initialize_worker() -> tuple[bool, str]:
     """Worker-startup readiness (SPEC.md sec 10 point 1). The mock has no
-    CUDA/model to detect or load, so it is always immediately ready --
+    real CUDA/model to detect or load, so it is always immediately ready --
     real startup detection/preload is exercised against
     `worker.acestep_worker.initialize_worker`."""
+    global _simulated_loaded_dit_profile
+    _simulated_loaded_dit_profile = DEFAULT_SIMULATED_DIT_PROFILE
     return True, "mock worker: no GPU/model to load, always ready"
 
 
-DEFAULT_SIMULATED_DIT_PROFILE = "iterate"
-
-
 def get_loaded_dit_profile() -> str | None:
-    """The mock never actually loads a model; report the default profile as
-    "loaded" since `initialize_worker` always simulates success for it, so
-    `/api/health` has something meaningful to show in mock-backed local
-    dev/tests (SPEC.md sec 8 `dit_loaded`)."""
-    return DEFAULT_SIMULATED_DIT_PROFILE
+    """Which profile this mock has simulated "loading", or None if neither
+    `initialize_worker` nor `run_job` has run yet (SPEC.md sec 8
+    `dit_loaded`)."""
+    return _simulated_loaded_dit_profile
 
 
 def _is_simple_mode(plan: dict[str, Any]) -> bool:
@@ -111,6 +120,12 @@ def run_job(
     `take_dir` must already be inside the projects/ path jail; this function
     only ever writes files inside it.
     """
+    global _simulated_loaded_dit_profile
+    # A successful job run implies this profile is now "loaded", same as
+    # worker.acestep_worker's _ensure_loaded -- this is what makes a worker
+    # that reported unavailable at startup show as recovered afterward.
+    _simulated_loaded_dit_profile = job.get("dit_profile", DEFAULT_SIMULATED_DIT_PROFILE)
+
     take_dir.mkdir(parents=True, exist_ok=True)
 
     plan_patch: dict[str, Any] | None = None
