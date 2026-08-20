@@ -44,6 +44,8 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [busyStatus, setBusyStatus] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [selectedTakeId, setSelectedTakeId] = useState<string | null>(null);
+  const [coverStrength, setCoverStrength] = useState(0.7);
   const [health, setHealth] = useState<Health | null>(null);
   const [healthError, setHealthError] = useState<string | null>(null);
 
@@ -194,6 +196,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    setSelectedTakeId(null);
     if (activeId) {
       refreshDetail(activeId).catch((err) => setErrorMsg(String(err)));
     } else {
@@ -245,6 +248,26 @@ export default function App() {
       const job = await pollJob(queued.id, (update) => setBusyStatus(update.status));
       if (job.status === "error") {
         setErrorMsg(job.error ?? "generate job failed");
+      }
+      await refreshDetail(activeId);
+    } catch (err) {
+      setErrorMsg(String(err));
+    } finally {
+      setBusy(false);
+      setBusyStatus(null);
+    }
+  }
+
+  async function cover() {
+    if (!activeId || !selectedTakeId) return;
+    setBusy(true);
+    setBusyStatus("queued");
+    setErrorMsg(null);
+    try {
+      const queued = await api.cover(activeId, selectedTakeId, coverStrength);
+      const job = await pollJob(queued.id, (update) => setBusyStatus(update.status));
+      if (job.status === "error") {
+        setErrorMsg(job.error ?? "cover job failed");
       }
       await refreshDetail(activeId);
     } catch (err) {
@@ -387,7 +410,11 @@ export default function App() {
                   {detail.takes.length === 0 && <p className="hint">No takes yet.</p>}
                   <ul>
                     {detail.takes.map((take) => (
-                      <li key={take.id}>
+                      <li
+                        key={take.id}
+                        className={take.id === selectedTakeId ? "selected" : ""}
+                        onClick={() => setSelectedTakeId(take.id)}
+                      >
                         <div className="take-meta">
                           <span>{take.task_type}</span>
                           <span>seed {take.seed}</span>
@@ -426,8 +453,27 @@ export default function App() {
                     <button onClick={generate} disabled={busy}>
                       {busy ? `Generating… (${busyStatus ?? "queued"})` : "Generate"}
                     </button>
-                    <button disabled title="Phase 2">
-                      Cover
+                    <label className="cover-strength">
+                      Strength
+                      <input
+                        type="number"
+                        min={0}
+                        max={1}
+                        step={0.05}
+                        value={coverStrength}
+                        onChange={(e) => setCoverStrength(Number(e.target.value))}
+                      />
+                    </label>
+                    <button
+                      onClick={cover}
+                      disabled={
+                        busy ||
+                        !selectedTakeId ||
+                        !!detail.takes.find((t) => t.id === selectedTakeId)?.error
+                      }
+                      title={selectedTakeId ? undefined : "Select a take first"}
+                    >
+                      {busy ? `Covering… (${busyStatus ?? "queued"})` : "Cover"}
                     </button>
                     <button disabled title="Phase 3 (requires studio_ops)">
                       Extract

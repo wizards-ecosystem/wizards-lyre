@@ -109,6 +109,16 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ action: "generate", seed: -1 }),
     }),
+  cover: (id: string, sourceTakeId: string, strength: number) =>
+    request<Job>(`/api/projects/${id}/jobs`, {
+      method: "POST",
+      body: JSON.stringify({
+        action: "cover",
+        source_take_id: sourceTakeId,
+        audio_cover_strength: strength,
+        seed: -1,
+      }),
+    }),
   getJob: (jobId: string) => request<Job>(`/api/jobs/${jobId}`),
   takeAudioUrl: (projectId: string, takeId: string) =>
     `/api/projects/${projectId}/takes/${takeId}/audio`,

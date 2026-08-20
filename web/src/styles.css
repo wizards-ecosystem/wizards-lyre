@@ -201,7 +201,20 @@ body {
 .waveform-actions {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
+}
+
+.cover-strength {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.cover-strength input {
+  width: 64px;
 }
 
 input,
@@ -250,6 +263,12 @@ button:disabled {
   display: flex;
   align-items: center;
   gap: 10px;
+  cursor: pointer;
+}
+
+.takes li.selected {
+  border-color: var(--accent);
+  background: #23253a;
 }
 
 .take-meta {
