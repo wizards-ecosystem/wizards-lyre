@@ -63,7 +63,6 @@ import uuid
 from server import jobs, storage
 
 DEFAULT_POLL_INTERVAL_SEC = 0.5
-WORKER_HEARTBEAT_INTERVAL_SEC = 5.0
 
 
 def _startup_readiness() -> tuple[bool, str]:
@@ -130,7 +129,6 @@ def _refresh_published_state(startup_ready: bool, startup_message: str) -> None:
     _publish_capabilities(ready, message)
 
 
-<<<<<<< HEAD
 def _acquire_lease_or_wait(owner_id: str, stop_event: threading.Event) -> bool:
     """Block until we hold the single cross-process worker lease (SPEC.md
     sec 4.3: one GPU occupant), waiting out any live rival worker instead of
@@ -151,16 +149,23 @@ def _acquire_lease_or_wait(owner_id: str, stop_event: threading.Event) -> bool:
 
 
 def _lease_heartbeat_loop(owner_id: str, stop_event: threading.Event) -> None:
-    """Keep the lease alive while this process runs. If renewal ever fails
-    (our heartbeat went stale and another process claimed the lease first --
-    e.g. this process hung longer than WORKER_LEASE_STALE_AFTER_SEC), signal
-    `stop_event` so the main loop stops claiming/running jobs immediately
-    instead of risking two workers on the GPU at once."""
+    """Keep the lease alive while this process runs, and keep
+    `worker_status.updated_at` fresh alongside it (`server.jobs.
+    touch_worker_heartbeat`) -- the main loop below blocks inside
+    `process_one_queued_job()` for as long as a job takes to run and can't
+    republish itself, so without this a long GPU generation would make
+    `server.jobs.get_worker_status()` mistake a busy-but-alive worker for a
+    crashed one. If lease renewal ever fails (our heartbeat went stale and
+    another process claimed the lease first -- e.g. this process hung longer
+    than WORKER_LEASE_STALE_AFTER_SEC), signal `stop_event` so the main loop
+    stops claiming/running jobs immediately instead of risking two workers
+    on the GPU at once."""
     while not stop_event.wait(jobs.WORKER_LEASE_HEARTBEAT_INTERVAL_SEC):
         if not jobs.renew_worker_lease(owner_id):
             print("Wizard's Bard worker: lost the GPU lease to another worker; stopping.")
             stop_event.set()
             return
+        jobs.touch_worker_heartbeat()
 
 
 def run_loop(stop_event: threading.Event, poll_interval: float = DEFAULT_POLL_INTERVAL_SEC) -> None:
@@ -183,30 +188,6 @@ def run_loop(stop_event: threading.Event, poll_interval: float = DEFAULT_POLL_IN
         startup_ready, startup_message = _startup_readiness()
         _refresh_published_state(startup_ready, startup_message)
         last_status_refresh = time.monotonic()
-=======
-def _heartbeat_loop(stop_event: threading.Event, interval: float) -> None:
-    """Keep `worker_status.updated_at` fresh on a fixed cadence, independent
-    of the main loop below -- which can be blocked inside
-    `process_one_queued_job()` for as long as a job takes to run. Without
-    this, `server.jobs.get_worker_status()` would see a stale timestamp and
-    report a busy-but-alive worker as unavailable."""
-    while not stop_event.wait(interval):
-        jobs.touch_worker_heartbeat()
-
-
-def run_loop(stop_event: threading.Event, poll_interval: float = DEFAULT_POLL_INTERVAL_SEC) -> None:
-    """Claim and run queued jobs one at a time until `stop_event` is set."""
-    jobs.init_db()
-    jobs.reclaim_stale_jobs()  # recover anything a previous, now-dead worker left running
-    startup_ready, startup_message = _startup_readiness()
-    _refresh_published_state(startup_ready, startup_message)
-
-    heartbeat_thread = threading.Thread(
-        target=_heartbeat_loop, args=(stop_event, WORKER_HEARTBEAT_INTERVAL_SEC), daemon=True
-    )
-    heartbeat_thread.start()
-    try:
->>>>>>> b257fe9 ([conclave] fix round 1: Phase 1 README and runtime ignore rules)
         while not stop_event.is_set():
             jobs.reclaim_stale_jobs()
             did_work = jobs.process_one_queued_job()
@@ -216,7 +197,6 @@ def run_loop(stop_event: threading.Event, poll_interval: float = DEFAULT_POLL_IN
                 # startup failure is visible immediately, not just at process
                 # startup.
                 _refresh_published_state(startup_ready, startup_message)
-<<<<<<< HEAD
                 last_status_refresh = time.monotonic()
             else:
                 if time.monotonic() - last_status_refresh >= jobs.WORKER_STATUS_HEARTBEAT_INTERVAL_SEC:
@@ -227,24 +207,17 @@ def run_loop(stop_event: threading.Event, poll_interval: float = DEFAULT_POLL_IN
                     last_status_refresh = time.monotonic()
                 stop_event.wait(poll_interval)
     finally:
-        stop_event.set()
-        lease_thread.join(timeout=jobs.WORKER_LEASE_HEARTBEAT_INTERVAL_SEC)
-        jobs.release_worker_lease(owner_id)
-=======
-            else:
-                stop_event.wait(poll_interval)
-    finally:
         # Graceful shutdown: invalidate readiness immediately instead of
         # leaving the last-published "ready" state for get_worker_status's
         # staleness check to eventually catch (SPEC.md sec 10 point 4: the
         # server only ever reads what this process published). Set
-        # stop_event here too (idempotent) so the heartbeat thread's own
-        # wait wakes immediately even on a KeyboardInterrupt path, where
+        # stop_event here too (idempotent) so the lease heartbeat thread's
+        # own wait wakes immediately even on a KeyboardInterrupt path, where
         # main() only sets it after run_loop has already unwound.
         stop_event.set()
+        lease_thread.join(timeout=jobs.WORKER_LEASE_HEARTBEAT_INTERVAL_SEC)
         jobs.publish_worker_status(False, "worker stopped", None)
-        heartbeat_thread.join(timeout=WORKER_HEARTBEAT_INTERVAL_SEC)
->>>>>>> b257fe9 ([conclave] fix round 1: Phase 1 README and runtime ignore rules)
+        jobs.release_worker_lease(owner_id)
 
 
 def main() -> None:
