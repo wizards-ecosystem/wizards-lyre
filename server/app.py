@@ -13,7 +13,7 @@ from typing import Any, AsyncIterator, Optional
 from fastapi import FastAPI
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from server import config, jobs, storage
 
@@ -45,7 +45,11 @@ class JobBody(BaseModel):
     repainting_start: float = 0
     repainting_end: float = -1
     track_name: Optional[str] = None
-    audio_cover_strength: float = 0.7
+    # SPEC.md sec 8.1: audio_cover_strength is a 0-1 mix ratio ACE-Step
+    # expects; ge/le also reject NaN/+-inf (any comparison with NaN is
+    # False, so it fails both bounds) instead of forwarding them to the
+    # worker and causing an avoidable failure deep inside generation.
+    audio_cover_strength: float = Field(0.7, ge=0.0, le=1.0)
     seed: int = -1
     batch_size: int = 1
 

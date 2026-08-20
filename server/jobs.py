@@ -31,17 +31,17 @@ from typing import Any, Callable
 from server import config, storage
 from worker import mock_worker
 
-# SPEC.md sec 12 (phase order): phase 1 is generate only. cover/repaint
-# (phase 2) and extract/lego/complete (phase 3) each need frontend workflow
-# phase 1 doesn't have -- source selection, repaint regions, and a
+# SPEC.md sec 12 (phase order): phase 1 is generate; phase 2 adds cover.
+# repaint (rest of phase 2) and extract/lego/complete (phase 3) each need
+# frontend workflow this build doesn't have yet -- repaint regions and a
 # base-model-swap confirmation/loading UX -- so the API must not accept them
 # yet even though worker/acestep_worker.py's adapter already implements
 # their call contract (exercised directly by
 # tests/test_acestep_worker_adapter.py, independent of this gate). Moving an
 # action from PHASE_GATED_ACTIONS to VALID_ACTIONS is the one-line change
 # that turns it on once its phase's UI/workflow lands.
-VALID_ACTIONS = {"generate"}
-PHASE_GATED_ACTIONS = {"cover", "repaint", "extract", "lego", "complete"}
+VALID_ACTIONS = {"generate", "cover"}
+PHASE_GATED_ACTIONS = {"repaint", "extract", "lego", "complete"}
 STUDIO_OPS_ACTIONS = {"extract", "lego", "complete"}
 SOURCE_REQUIRED_ACTIONS = {"cover", "repaint", "extract", "lego", "complete"}
 
@@ -381,7 +381,17 @@ def _resolve_dit_profile(action: str, dit_profile: str | None, project_dit_profi
                 f"action '{action}' requires dit_profile='studio_ops' (got '{dit_profile}')"
             )
         return "studio_ops"
-    return dit_profile or project_dit_profile
+    # studio_ops is reserved for extract/lego/complete (SPEC.md sec 8.1) --
+    # reject it here for every other action instead of loading the base
+    # model for ordinary generation, whether it came from an explicit
+    # override or (reviewer-flagged) a project's persisted default.
+    resolved = dit_profile or project_dit_profile
+    if resolved == "studio_ops":
+        raise JobError(
+            f"action '{action}' cannot use dit_profile='studio_ops' -- that profile is "
+            "reserved for extract/lego/complete"
+        )
+    return resolved
 
 
 def _resolve_source_audio(project_id: str, action: str, body: dict[str, Any]) -> str | None:
@@ -416,10 +426,10 @@ def enqueue_job(project_id: str, body: dict[str, Any]) -> dict:
     action = body.get("action")
     if action in PHASE_GATED_ACTIONS:
         raise JobError(
-            f"action '{action}' is not available yet -- phase 1 only implements "
-            "'generate' (SPEC.md sec 12: cover/repaint land in phase 2, "
-            "extract/lego/complete in phase 3, each with required UI this build "
-            "doesn't have yet)"
+            f"action '{action}' is not available yet -- this build implements "
+            "'generate' and 'cover' (SPEC.md sec 12: repaint is the rest of "
+            "phase 2, extract/lego/complete land in phase 3, each with "
+            "required UI this build doesn't have yet)"
         )
     if action not in VALID_ACTIONS:
         raise JobError(f"invalid action: {action}")
@@ -600,11 +610,20 @@ def run_claimed_job(job: dict[str, Any]) -> None:
         _set_status(job_id, "done", take_id=take_id)
     except Exception as exc:  # noqa: BLE001 - persist worker failure onto the job row
         if take_id is not None:
-            storage.write_take_meta(
-                project_id,
-                take_id,
-                _error_take_meta(take_id, action, dit_profile, payload, str(exc)),
-            )
+            try:
+                storage.write_take_meta(
+                    project_id,
+                    take_id,
+                    _error_take_meta(take_id, action, dit_profile, payload, str(exc)),
+                )
+            except Exception:  # noqa: BLE001 - best-effort cleanup only
+                # Writing the take's error metadata is a courtesy (surfaces
+                # the failure on the take, not just the job row) -- if disk
+                # I/O itself is failing (full disk, permissions, lock), that
+                # must not stop the job row below from being marked `error`,
+                # or the job is left `running` until a later worker process
+                # times it out via reclaim_stale_jobs instead of failing fast.
+                pass
         _set_status(job_id, "error", take_id=take_id, error=str(exc))
     finally:
         stop_heartbeat.set()

@@ -709,12 +709,12 @@ def test_smoke_gpu_script_writes_under_output_dir(
 
 
 def test_phase_gated_actions_rejected_until_their_phase(client: TestClient) -> None:
-    """SPEC.md sec 12 (phase order): phase 1 is 'generate' only. cover/repaint
-    (phase 2) and extract/lego/complete (phase 3) each need frontend
-    workflow this build doesn't have yet -- source selection, repaint
-    regions, base-model-swap confirmation/loading UX -- so the API must
-    reject them outright instead of accepting a job the UI can't drive,
-    regardless of how well-formed the rest of the request is."""
+    """SPEC.md sec 12 (phase order): phase 1 is generate; phase 2 adds cover.
+    repaint (rest of phase 2) and extract/lego/complete (phase 3) each need
+    frontend workflow this build doesn't have yet -- repaint regions,
+    base-model-swap confirmation/loading UX -- so the API must reject them
+    outright instead of accepting a job the UI can't drive, regardless of
+    how well-formed the rest of the request is."""
     project = client.post("/api/projects", json={"title": "Phase Gate Test"}).json()
     project_id = project["id"]
     client.put(f"/api/projects/{project_id}/plan", json=storage.default_plan())
@@ -727,7 +727,7 @@ def test_phase_gated_actions_rejected_until_their_phase(client: TestClient) -> N
     assert gen["status"] == "done", gen.get("error")
     source_take_id = gen["take_id"]
 
-    for action in ("cover", "repaint", "extract", "lego", "complete"):
+    for action in ("repaint", "extract", "lego", "complete"):
         # Well-formed in every other respect (real source, studio_ops
         # profile where that would otherwise be required) -- still rejected
         # purely because this action isn't available yet.
@@ -745,6 +745,76 @@ def test_phase_gated_actions_rejected_until_their_phase(client: TestClient) -> N
 
         # No job row is left behind for a rejected action.
         assert all(j["action"] != action for j in client.get("/api/jobs").json())
+
+
+def test_generate_rejects_studio_ops_dit_profile(client: TestClient) -> None:
+    """API-level companion to test_resolve_dit_profile_studio_ops_enforcement
+    (reviewer-flagged): a client must not be able to sneak the reserved
+    studio_ops profile into an enabled action, whether via an explicit
+    override or the project's persisted default."""
+    project = client.post("/api/projects", json={"title": "Studio Ops Reject Test"}).json()
+    project_id = project["id"]
+    client.put(f"/api/projects/{project_id}/plan", json=storage.default_plan())
+
+    resp = client.post(
+        f"/api/projects/{project_id}/jobs",
+        json={"action": "generate", "dit_profile": "studio_ops"},
+    )
+    assert resp.status_code == 400
+    assert "studio_ops" in resp.json()["detail"]
+    assert all(j["action"] != "generate" for j in client.get("/api/jobs").json())
+
+    client.patch(f"/api/projects/{project_id}", json={"dit_profile": "studio_ops"})
+    resp = client.post(f"/api/projects/{project_id}/jobs", json={"action": "generate"})
+    assert resp.status_code == 400
+    assert "studio_ops" in resp.json()["detail"]
+
+
+def test_cover_rejects_out_of_range_audio_cover_strength(client: TestClient) -> None:
+    """SPEC.md sec 8.1: audio_cover_strength is a 0-1 mix ratio (reviewer-
+    flagged: an unconstrained float let clients enqueue negative,
+    greater-than-one, NaN, or infinite values that would only fail deep
+    inside the worker)."""
+    project = client.post("/api/projects", json={"title": "Cover Strength Bounds Test"}).json()
+    project_id = project["id"]
+    client.put(f"/api/projects/{project_id}/plan", json=storage.default_plan())
+
+    gen_resp = client.post(
+        f"/api/projects/{project_id}/jobs",
+        json={"action": "generate", "dit_profile": "iterate"},
+    )
+    gen = _wait_for_job(client, gen_resp.json()["id"])
+    assert gen["status"] == "done", gen.get("error")
+    source_take_id = gen["take_id"]
+
+    for bad_strength in (-0.1, 1.1):
+        resp = client.post(
+            f"/api/projects/{project_id}/jobs",
+            json={
+                "action": "cover",
+                "source_take_id": source_take_id,
+                "audio_cover_strength": bad_strength,
+            },
+        )
+        assert resp.status_code == 422, bad_strength
+
+    for bad_strength in (float("nan"), float("inf"), float("-inf")):
+        resp = client.post(
+            f"/api/projects/{project_id}/jobs",
+            json={
+                "action": "cover",
+                "source_take_id": source_take_id,
+                "audio_cover_strength": bad_strength,
+            },
+        )
+        # ge/le still rejects these (any comparison with NaN/inf against 0/1
+        # is False/out-of-bounds), but FastAPI's 422 body echoes back the
+        # rejected `input`, and Starlette's JSONResponse renders with
+        # allow_nan=False -- so a non-finite input surfaces as a 400 while
+        # the response is built, not a 422. Either way it never reaches
+        # enqueue_job/the worker, which is the property under test.
+        assert resp.status_code in (400, 422), bad_strength
+        assert all(j["action"] != "cover" for j in client.get("/api/jobs").json())
 
 
 def test_resolve_dit_profile_studio_ops_enforcement() -> None:
@@ -770,6 +840,16 @@ def test_resolve_dit_profile_studio_ops_enforcement() -> None:
     # makes PATCH .../dit_profile have any effect on generation).
     assert jobs_module._resolve_dit_profile("generate", None, "polish") == "polish"
     assert jobs_module._resolve_dit_profile("generate", None, "iterate") == "iterate"
+
+    # studio_ops is reserved for extract/lego/complete (SPEC.md sec 8.1) --
+    # reject it for every other action, whether from an explicit override or
+    # a project's persisted default (reviewer-flagged: either path could
+    # otherwise load the base model for ordinary generation/cover).
+    for action in ("generate", "cover"):
+        with pytest.raises(jobs_module.JobError):
+            jobs_module._resolve_dit_profile(action, "studio_ops", "iterate")
+        with pytest.raises(jobs_module.JobError):
+            jobs_module._resolve_dit_profile(action, None, "studio_ops")
 
 
 def test_resolve_source_audio_requires_a_real_source(
