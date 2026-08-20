@@ -37,9 +37,11 @@ export interface Take {
   task_type: string;
   dit_profile: string;
   seed: number;
-  duration_sec: number;
-  caption: string;
-  lyrics: string;
+  // A take whose generation failed is still recorded (SPEC.md sec 10 point
+  // 5) with duration/caption/lyrics/bpm/keyscale left null and `error` set.
+  duration_sec: number | null;
+  caption: string | null;
+  lyrics: string | null;
   bpm: number | null;
   keyscale: string | null;
   created_at: string;

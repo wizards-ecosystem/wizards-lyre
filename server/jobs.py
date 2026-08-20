@@ -103,12 +103,27 @@ def init_db() -> None:
         # for any jobs.db created before it existed.
         _ensure_column(conn, "jobs", "heartbeat_at", "TEXT")
         _ensure_column(conn, "jobs", "attempts", "INTEGER NOT NULL DEFAULT 0")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS worker_capabilities (
+                dit_profile TEXT PRIMARY KEY,
+                supported INTEGER NOT NULL,
+                reason TEXT,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
         conn.commit()
 
 
-def _resolve_worker_module():
+def resolve_worker_module():
     """Pick the worker backend module. `mock` is for tests/local dev only;
-    production defaults to the real ACE-Step worker (SPEC.md sec 10 / 14)."""
+    production defaults to the real ACE-Step worker (SPEC.md sec 10 / 14).
+
+    This is the only place that reaches for `worker.acestep_worker` (which
+    lazily imports acestep/CUDA) -- callers must be the dedicated worker
+    process (`worker/run_worker.py`) or code that only runs there, never the
+    FastAPI server (SPEC.md sec 10 point 4 / worker-server isolation)."""
     backend = os.environ.get("BARD_WORKER", "acestep")
     if backend == "mock":
         return mock_worker
@@ -120,19 +135,53 @@ def _resolve_worker_module():
 
 
 def _resolve_worker() -> WorkerFn:
-    return _resolve_worker_module().run_job
+    return resolve_worker_module().run_job
+
+
+def publish_worker_capability(dit_profile: str, supported: bool, reason: str | None) -> None:
+    """Record what the active worker backend can currently load. Called by
+    `worker/run_worker.py` -- the one process allowed to import acestep --
+    so `_check_worker_capability` below can enforce SPEC.md sec 4.1/8.1
+    (reject `quality` without CPU-offload support) from the FastAPI process
+    without ever importing acestep itself (SPEC.md sec 10 point 4)."""
+    with closing(_connect()) as conn:
+        conn.execute(
+            "INSERT INTO worker_capabilities (dit_profile, supported, reason, updated_at) "
+            "VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(dit_profile) DO UPDATE SET "
+            "supported = excluded.supported, reason = excluded.reason, "
+            "updated_at = excluded.updated_at",
+            (dit_profile, 1 if supported else 0, reason, _now()),
+        )
+        conn.commit()
+
+
+def get_worker_capability(dit_profile: str) -> tuple[bool, str | None] | None:
+    """Last-published `(supported, reason)` for `dit_profile`, or None if no
+    worker has ever reported on it (e.g. `worker/run_worker.py` hasn't
+    started yet)."""
+    with closing(_connect()) as conn:
+        row = conn.execute(
+            "SELECT supported, reason FROM worker_capabilities WHERE dit_profile = ?",
+            (dit_profile,),
+        ).fetchone()
+    if row is None:
+        return None
+    return bool(row["supported"]), row["reason"]
 
 
 def _check_worker_capability(dit_profile: str) -> None:
     """SPEC.md sec 4.1/8.1: `quality` (XL) needs CPU offload on a 16 GB
     card; reject it up front instead of risking an uncontrolled OOM deep
-    inside a job run."""
-    module = _resolve_worker_module()
-    check = getattr(module, "supports_dit_profile", None)
-    if check is None:
+    inside a job run. Reads capability the worker process already published
+    to SQLite -- if it hasn't published anything yet, the job is allowed to
+    queue and the worker's own `_ensure_loaded` guard still enforces this
+    when the job actually runs."""
+    capability = get_worker_capability(dit_profile)
+    if capability is None:
         return
-    ok, reason = check(dit_profile)
-    if not ok:
+    supported, reason = capability
+    if not supported:
         raise JobError(reason or f"worker cannot currently load dit_profile '{dit_profile}'")
 
 

@@ -365,11 +365,14 @@ def test_invalid_action_rejected(client: TestClient) -> None:
     assert resp.status_code == 400
 
 
-def test_quality_profile_rejected_without_cpu_offload_support(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_quality_profile_rejected_without_cpu_offload_support(client: TestClient) -> None:
     """SPEC.md sec 4.1/8.1: `quality` (XL) needs CPU offload on a 16 GB card;
-    the server must reject it up front, not let a job OOM mid-run."""
+    the server must reject it up front, not let a job OOM mid-run. It does
+    this by reading capability the worker process already published to
+    SQLite (SPEC.md sec 10 point 4: the server never imports acestep itself
+    -- this test never touches `worker.acestep_worker` either)."""
+    from server import jobs as jobs_module
+
     project = client.post("/api/projects", json={"title": "Quality"}).json()
     project_id = project["id"]
     client.put(
@@ -377,15 +380,10 @@ def test_quality_profile_rejected_without_cpu_offload_support(
         json={**storage.default_plan(), "caption": "orchestral, cinematic"},
     )
 
-    monkeypatch.setenv("BARD_WORKER", "acestep")
-    import worker.acestep_worker as acestep_worker
-
-    def _fake_supports(dit_profile: str) -> tuple[bool, str | None]:
-        if dit_profile == "quality":
-            return False, "no cpu-offload-capable handler in this environment"
-        return True, None
-
-    monkeypatch.setattr(acestep_worker, "supports_dit_profile", _fake_supports)
+    # simulate what worker/run_worker.py publishes at startup
+    jobs_module.publish_worker_capability(
+        "quality", False, "no cpu-offload-capable handler in this environment"
+    )
 
     resp = client.post(
         f"/api/projects/{project_id}/jobs",
@@ -400,6 +398,32 @@ def test_quality_profile_rejected_without_cpu_offload_support(
         json={"action": "generate", "dit_profile": "iterate"},
     )
     assert resp.status_code == 200
+
+    # once the worker reports it can load quality after all, it's accepted
+    jobs_module.publish_worker_capability("quality", True, None)
+    resp = client.post(
+        f"/api/projects/{project_id}/jobs",
+        json={"action": "generate", "dit_profile": "quality"},
+    )
+    assert resp.status_code == 200
+
+
+def test_quality_profile_allowed_when_worker_has_not_reported(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No worker has published capability yet (e.g. it hasn't started) --
+    enqueue must fail open rather than block the user forever; the worker's
+    own guard still enforces this when the job actually runs."""
+    monkeypatch.setenv("BARD_PROJECTS_DIR", str(tmp_path / "projects"))
+    monkeypatch.setenv("BARD_DB_PATH", str(tmp_path / "bard.db"))
+    monkeypatch.setenv("BARD_WORKER", "mock")
+
+    from server import jobs as jobs_module
+
+    jobs_module.init_db()
+    project = storage.create_project(title="No Worker Yet")
+    job = jobs_module.enqueue_job(project["id"], {"action": "generate", "dit_profile": "quality"})
+    assert job["status"] == "queued"
 
 
 def test_reclaim_stale_running_job_requeues_then_errors(

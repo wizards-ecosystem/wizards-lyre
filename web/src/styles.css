@@ -154,6 +154,10 @@ button:disabled {
   margin-bottom: 12px;
 }
 
+.take-error {
+  color: #ffb4bc;
+}
+
 .hint {
   color: var(--muted);
 }

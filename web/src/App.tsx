@@ -177,15 +177,26 @@ export default function App() {
                     <div className="take-meta">
                       <span>{take.task_type}</span>
                       <span>seed {take.seed}</span>
-                      <span>{take.duration_sec.toFixed(1)}s</span>
+                      <span>
+                        {take.duration_sec != null ? `${take.duration_sec.toFixed(1)}s` : "—"}
+                      </span>
                     </div>
-                    <audio controls src={api.takeAudioUrl(detail.project.id, take.id)} />
-                    <a
-                      href={api.takeAudioUrl(detail.project.id, take.id)}
-                      download={`${take.id}.wav`}
-                    >
-                      download
-                    </a>
+                    {take.error ? (
+                      // A take whose generation failed has no audio file
+                      // (SPEC.md sec 10 point 5) -- show the error instead
+                      // of an <audio> that would just 404.
+                      <span className="take-error">failed: {take.error}</span>
+                    ) : (
+                      <>
+                        <audio controls src={api.takeAudioUrl(detail.project.id, take.id)} />
+                        <a
+                          href={api.takeAudioUrl(detail.project.id, take.id)}
+                          download={`${take.id}.wav`}
+                        >
+                          download
+                        </a>
+                      </>
+                    )}
                   </li>
                 ))}
               </ul>
