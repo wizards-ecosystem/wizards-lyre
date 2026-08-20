@@ -17,19 +17,24 @@ ACE-Step/CUDA can't take the FastAPI server down with it either.
 Adapter notes (installed ACE-Step 1.5 Python API, SPEC.md sec 13 -- "follow
 ACE-Step's current API and keep Bard's HTTP schema stable with an
 adapter"): `AceStepHandler`/`LLMHandler` are constructed with no arguments
-and then explicitly initialized; `GenerationParams` has no `query` field
-(simple-mode planning goes through `LLMHandler.create_sample` instead) and
-uses `duration`, not `duration_sec`; `generate_music` takes both a
-`GenerationParams` and a `GenerationConfig`; its `GenerationResult` reports
-`success` plus generated files in `audios` and LM/CoT-filled metadata in
-`extra_outputs`, not directly on the result object. Every acestep call below
-is wrapped so a further API drift raises `WorkerUnavailable` (job `error`,
-not a crash) instead of an unhandled exception.
+and then loaded via `initialize_service(config_path=...)`; simple-mode
+planning goes through the module-level `acestep.inference.create_sample`
+(not a handler method); `GenerationParams` carries every per-request field,
+including `num_inference_steps`/`use_cfg` (not `duration_sec` -- that's
+`duration`), while `GenerationConfig` only carries `batch_size`;
+`generate_music` takes both. Its `GenerationResult` reports `success` plus
+generated files in `audios` and LM/CoT-filled metadata in `extra_outputs`,
+not directly on the result object. Every acestep call below is wrapped so a
+further API drift raises `WorkerUnavailable` (job `error`, not a crash)
+instead of an unhandled exception; `tests/test_acestep_worker_adapter.py`
+exercises this whole call contract against fake acestep modules so a
+mismatch is caught without needing CUDA installed.
 """
 
 from __future__ import annotations
 
 import inspect
+import os
 import shutil
 import threading
 from datetime import datetime, timezone
@@ -48,6 +53,9 @@ DIT_CHECKPOINTS = {
 }
 DEFAULT_LM = "acestep-5Hz-lm-1.7B"
 LM_BACKEND = "pt"  # SPEC.md sec 4.2: vLLM is not a reliable native-Windows backend.
+
+# SPEC.md sec 6: weights live under checkpoints/<name>/ (gitignored).
+CHECKPOINTS_ROOT = Path(os.environ.get("BARD_CHECKPOINTS_DIR", "checkpoints"))
 
 # SPEC.md sec 4.1: XL turbo (`quality`) needs CPU offload on a 16 GB card;
 # every other profile fits without it.
@@ -85,7 +93,12 @@ class WorkerUnavailable(RuntimeError):
 def _import_acestep():
     try:
         from acestep.handler import AceStepHandler
-        from acestep.inference import GenerationConfig, GenerationParams, generate_music
+        from acestep.inference import (
+            GenerationConfig,
+            GenerationParams,
+            create_sample,
+            generate_music,
+        )
         from acestep.llm_inference import LLMHandler
     except ImportError as exc:
         raise WorkerUnavailable(
@@ -93,7 +106,7 @@ def _import_acestep():
             "and download weights (SPEC.md sec 4 and 13), or set BARD_WORKER=mock "
             "for local dev/tests without a GPU."
         ) from exc
-    return AceStepHandler, GenerationParams, GenerationConfig, LLMHandler, generate_music
+    return AceStepHandler, GenerationParams, GenerationConfig, LLMHandler, generate_music, create_sample
 
 
 def _api_call(step: str, fn, *args, **kwargs):
@@ -110,9 +123,30 @@ def _api_call(step: str, fn, *args, **kwargs):
         ) from exc
 
 
+def _api_method_call(step: str, obj: Any, method_name: str, *args, **kwargs):
+    """Like `_api_call`, but resolves `obj.method_name` inside the guarded
+    try too. A plain `_api_call(step, obj.method_name, ...)` would still let
+    a missing method raise AttributeError from the *caller's* frame -- the
+    attribute lookup happens before `_api_call` is even entered -- so a
+    renamed/removed method wouldn't get the clean `WorkerUnavailable` this
+    adapter promises everywhere else."""
+    try:
+        method = getattr(obj, method_name)
+        return method(*args, **kwargs)
+    except (TypeError, AttributeError) as exc:
+        raise WorkerUnavailable(
+            f"acestep API mismatch in {step}: {exc}. Update worker/acestep_worker.py to "
+            "match the installed acestep version, or set BARD_WORKER=mock."
+        ) from exc
+
+
+def _config_path(checkpoint_name: str) -> str:
+    return str(CHECKPOINTS_ROOT / checkpoint_name / "config.yaml")
+
+
 def _handler_supports_cpu_offload(AceStepHandler: Any) -> bool:
     try:
-        params = inspect.signature(AceStepHandler.initialize).parameters
+        params = inspect.signature(AceStepHandler.initialize_service).parameters
     except (TypeError, ValueError, AttributeError):
         return False
     return "cpu_offload" in params
@@ -130,22 +164,22 @@ def supports_dit_profile(dit_profile: str) -> tuple[bool, str | None]:
     if dit_profile not in CPU_OFFLOAD_PROFILES:
         return True, None
     try:
-        AceStepHandler, _, _, _, _ = _import_acestep()
+        AceStepHandler, _, _, _, _, _ = _import_acestep()
     except WorkerUnavailable as exc:
         return False, str(exc)
     if not _handler_supports_cpu_offload(AceStepHandler):
         return False, (
             f"dit_profile 'quality' ({DIT_CHECKPOINTS['quality']}) requires a "
-            "CPU-offload-capable AceStepHandler.initialize() on a 16 GB GPU; the "
-            "installed acestep does not support cpu_offload. Use 'iterate' or 'polish' "
-            "instead."
+            "CPU-offload-capable AceStepHandler.initialize_service() on a 16 GB GPU; "
+            "the installed acestep does not support cpu_offload. Use 'iterate' or "
+            "'polish' instead."
         )
     return True, None
 
 
 def _ensure_loaded(dit_profile: str) -> tuple[Any, Any, Any]:
     """Swap the loaded DiT if needed. Caller holds _LOCK."""
-    AceStepHandler, _, _, LLMHandler, _ = _import_acestep()
+    AceStepHandler, _, _, LLMHandler, _, _ = _import_acestep()
 
     if _STATE["dit_profile"] != dit_profile or _STATE["handler"] is None:
         # Unload the previous DiT before loading the next; never hold two
@@ -159,18 +193,23 @@ def _ensure_loaded(dit_profile: str) -> tuple[Any, Any, Any]:
                 raise WorkerUnavailable(reason)
 
         handler = _api_call("AceStepHandler()", AceStepHandler)
-        init_kwargs: dict[str, Any] = {"checkpoint": checkpoint, "backend": LM_BACKEND}
+        init_kwargs: dict[str, Any] = {"config_path": _config_path(checkpoint)}
         if cpu_offload:
             init_kwargs["cpu_offload"] = True
-        _api_call("AceStepHandler.initialize", handler.initialize, **init_kwargs)
+        _api_method_call(
+            "AceStepHandler.initialize_service", handler, "initialize_service", **init_kwargs
+        )
 
         _STATE["handler"] = handler
         _STATE["dit_profile"] = dit_profile
 
     if _STATE["lm"] is None:
         lm = _api_call("LLMHandler()", LLMHandler)
-        _api_call(
-            "LLMHandler.initialize", lm.initialize, model=DEFAULT_LM, backend=LM_BACKEND
+        _api_method_call(
+            "LLMHandler.initialize_service",
+            lm,
+            "initialize_service",
+            config_path=_config_path(DEFAULT_LM),
         )
         _STATE["lm"] = lm
 
@@ -197,12 +236,14 @@ def _is_simple_mode(job: dict[str, Any], plan: dict[str, Any]) -> bool:
     )
 
 
-def _plan_from_query(lm: Any, plan: dict[str, Any]) -> dict[str, Any]:
+def _plan_from_query(create_sample_fn: Any, lm: Any, plan: dict[str, Any]) -> dict[str, Any]:
     """Simple mode (SPEC.md sec 7.2): turn `query` into a full plan via
-    ACE-Step's `create_sample`, then merge the result onto `plan`."""
+    ACE-Step's module-level `create_sample` (it takes the LM handler, it is
+    not a method on it), then merge the result onto `plan`."""
     sample = _api_call(
-        "LLMHandler.create_sample",
-        lm.create_sample,
+        "create_sample",
+        create_sample_fn,
+        lm_handler=lm,
         query=plan.get("query"),
         instrumental=plan.get("instrumental", False),
     )
@@ -244,7 +285,7 @@ def run_job(
     longer matches this adapter; `server.jobs` catches that and marks the
     job `error` without crashing the HTTP process.
     """
-    _, GenerationParams, GenerationConfig, _, generate_music = _import_acestep()
+    _, GenerationParams, GenerationConfig, _, generate_music, create_sample = _import_acestep()
     take_dir.mkdir(parents=True, exist_ok=True)
 
     simple_mode = _is_simple_mode(job, plan)
@@ -252,7 +293,7 @@ def run_job(
     with _LOCK:
         handler, lm, dit_profile = _ensure_loaded(job["dit_profile"])
 
-        effective_plan = _plan_from_query(lm, plan) if simple_mode else plan
+        effective_plan = _plan_from_query(create_sample, lm, plan) if simple_mode else plan
         # Null/omitted bpm, key, or duration: let ACE-Step's CoT fill them in
         # (SPEC.md sec 7.2, use_cot_metas).
         use_cot_metas = simple_mode or any(
@@ -277,12 +318,12 @@ def run_job(
             repainting_start=job.get("repainting_start"),
             repainting_end=job.get("repainting_end"),
             track_name=job.get("track_name"),
+            num_inference_steps=GENERATION_STEPS[dit_profile],
+            use_cfg=GENERATION_USE_CFG[dit_profile],
         )
         config = _api_call(
             "GenerationConfig",
             GenerationConfig,
-            num_inference_steps=GENERATION_STEPS[dit_profile],
-            use_cfg=GENERATION_USE_CFG[dit_profile],
             batch_size=job.get("batch_size", 1),
         )
         result = _api_call(
