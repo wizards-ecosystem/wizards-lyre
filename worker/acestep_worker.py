@@ -43,17 +43,9 @@ field -- `inference_steps` and `guidance_scale` (not `num_inference_steps`/
 `timesignature` so Custom-mode plan metadata actually reaches the
 renderer. It has no `negative_tags` or `track_name` field (both raised
 TypeError on every real call): plan.json's `negative` list is not sent
-<<<<<<< HEAD
 until a real ACE-Step field name is confirmed, and `track_name` maps to
 the task-specific `instruction` field, sent only for extract/lego/complete
 (SPEC.md sec 4.4). `GenerationConfig` carries `batch_size`,
-=======
-until a real ACE-Step field name is confirmed, and `track_name` would map
-to the task-specific `instruction` field for extract/lego/complete
-(SPEC.md sec 4.4) -- always `None` here, since this worker only implements
-Phase 1 `generate` / text2music; extract/lego/complete are Phase 3.
-`GenerationConfig` carries `batch_size` and
->>>>>>> bfbe6a4 ([conclave] fix round 1: Expand static safety tests for forbidden engines and public bind)
 `audio_format="wav"` (ACE-Step defaults to FLAC otherwise, which this
 adapter must not silently relabel as `.wav`), and `use_random_seed` --
 `GenerationParams.seed` alone is not enough to reproduce a take: this must
@@ -125,13 +117,19 @@ GENERATION_GUIDANCE_SCALE = {
     "studio_ops": 7.5,
 }
 
-# Phase 1 (SPEC.md sec 12) is text2music generation only. cover / repaint
-# (Phase 2) and the studio_ops extract / lego / complete actions (Phase 3)
-# are not implemented yet -- server.jobs.VALID_ACTIONS rejects them before a
-# job ever reaches this worker.
 TASK_TYPE_BY_ACTION = {
     "generate": "text2music",
+    "cover": "cover",
+    "repaint": "repaint",
+    "extract": "extract",
+    "lego": "lego",
+    "complete": "complete",
 }
+
+# SPEC.md sec 4.4 studio_ops task map: extract/lego/complete pass their
+# track selection through GenerationParams' task-specific `instruction`
+# field; generate/cover/repaint don't take one.
+TRACK_INSTRUCTION_ACTIONS = {"extract", "lego", "complete"}
 
 
 class WorkerUnavailable(RuntimeError):
@@ -385,6 +383,15 @@ def _ensure_loaded(dit_profile: str) -> tuple[Any, Any, Any]:
     return _STATE["handler"], _STATE["lm"], _STATE["dit_profile"]
 
 
+def _repaint_meta(job: dict[str, Any]) -> dict | None:
+    if job.get("action") != "repaint":
+        return None
+    return {
+        "start": job.get("repainting_start", 0),
+        "end": job.get("repainting_end", -1),
+    }
+
+
 def _is_simple_mode(job: dict[str, Any], plan: dict[str, Any]) -> bool:
     """SPEC.md sec 7.2: Simple mode is "user types query"; caption/lyrics
     stay empty until the LM fills them in."""
@@ -513,12 +520,13 @@ def run_job(
             audio_cover_strength=job.get("audio_cover_strength"),
             repainting_start=job.get("repainting_start"),
             repainting_end=job.get("repainting_end"),
-            # extract/lego/complete's track selection goes through this
-            # task-specific `instruction` field (not a `track_name` kwarg --
-            # GenerationParams has no such field, passing one raised
-            # TypeError on every real call). Those actions aren't
-            # implemented yet (Phase 3), so it's always None for now.
-            instruction=None,
+            # extract/lego/complete's track selection goes through the
+            # task-specific `instruction` field, not a `track_name` kwarg
+            # (GenerationParams has no such field -- passing it raised
+            # TypeError on every real call, converted to WorkerUnavailable).
+            instruction=(
+                job.get("track_name") if job["action"] in TRACK_INSTRUCTION_ACTIONS else None
+            ),
             inference_steps=GENERATION_STEPS[dit_profile],
             guidance_scale=GENERATION_GUIDANCE_SCALE[dit_profile],
         )
@@ -653,10 +661,7 @@ def run_job(
         "created_at": datetime.now(timezone.utc).isoformat(),
         "score": None,
         "error": None,
-        # repaint / track_name (SPEC.md sec 7.3 meta.json schema) are only
-        # ever populated by the repaint / studio_ops actions, which aren't
-        # implemented yet (Phase 2/3) -- always null for now.
-        "repaint": None,
-        "track_name": None,
+        "repaint": _repaint_meta(job),
+        "track_name": job.get("track_name"),
     }
     return meta, plan_patch

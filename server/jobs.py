@@ -31,7 +31,6 @@ from typing import Any, Callable
 from server import config, storage
 from worker import mock_worker
 
-<<<<<<< HEAD
 # SPEC.md sec 12 (phase order): phase 1 is generate only. cover/repaint
 # (phase 2) and extract/lego/complete (phase 3) each need frontend workflow
 # phase 1 doesn't have -- source selection, repaint regions, and a
@@ -45,13 +44,6 @@ VALID_ACTIONS = {"generate"}
 PHASE_GATED_ACTIONS = {"cover", "repaint", "extract", "lego", "complete"}
 STUDIO_OPS_ACTIONS = {"extract", "lego", "complete"}
 SOURCE_REQUIRED_ACTIONS = {"cover", "repaint", "extract", "lego", "complete"}
-=======
-# Phase 1 (SPEC.md sec 12) is text2music generation only. cover / repaint
-# (Phase 2) and the studio_ops extract / lego / complete actions (Phase 3)
-# are not implemented yet -- AGENTS.md requires implementing SPEC.md in
-# phase order, so this deliberately rejects them rather than dispatching.
-VALID_ACTIONS = {"generate"}
->>>>>>> bfbe6a4 ([conclave] fix round 1: Expand static safety tests for forbidden engines and public bind)
 
 HEARTBEAT_INTERVAL_SEC = 5.0
 STALE_AFTER_SEC = 60.0
@@ -379,7 +371,6 @@ def _resolve_dit_profile(action: str, dit_profile: str | None, project_dit_profi
     (reviewer-flagged: the included frontend always omits it)."""
     if dit_profile is not None and dit_profile not in storage.VALID_DIT_PROFILES:
         raise JobError(f"invalid dit_profile: {dit_profile}")
-<<<<<<< HEAD
     if action in STUDIO_OPS_ACTIONS:
         # SPEC.md sec 8.1: reject extract/lego/complete unless dit_profile is
         # studio_ops. An unset profile is coerced; an explicit mismatch is rejected.
@@ -391,9 +382,32 @@ def _resolve_dit_profile(action: str, dit_profile: str | None, project_dit_profi
             )
         return "studio_ops"
     return dit_profile or project_dit_profile
-=======
-    return dit_profile or "iterate"
->>>>>>> bfbe6a4 ([conclave] fix round 1: Expand static safety tests for forbidden engines and public bind)
+
+
+def _resolve_source_audio(project_id: str, action: str, body: dict[str, Any]) -> str | None:
+    """Resolve cover/repaint/extract/lego/complete's source to a real, jailed
+    filesystem path (SPEC.md sec 8.1 / sec 11). Called both at enqueue time
+    (fail fast) and again when the job runs (payload_json only stores the
+    client's identifiers, not the resolved path)."""
+    if action not in SOURCE_REQUIRED_ACTIONS:
+        return None
+
+    source_take_id = body.get("source_take_id")
+    upload_path = body.get("upload_path")
+    if not source_take_id and not upload_path:
+        raise JobError(f"action '{action}' requires source_take_id or upload_path")
+
+    if source_take_id:
+        try:
+            path = storage.take_audio_path(project_id, source_take_id)
+        except storage.TakeNotFound as exc:
+            raise JobError(f"source_take_id not found: {source_take_id}") from exc
+        return str(path)
+
+    path = storage.resolve_upload_path(project_id, upload_path)
+    if not path.exists():
+        raise JobError(f"upload_path not found: {upload_path}")
+    return str(path)
 
 
 def enqueue_job(project_id: str, body: dict[str, Any]) -> dict:
@@ -410,7 +424,6 @@ def enqueue_job(project_id: str, body: dict[str, Any]) -> dict:
     if action not in VALID_ACTIONS:
         raise JobError(f"invalid action: {action}")
 
-<<<<<<< HEAD
     dit_profile = _resolve_dit_profile(action, body.get("dit_profile"), project["dit_profile"])
     # SPEC.md sec 4.1/8.1 only calls for early rejection of 'quality' (XL
     # needs CPU offload on a 16 GB card) -- every other profile always
@@ -426,10 +439,6 @@ def enqueue_job(project_id: str, body: dict[str, Any]) -> dict:
     if dit_profile == "quality":
         _check_worker_capability(dit_profile)
     _resolve_source_audio(project_id, action, body)
-=======
-    dit_profile = _resolve_dit_profile(action, body.get("dit_profile"))
-    _check_worker_capability(dit_profile)
->>>>>>> bfbe6a4 ([conclave] fix round 1: Expand static safety tests for forbidden engines and public bind)
 
     job_id = uuid.uuid4().hex
     now = _now()
@@ -564,9 +573,10 @@ def run_claimed_job(job: dict[str, Any]) -> None:
     try:
         worker_fn = _resolve_worker()
         plan = storage.load_plan(project_id)
+        src_audio = _resolve_source_audio(project_id, action, payload)
         take_id, tdir = storage.allocate_take_dir(project_id)
         meta, plan_patch = worker_fn(
-            job={**payload, "action": action, "dit_profile": dit_profile, "src_audio": None},
+            job={**payload, "action": action, "dit_profile": dit_profile, "src_audio": src_audio},
             plan=plan,
             take_id=take_id,
             take_dir=tdir,

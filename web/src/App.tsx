@@ -129,18 +129,11 @@ export default function App() {
 
   // Flushes any pending/in-flight save for the *current* project before
   // switching to a different one (SPEC.md: a shared save slot must not
-<<<<<<< HEAD
   // silently drop an edit when the user switches projects mid-debounce). If
   // that flush fails, the switch must not proceed: activeId must stay put
   // so the failed edit is still visible/retryable instead of being swapped
   // out from under the user or silently discarded when the next project's
   // edits reuse the same pending-save slot.
-=======
-  // silently drop an edit when the user switches projects mid-debounce).
-  // If the flush fails, the switch is aborted -- proceeding would replace
-  // `detail` with the new project's data while the failed edit's save slot
-  // gets reused, discarding it with no way to retry.
->>>>>>> bfbe6a4 ([conclave] fix round 1: Expand static safety tests for forbidden engines and public bind)
   async function switchActiveProject(id: string): Promise<void> {
     try {
       await flushPendingPlanSave();
