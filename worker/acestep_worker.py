@@ -157,6 +157,53 @@ def _handler_supports_cpu_offload(AceStepHandler: Any) -> bool:
     return "cpu_offload" in params
 
 
+def _log_cuda_status() -> str:
+    """Detect CUDA and log VRAM (SPEC.md sec 10 point 1). Diagnostic only --
+    never raises, so a missing/CPU-only torch still lets the worker start
+    and report a clean per-job error instead of refusing to run at all."""
+    try:
+        import torch
+    except ImportError:
+        return "CUDA detect: torch is not installed"
+    try:
+        if not torch.cuda.is_available():
+            return "CUDA detect: not available (no GPU or a CPU-only torch build)"
+        device_count = torch.cuda.device_count()
+        name = torch.cuda.get_device_name(0)
+        free_bytes, total_bytes = torch.cuda.mem_get_info(0)
+        return (
+            f"CUDA detect: {device_count} device(s), using '{name}'; VRAM "
+            f"{free_bytes / (1024 ** 3):.1f} GiB free / {total_bytes / (1024 ** 3):.1f} GiB total"
+        )
+    except Exception as exc:  # noqa: BLE001 - diagnostic only, must never block startup
+        return f"CUDA detect: error while querying CUDA/VRAM: {exc}"
+
+
+def initialize_worker() -> tuple[bool, str]:
+    """Worker-startup readiness (SPEC.md sec 10 point 1): detect CUDA, log
+    VRAM, and preload the default `iterate` DiT + LM (`pt` backend) before
+    the worker starts polling for jobs. Returns `(ready, message)`; never
+    raises -- a failed startup is reported, not fatal, so the process stays
+    up and still reports a clean per-job `WorkerUnavailable` (sec 10 point
+    5) instead of refusing to run at all (e.g. while iterating without a
+    GPU attached). `worker/run_worker.py` publishes the result so
+    `server.jobs` can reflect real startup state, not an optimistic guess."""
+    print(_log_cuda_status())
+    try:
+        with _LOCK:
+            _ensure_loaded("iterate")
+    except WorkerUnavailable as exc:
+        message = f"worker startup: failed to preload default 'iterate' DiT + LM: {exc}"
+        print(message)
+        return False, message
+    message = (
+        f"worker startup: default 'iterate' DiT ({DIT_CHECKPOINTS['iterate']}) + "
+        f"LM ({DEFAULT_LM}) loaded and ready"
+    )
+    print(message)
+    return True, message
+
+
 def supports_dit_profile(dit_profile: str) -> tuple[bool, str | None]:
     """Whether this worker can currently load `dit_profile`. SPEC.md sec 4.1:
     'quality' (XL, 4B) requires CPU offload on a 16 GB GPU; SPEC.md sec 8.1:

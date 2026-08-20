@@ -11,11 +11,12 @@ Requires ACE-Step 1.5 installed and weights downloaded (SPEC.md sec 4, 13).
 from __future__ import annotations
 
 import sys
-import tempfile
+import uuid
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from server import storage  # noqa: E402
 from worker.acestep_worker import WorkerUnavailable, run_job  # noqa: E402
 
 INSTRUMENTAL_PLAN = {
@@ -29,14 +30,18 @@ INSTRUMENTAL_PLAN = {
 
 
 def main() -> int:
-    take_dir = Path(tempfile.mkdtemp(prefix="bard-smoke-"))
+    # SPEC.md sec 8.1/11: generated audio must land under projects/ or
+    # output/, never a bare OS temp dir -- jailed_output_path enforces (and
+    # raises PathJailError on) any escape from output/.
+    take_id = f"smoke-{uuid.uuid4().hex}"
+    take_dir = storage.jailed_output_path("smoke-gpu", take_id)
     job = {
         "action": "generate",
         "dit_profile": "iterate",
         "seed": -1,
     }
     try:
-        meta, _plan_patch = run_job(job=job, plan=INSTRUMENTAL_PLAN, take_id="smoke", take_dir=take_dir)
+        meta, _plan_patch = run_job(job=job, plan=INSTRUMENTAL_PLAN, take_id=take_id, take_dir=take_dir)
     except WorkerUnavailable as exc:
         print(f"GPU smoke unavailable: {exc}", file=sys.stderr)
         return 2

@@ -53,6 +53,15 @@ def jailed_path(*parts: str) -> Path:
     return _jail(base, target)
 
 
+def jailed_output_path(*parts: str) -> Path:
+    """Resolve a path under output_dir(), rejecting any escape. SPEC.md sec
+    8.1/11: generated audio may only be written under projects/ or output/
+    -- never a bare OS temp directory (e.g. scripts/smoke-gpu.py)."""
+    base = config.output_dir()
+    target = base.joinpath(*parts)
+    return _jail(base, target)
+
+
 def project_dir(project_id: str) -> Path:
     return jailed_path(project_id)
 

@@ -262,6 +262,57 @@ def test_path_jail_rejects_escape_via_api(client: TestClient) -> None:
     assert resp.status_code in (400, 404)
 
 
+def test_jailed_output_path_rejects_escape(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """scripts/smoke-gpu.py writes under output/, not a bare OS temp dir --
+    same jail mechanism as projects/, just rooted at output_dir()."""
+    monkeypatch.setenv("BARD_PROJECTS_DIR", str(tmp_path / "projects"))
+    monkeypatch.setenv("BARD_OUTPUT_DIR", str(tmp_path / "output"))
+    monkeypatch.setenv("BARD_DB_PATH", str(tmp_path / "bard.db"))
+
+    with pytest.raises(storage.PathJailError):
+        storage.jailed_output_path("..", "evil.txt")
+
+    with pytest.raises(storage.PathJailError):
+        storage.jailed_output_path("..", "..", "..", "Users", "evil.txt")
+
+    ok_path = storage.jailed_output_path("smoke-gpu", "some-take-id")
+    assert ok_path.is_relative_to(storage.config.output_dir())
+
+
+def test_smoke_gpu_script_writes_under_output_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SPEC.md sec 8.1/11: generated audio may only land under projects/ or
+    output/. scripts/smoke-gpu.py used to write into tempfile.mkdtemp(),
+    which is outside both -- this drives the real script end to end (with a
+    faked run_job so it needs no GPU) and checks the file actually lands
+    under output_dir()."""
+    monkeypatch.setenv("BARD_PROJECTS_DIR", str(tmp_path / "projects"))
+    monkeypatch.setenv("BARD_OUTPUT_DIR", str(tmp_path / "output"))
+    monkeypatch.setenv("BARD_DB_PATH", str(tmp_path / "bard.db"))
+
+    import importlib.util
+
+    script_path = Path(__file__).resolve().parents[1] / "scripts" / "smoke-gpu.py"
+    spec = importlib.util.spec_from_file_location("bard_smoke_gpu_script", script_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    def _fake_run_job(job, plan, take_id, take_dir):
+        take_dir.mkdir(parents=True, exist_ok=True)
+        (take_dir / "mix.wav").write_bytes(b"RIFF____WAVEfake")
+        return {"seed": 42, "duration_sec": 10.0}, None
+
+    monkeypatch.setattr(module, "run_job", _fake_run_job)
+
+    assert module.main() == 0
+
+    output_root = storage.config.output_dir()
+    written = list(output_root.rglob("mix.wav"))
+    assert len(written) == 1
+    assert written[0].is_relative_to(output_root)
+
+
 def test_studio_ops_required_for_extract_lego_complete(client: TestClient) -> None:
     project = client.post("/api/projects", json={"title": "Ops Test"}).json()
     project_id = project["id"]

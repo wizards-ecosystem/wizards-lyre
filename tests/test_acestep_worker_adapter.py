@@ -354,3 +354,47 @@ def test_api_mismatch_raises_worker_unavailable_not_a_crash(
 
     with pytest.raises(acestep_worker.WorkerUnavailable):
         acestep_worker.run_job(job=job, plan=plan, take_id="t4", take_dir=tmp_path / "take4")
+
+
+def test_initialize_worker_preloads_default_iterate_dit_and_lm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """SPEC.md sec 10 point 1: 'On start: detect CUDA, log VRAM, load
+    default iterate DiT + 1.7B LM with pt backend.'"""
+    log: list[tuple] = []
+    _install_fake_acestep(monkeypatch, log)
+
+    ready, message = acestep_worker.initialize_worker()
+
+    assert ready is True
+    assert "iterate" in message
+
+    handler_init = next(e for e in log if e[0] == "handler.initialize_service")
+    assert handler_init[1]["config_path"] == "acestep-v15-turbo"
+    assert acestep_worker._STATE["dit_profile"] == "iterate"
+    assert acestep_worker._STATE["handler"] is not None
+    assert acestep_worker._STATE["lm"] is not None
+
+
+def test_initialize_worker_reports_failure_without_crashing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A missing/broken ACE-Step install must be a reported, non-fatal
+    startup failure (SPEC.md sec 10 point 5), not an unhandled crash --
+    `worker/run_worker.py` uses this to publish honest capability state
+    instead of an optimistic guess."""
+
+    class BrokenHandler:
+        def __init__(self) -> None:
+            pass
+
+        # No initialize_service -- simulates ACE-Step/CUDA being unavailable.
+
+    log: list[tuple] = []
+    _install_fake_acestep(monkeypatch, log, handler_cls=BrokenHandler)
+
+    ready, message = acestep_worker.initialize_worker()
+
+    assert ready is False
+    assert "iterate" in message
+    assert acestep_worker._STATE["handler"] is None

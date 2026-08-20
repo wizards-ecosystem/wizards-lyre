@@ -57,6 +57,14 @@ def supports_dit_profile(dit_profile: str) -> tuple[bool, str | None]:
     return True, None
 
 
+def initialize_worker() -> tuple[bool, str]:
+    """Worker-startup readiness (SPEC.md sec 10 point 1). The mock has no
+    CUDA/model to detect or load, so it is always immediately ready --
+    real startup detection/preload is exercised against
+    `worker.acestep_worker.initialize_worker`."""
+    return True, "mock worker: no GPU/model to load, always ready"
+
+
 def _is_simple_mode(plan: dict[str, Any]) -> bool:
     return bool(plan.get("query")) and not plan.get("caption") and not plan.get("lyrics")
 
