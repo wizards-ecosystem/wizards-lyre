@@ -19,21 +19,23 @@ ACE-Step's current API and keep Bard's HTTP schema stable with an
 adapter"): `AceStepHandler`/`LLMHandler` are constructed with no arguments.
 `AceStepHandler` is loaded via `initialize_service(project_root=...,
 config_path=<checkpoint name>, device=...)`; `LLMHandler` is loaded via
-`initialize(project_root=..., config_path=<lm name>, device=...,
-backend=...)` -- a different method than the DiT handler. Simple-mode
+`initialize(checkpoint_dir=..., lm_model_path=<lm name>)` -- a different
+method *and* different argument names than the DiT handler. Simple-mode
 planning goes through the module-level `acestep.inference.create_sample`
 (not a handler method). `GenerationParams` carries every per-request field
 -- `inference_steps` and `guidance_scale` (not `num_inference_steps`/
 `use_cfg`), `duration` (not `duration_sec`) -- while `GenerationConfig`
-only carries `batch_size`; `generate_music` takes both plus `dit_handler`
-(not `handler`) and `lm_handler`. Its `GenerationResult` reports `success`
-plus generated files in `audios` (dicts) and LM/CoT-filled metadata in
-`extra_outputs`; the actual seed used lives nested at
-`audio["params"]["seed"]`, not top-level. Every acestep call below is
-wrapped so a further API drift raises `WorkerUnavailable` (job `error`, not
-a crash) instead of an unhandled exception; `tests/test_acestep_worker_adapter.py`
-exercises this whole call contract against fake acestep modules so a
-mismatch is caught without needing CUDA installed.
+carries `batch_size` and `audio_format="wav"` (ACE-Step defaults to FLAC
+otherwise, which this adapter must not silently relabel as `.wav`);
+`generate_music` takes both plus `dit_handler` (not `handler`) and
+`lm_handler`. Its `GenerationResult` reports `success` plus generated files
+in `audios` (dicts) and LM/CoT-filled metadata in `extra_outputs`; the
+actual seed used lives nested at `audio["params"]["seed"]`, not top-level.
+Every acestep call below is wrapped so a further API drift raises
+`WorkerUnavailable` (job `error`, not a crash) instead of an unhandled
+exception; `tests/test_acestep_worker_adapter.py` exercises this whole call
+contract against fake acestep modules so a mismatch is caught without
+needing CUDA installed.
 """
 
 from __future__ import annotations
@@ -57,7 +59,10 @@ DIT_CHECKPOINTS = {
     "studio_ops": "acestep-v15-base",
 }
 DEFAULT_LM = "acestep-5Hz-lm-1.7B"
-LM_BACKEND = "pt"  # SPEC.md sec 4.2: vLLM is not a reliable native-Windows backend.
+# SPEC.md sec 4.2 locks the default LM backend to "pt" (vLLM is not a
+# reliable native-Windows backend), but LLMHandler.initialize's confirmed
+# signature (checkpoint_dir/lm_model_path) has no backend kwarg to carry
+# it -- nothing to pass here until that's confirmed upstream.
 
 # SPEC.md sec 6: weights live under checkpoints/<name>/ (gitignored). This is
 # `project_root`; `config_path` is just the bare checkpoint name above, not a
@@ -262,15 +267,15 @@ def _ensure_loaded(dit_profile: str) -> tuple[Any, Any, Any]:
     if _STATE["lm"] is None:
         lm = _api_call("LLMHandler()", LLMHandler)
         # LLMHandler is loaded through `initialize`, not `initialize_service`
-        # -- a different method than the DiT handler above.
+        # -- a different method *and* different argument names than the DiT
+        # handler above (checkpoint_dir/lm_model_path, not project_root/
+        # config_path).
         _api_method_call(
             "LLMHandler.initialize",
             lm,
             "initialize",
-            project_root=str(CHECKPOINTS_ROOT),
-            config_path=DEFAULT_LM,
-            device=DEVICE,
-            backend=LM_BACKEND,
+            checkpoint_dir=str(CHECKPOINTS_ROOT),
+            lm_model_path=DEFAULT_LM,
         )
         _STATE["lm"] = lm
 
@@ -390,6 +395,10 @@ def run_job(
             "GenerationConfig",
             GenerationConfig,
             batch_size=job.get("batch_size", 1),
+            # ACE-Step defaults to FLAC; request WAV explicitly so the
+            # archive we rename to mix.wav below actually is one (SPEC.md
+            # sec 7: mix.wav is "preferred archive").
+            audio_format="wav",
         )
         result = _api_call(
             "generate_music",
@@ -415,9 +424,19 @@ def run_job(
     if not src_path.exists():
         raise RuntimeError(f"ACE-Step reported audio at '{src_path}' but the file does not exist")
 
-    # storage.take_audio_path only recognizes mix.wav / mix.mp3; ACE-Step
-    # writes its own output filename, so place it at the canonical path.
-    dest_path = take_dir / ("mix.mp3" if src_path.suffix.lower() == ".mp3" else "mix.wav")
+    # We requested audio_format="wav" above; storage.take_audio_path only
+    # recognizes mix.wav / mix.mp3 (SPEC.md sec 7). Verify ACE-Step actually
+    # returned one of those instead of blindly renaming whatever it wrote --
+    # a FLAC file (ACE-Step's default) renamed to .wav is not a WAV file and
+    # won't play/download reliably as one.
+    suffix = src_path.suffix.lower()
+    if suffix not in (".wav", ".mp3"):
+        raise RuntimeError(
+            f"ACE-Step returned audio in an unexpected format ('{suffix}', requested 'wav') "
+            f"at '{src_path}'. Update worker/acestep_worker.py's GenerationConfig audio_format "
+            "handling to match the installed acestep version."
+        )
+    dest_path = take_dir / ("mix.mp3" if suffix == ".mp3" else "mix.wav")
     if src_path != dest_path:
         shutil.move(str(src_path), str(dest_path))
 

@@ -6,14 +6,16 @@ method name, wrong argument, a field on the wrong class) would go
 undetected. This module installs fake `acestep.*` modules with the
 signatures ACE-Step 1.5 actually exposes -- `AceStepHandler` loaded via
 `initialize_service(project_root=..., config_path=<checkpoint name>,
-device=...)`, `LLMHandler` loaded via a *different* method,
-`initialize(project_root=..., config_path=..., device=..., backend=...)`,
+device=...)`, `LLMHandler` loaded via a *different* method with *different*
+argument names, `initialize(checkpoint_dir=..., lm_model_path=...)`,
 module-level `create_sample`, `inference_steps`/`guidance_scale` on
 `GenerationParams` (not `GenerationConfig`), `generate_music(dit_handler=...)`
-(not `handler=`), and audio results as dicts with the actual seed nested at
-`audio["params"]["seed"]` -- then runs `run_job` against them, so
-`worker/acestep_worker.py`'s exact calling convention is verified without
-requiring CUDA or the real acestep package. See SPEC.md sec 13.
+(not `handler=`), audio results as dicts with the actual seed nested at
+`audio["params"]["seed"]`, and FLAC-by-default output unless
+`GenerationConfig(audio_format="wav")` is requested -- then runs `run_job`
+against them, so `worker/acestep_worker.py`'s exact calling convention is
+verified without requiring CUDA or the real acestep package. See SPEC.md
+sec 13.
 """
 
 from __future__ import annotations
@@ -43,17 +45,6 @@ def _write_tiny_wav(path: Path) -> None:
         wf.setsampwidth(2)
         wf.setframerate(8000)
         wf.writeframes(b"\x00\x00" * 400)
-
-
-class FakeLLMHandler:
-    def __init__(self) -> None:
-        self.config_path: str | None = None
-
-    def initialize(self, *, project_root: str, config_path: str, device: str, backend: str) -> None:
-        self.project_root = project_root
-        self.config_path = config_path
-        self.device = device
-        self.backend = backend
 
 
 class FakeGenerationParams:
@@ -106,8 +97,9 @@ class FakeGenerationConfig:
     """Only batch_size -- inference_steps/guidance_scale belong on
     GenerationParams instead (this is exactly what the reviewer flagged)."""
 
-    def __init__(self, *, batch_size: int) -> None:
+    def __init__(self, *, batch_size: int, audio_format: str) -> None:
         self.batch_size = batch_size
+        self.audio_format = audio_format
 
 
 class FakeResult:
@@ -118,11 +110,17 @@ class FakeResult:
 
 
 def _install_fake_acestep(
-    monkeypatch: pytest.MonkeyPatch, log: list[tuple], handler_cls: type | None = None
+    monkeypatch: pytest.MonkeyPatch,
+    log: list[tuple],
+    handler_cls: type | None = None,
+    returned_audio_suffix: str = ".wav",
 ) -> None:
     """Register fake `acestep.*` modules so `worker.acestep_worker`'s lazy
     `from acestep... import ...` statements resolve to them instead of the
-    real (uninstalled) package."""
+    real (uninstalled) package. `returned_audio_suffix` simulates what
+    `generate_music` hands back regardless of the requested
+    `audio_format` -- default `.wav` (the request honored); pass `.flac`
+    to simulate ACE-Step ignoring it and still defaulting to FLAC."""
 
     class DefaultFakeAceStepHandler:
         def __init__(self) -> None:
@@ -148,6 +146,21 @@ def _install_fake_acestep(
             self.device = device
             self.cpu_offload = cpu_offload
 
+    class FakeLLMHandler:
+        def __init__(self) -> None:
+            self.checkpoint_dir: str | None = None
+            self.lm_model_path: str | None = None
+
+        def initialize(self, *, checkpoint_dir: str, lm_model_path: str) -> None:
+            log.append(
+                (
+                    "lm.initialize",
+                    {"checkpoint_dir": checkpoint_dir, "lm_model_path": lm_model_path},
+                )
+            )
+            self.checkpoint_dir = checkpoint_dir
+            self.lm_model_path = lm_model_path
+
     def create_sample(*, lm_handler: Any, query: str, instrumental: bool) -> dict:
         log.append(("create_sample", lm_handler, query, instrumental))
         return {
@@ -164,8 +177,8 @@ def _install_fake_acestep(
         log.append(("generate_music", dit_handler, lm_handler, params, config, save_dir))
         # ACE-Step writes its own output filename -- not mix.wav -- so the
         # adapter has to find and rename it (SPEC.md sec 7.3).
-        out_path = Path(save_dir) / "output_0.wav"
-        _write_tiny_wav(out_path)
+        out_path = Path(save_dir) / f"output_0{returned_audio_suffix}"
+        _write_tiny_wav(out_path)  # fine as fixture bytes regardless of extension
         # Real ACE-Step audio entries are dicts, and the actual seed used is
         # nested under "params", not top-level -- exactly what the reviewer
         # flagged as misread.
@@ -238,6 +251,12 @@ def test_run_job_matches_installed_api_contract(
     assert kwargs["device"] == acestep_worker.DEVICE
     assert kwargs["cpu_offload"] is False  # iterate does not need cpu_offload
 
+    # LLMHandler is loaded through a *different* method with *different*
+    # argument names than the DiT handler (the bug the reviewer flagged).
+    lm_init = next(e for e in log if e[0] == "lm.initialize")
+    assert lm_init[1]["checkpoint_dir"] == str(acestep_worker.CHECKPOINTS_ROOT)
+    assert lm_init[1]["lm_model_path"] == acestep_worker.DEFAULT_LM
+
     generate_call = next(e for e in log if e[0] == "generate_music")
     params, config = generate_call[3], generate_call[4]
     # SPEC.md sec 4.1: iterate = 8 steps, no CFG -- and these live on
@@ -247,6 +266,9 @@ def test_run_job_matches_installed_api_contract(
     assert config.batch_size == 1
     assert not hasattr(config, "inference_steps")
     assert not hasattr(config, "guidance_scale")
+    # ACE-Step defaults to FLAC; the adapter must request WAV explicitly
+    # instead of silently relabeling whatever comes back as .wav.
+    assert config.audio_format == "wav"
 
 
 def test_simple_mode_uses_module_level_create_sample_and_persists_full_plan(
@@ -371,6 +393,10 @@ def test_initialize_worker_preloads_default_iterate_dit_and_lm(
 
     handler_init = next(e for e in log if e[0] == "handler.initialize_service")
     assert handler_init[1]["config_path"] == "acestep-v15-turbo"
+
+    lm_init = next(e for e in log if e[0] == "lm.initialize")
+    assert lm_init[1]["lm_model_path"] == acestep_worker.DEFAULT_LM
+
     assert acestep_worker._STATE["dit_profile"] == "iterate"
     assert acestep_worker._STATE["handler"] is not None
     assert acestep_worker._STATE["lm"] is not None
@@ -398,3 +424,31 @@ def test_initialize_worker_reports_failure_without_crashing(
     assert ready is False
     assert "iterate" in message
     assert acestep_worker._STATE["handler"] is None
+
+
+def test_unexpected_audio_format_is_a_clean_error_not_mislabeled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If ACE-Step ignores audio_format='wav' and still returns its FLAC
+    default (or anything else), the adapter must fail loudly instead of
+    renaming a non-WAV file to mix.wav -- that file wouldn't reliably
+    play/download as the WAV the API and storage layer promise."""
+    log: list[tuple] = []
+    _install_fake_acestep(monkeypatch, log, returned_audio_suffix=".flac")
+
+    plan = {
+        "query": "",
+        "caption": "orchestral swell, cinematic strings",
+        "lyrics": "[Instrumental]",
+        "instrumental": True,
+        "bpm": 90,
+        "keyscale": "D Minor",
+        "duration_sec": 45,
+    }
+    job = {"action": "generate", "dit_profile": "iterate", "seed": -1, "src_audio": None}
+
+    with pytest.raises(RuntimeError, match="unexpected format"):
+        acestep_worker.run_job(job=job, plan=plan, take_id="t5", take_dir=tmp_path / "take5")
+
+    # nothing got renamed/mislabeled
+    assert not (tmp_path / "take5" / "mix.wav").exists()
