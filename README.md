@@ -6,7 +6,11 @@ The product spec is **[SPEC.md](SPEC.md)**. Implement that file. Do not invent e
 
 ## Status
 
-Bootstrap only. Conclave implements SPEC.md in phase order. There is no runnable studio yet.
+Phase 1 (SPEC.md sec 12): FastAPI health/projects/plan/takes/jobs API, SQLite job queue, a
+minimal React shell (library, plan, takes, generate), and a mocked worker for tests. The
+production job backend is `worker/acestep_worker.py`, which calls ACE-Step 1.5's
+`generate_music` -- it requires ACE-Step installed and weights downloaded (see below). Phases
+2-4 (studio loop, base-model swap, LoRA/polish) are not implemented yet.
 
 ## Machine
 
@@ -18,16 +22,74 @@ Windows, RTX 4070 Ti SUPER 16 GB. Default: ACE-Step 2B turbo + 1.7B LM. Bind `12
 |---|---|
 | `SPEC.md` | Sole product spec |
 | `server/` | FastAPI (HTTP, jobs, files) |
-| `worker/` | ACE-Step GPU process |
+| `worker/` | ACE-Step GPU process (`acestep_worker.py`) and the test-only `mock_worker.py` |
 | `web/` | Vite + React studio |
 | `tests/` | pytest, mocked worker, no GPU |
-| `scripts/smoke-gpu.py` | Optional GPU smoke (manual) |
+| `scripts/smoke-gpu.py` | Real ACE-Step turbo smoke (manual, not part of pytest) |
+
+## Setup
+
+```powershell
+py -3.11 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -e ".[dev]"
+```
+
+Download ACE-Step 1.5 (turbo checkpoint + the default 1.7B 5Hz LM) once, per upstream's install
+docs (SPEC.md sec 4, sec 13):
+
+```powershell
+uv run acestep-download   # or the equivalent from ACE-Step-1.5/docs/en/INSTALL.md
+```
+
+Without ACE-Step installed, the server still runs; `generate`/`cover`/... jobs will fail with a
+clear "acestep is not installed" error instead of crashing. Set `BARD_WORKER=mock` to force the
+mocked worker (silent WAV, no GPU) for local UI/API poking without a GPU.
+
+## Run the server
+
+```powershell
+python -m server.app
+```
+
+Binds `127.0.0.1:8421` by default; override with `BARD_PORT`. If `web/dist` exists, the server
+serves the built SPA at `/`; otherwise `/` returns a hint to build or run the frontend dev server.
+
+## Frontend
+
+```powershell
+cd web
+npm install
+npm run build     # writes web/dist, served by the FastAPI app above
+npm run dev        # Vite dev server with a /api proxy to BARD_PORT (default 8421)
+```
+
+## Tests
+
+```powershell
+pytest
+```
+
+Default pytest must not load CUDA or ACE-Step weights (it pins `BARD_WORKER=mock`).
+
+## GPU smoke (manual)
+
+```powershell
+python scripts/smoke-gpu.py
+```
+
+Loads ACE-Step turbo, generates ~10s of instrumental `text2music`, prints the output path, exits
+0. Not part of `pytest`; requires a real GPU and installed weights.
 
 ## Conclave / jail
 
-This clone lives at `wizards-conclave/.projects/wizards-bard`. That `.projects/` folder is the NTFS jail (`jail.root`). Agents may write anything in `.projects`; they must not write Conclave source, `.env`, or `.conclave`.
+The canonical clone lives at `wizards-conclave/.projects/wizards-bard`. That `.projects/` folder
+is the NTFS jail (`jail.root`). Conclave jobs work in their own worktree under
+`.projects/.conclave-wt/<job>` and merge back into that clone. Agents may write anything in
+`.projects`; they must not write Conclave source, `.env`, or `.conclave`.
 
-Do not recreate `C:/Users/isaac/Documents/wizards-bard`. Conclave skips any `repo:` path outside `.projects/`.
+Do not recreate `C:/Users/isaac/Documents/wizards-bard`. Conclave skips any `repo:` path outside
+`.projects/`.
 
 Jail setup (once, elevated, from the Conclave repo):
 
@@ -38,14 +100,3 @@ cd C:\Users\isaac\Documents\wizards-conclave
 ```
 
 Doctor must show PASS for `jail .projects`. Re-run setup after `pnpm install`. `config/projects/bard.yaml` is enabled; goals are implement SPEC.md in phase order.
-
-## Tests
-
-```powershell
-py -3.11 -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -e ".[dev]"
-pytest
-```
-
-Default pytest must not load CUDA or ACE-Step weights.

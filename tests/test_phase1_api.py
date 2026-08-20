@@ -19,6 +19,10 @@ from server.app import app
 def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("BARD_PROJECTS_DIR", str(tmp_path / "projects"))
     monkeypatch.setenv("BARD_DB_PATH", str(tmp_path / "bard.db"))
+    # Tests always use the mocked worker; the real acestep_worker is
+    # production's default (see server/jobs.py) and is exercised only by the
+    # manual, non-pytest scripts/smoke-gpu.py.
+    monkeypatch.setenv("BARD_WORKER", "mock")
     with TestClient(app) as c:
         yield c
 
@@ -203,6 +207,42 @@ def test_studio_ops_required_for_extract_lego_complete(client: TestClient) -> No
             },
         )
         assert resp.status_code == 200, action
+
+
+def test_cover_repaint_extract_require_a_real_source(client: TestClient) -> None:
+    project = client.post("/api/projects", json={"title": "Source Test"}).json()
+    project_id = project["id"]
+    client.put(f"/api/projects/{project_id}/plan", json=storage.default_plan())
+
+    for action in ("cover", "repaint", "extract", "lego", "complete"):
+        # no source_take_id and no upload_path at all
+        resp = client.post(
+            f"/api/projects/{project_id}/jobs",
+            json={"action": action, "track_name": "vocals"},
+        )
+        assert resp.status_code == 400, action
+
+        # a source_take_id that doesn't exist
+        resp = client.post(
+            f"/api/projects/{project_id}/jobs",
+            json={
+                "action": action,
+                "source_take_id": "does-not-exist",
+                "track_name": "vocals",
+            },
+        )
+        assert resp.status_code == 400, action
+
+        # an upload_path that escapes the project's jail
+        resp = client.post(
+            f"/api/projects/{project_id}/jobs",
+            json={
+                "action": action,
+                "upload_path": "../../../../evil.wav",
+                "track_name": "vocals",
+            },
+        )
+        assert resp.status_code == 400, action
 
 
 def test_invalid_action_rejected(client: TestClient) -> None:

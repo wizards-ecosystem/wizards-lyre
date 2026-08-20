@@ -230,6 +230,15 @@ def take_audio_path(project_id: str, take_id: str) -> Path:
     raise TakeNotFound(take_id)
 
 
+def resolve_upload_path(project_id: str, upload_path: str) -> Path:
+    """Resolve a job's `upload_path` relative to its project dir, enforcing
+    the same jail as every other write (SPEC.md sec 8.1 / sec 11)."""
+    rel = Path(upload_path)
+    if rel.is_absolute() or ".." in rel.parts:
+        raise PathJailError(f"upload_path must be a relative path under the project: {upload_path}")
+    return jailed_path(project_id, *rel.parts)
+
+
 def allocate_take_dir(project_id: str) -> tuple[str, Path]:
     load_project(project_id)
     take_id = new_id()

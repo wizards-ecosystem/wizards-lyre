@@ -6,11 +6,13 @@ Binds 127.0.0.1 only; port defaults to 8421, overridable via BARD_PORT.
 
 from __future__ import annotations
 
+import os
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, Optional
 
 from fastapi import FastAPI
 from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from server import config, jobs, storage
@@ -80,7 +82,11 @@ def _value_error_handler(request, exc: ValueError):  # noqa: ANN001, ARG001
 
 @app.get("/api/health")
 def health() -> dict[str, Any]:
-    return {"ok": True, "gpu": "none (mock worker, phase 1)", "dit_loaded": None}
+    return {
+        "ok": True,
+        "gpu": f"worker backend: {os.environ.get('BARD_WORKER', 'acestep')}",
+        "dit_loaded": None,
+    }
 
 
 @app.get("/api/projects")
@@ -136,6 +142,23 @@ def get_job(job_id: str) -> dict:
 @app.get("/api/jobs")
 def list_jobs(limit: int = 20) -> list[dict]:
     return jobs.list_recent_jobs(limit=limit)
+
+
+# Prod: FastAPI serves the built SPA from web/dist (SPEC.md sec 5). Registered
+# last so it never shadows the /api/* routes above. `npm run build` in web/
+# produces dist/; until then, "/" reports how to build or run the dev server.
+_WEB_DIST = config.REPO_ROOT / "web" / "dist"
+if _WEB_DIST.is_dir():
+    app.mount("/", StaticFiles(directory=_WEB_DIST, html=True), name="web")
+else:
+
+    @app.get("/")
+    def _web_not_built() -> dict[str, Any]:
+        return {
+            "ok": True,
+            "hint": "web/dist not found; run `npm install && npm run build` in web/, "
+            "or `npm run dev` for the Vite dev server (proxies /api to this server).",
+        }
 
 
 def main() -> None:
