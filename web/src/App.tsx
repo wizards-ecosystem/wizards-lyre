@@ -67,6 +67,16 @@ export default function App() {
   const saveChainRef = useRef<Promise<void>>(Promise.resolve());
   const lastSaveOutcomeRef = useRef<Promise<void>>(Promise.resolve());
 
+  // Mirrors activeId, but updated synchronously (the instant a switch is
+  // committed, not after the next render) so refreshDetail can tell whether
+  // its response is still for the project actually on screen. Selecting A
+  // then B rapidly fires two overlapping GET /api/projects/{id} requests
+  // that can resolve in either order; without this check, A's slower
+  // response can land after B's and overwrite `detail` with A's data while
+  // activeId (and the rest of the UI) is already B -- so a subsequent edit
+  // would be saved under B's project id but built from A's plan.
+  const activeIdRef = useRef<string | null>(null);
+
   useEffect(() => {
     return () => {
       if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
@@ -106,13 +116,19 @@ export default function App() {
 
   // Flushes any pending/in-flight save for the *current* project before
   // switching to a different one (SPEC.md: a shared save slot must not
-  // silently drop an edit when the user switches projects mid-debounce).
+  // silently drop an edit when the user switches projects mid-debounce). If
+  // that flush fails, the switch must not proceed: activeId must stay put
+  // so the failed edit is still visible/retryable instead of being swapped
+  // out from under the user or silently discarded when the next project's
+  // edits reuse the same pending-save slot.
   async function switchActiveProject(id: string): Promise<void> {
     try {
       await flushPendingPlanSave();
     } catch (err) {
       setErrorMsg(String(err));
+      return;
     }
+    activeIdRef.current = id;
     setActiveId(id);
   }
 
@@ -121,7 +137,13 @@ export default function App() {
   }
 
   async function refreshDetail(id: string) {
-    setDetail(await api.getProject(id));
+    const data = await api.getProject(id);
+    // Discard a response that's no longer for the active project (see
+    // activeIdRef above) -- covers both a rapid A->B switch racing this
+    // fetch and generate()'s post-job refresh completing after the user
+    // has since switched away from the project the job ran in.
+    if (activeIdRef.current !== id) return;
+    setDetail(data);
   }
 
   useEffect(() => {

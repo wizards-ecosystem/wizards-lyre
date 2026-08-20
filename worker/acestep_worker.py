@@ -384,6 +384,15 @@ def _plan_from_query(create_sample_fn: Any, lm: Any, plan: dict[str, Any]) -> di
             return sample.get(name, fallback)
         return getattr(sample, name, fallback)
 
+    # Mirrors generate_music's GenerationResult.success handling further
+    # down in this module: absent means the installed acestep predates this
+    # field (treated as success, matching the fakes/tests below), but an
+    # explicit False must fail the job instead of silently generating from
+    # an empty/fallback caption and lyrics.
+    if not _field("success", True):
+        detail = _field("error", None) or _field("message", None) or _field("status", None)
+        raise RuntimeError(f"create_sample reported failure: {detail or 'no detail provided'}")
+
     return {
         **plan,
         "caption": _field("caption", plan.get("caption", "")),

@@ -130,6 +130,7 @@ def _install_fake_acestep(
     lm_init_result: tuple[str, bool] = ("lm ready", True),
     handler_init_result: tuple[str, bool] = ("dit ready", True),
     audio_path_override: Path | None = None,
+    create_sample_result: dict | None = None,
 ) -> None:
     """Register fake `acestep.*` modules so `worker.acestep_worker`'s lazy
     `from acestep... import ...` statements resolve to them instead of the
@@ -141,7 +142,10 @@ def _install_fake_acestep(
     AceStepHandler.initialize_service's `(status_message, success)` return;
     pass a falsy `success` to simulate a failed load that must not be
     cached as ready. `audio_path_override` simulates ACE-Step reporting an
-    audio file at an arbitrary path instead of writing into `save_dir`."""
+    audio file at an arbitrary path instead of writing into `save_dir`.
+    `create_sample_result` overrides module-level `create_sample`'s default
+    successful return -- pass e.g. `{"success": False, "error": "..."}` to
+    simulate a documented planning failure."""
 
     class DefaultFakeAceStepHandler:
         def __init__(self) -> None:
@@ -193,6 +197,8 @@ def _install_fake_acestep(
 
     def create_sample(*, lm_handler: Any, query: str, instrumental: bool) -> dict:
         log.append(("create_sample", lm_handler, query, instrumental))
+        if create_sample_result is not None:
+            return create_sample_result
         return {
             "caption": f"auto: {query}",
             "lyrics": "[Instrumental]" if instrumental else f"[Verse]\n{query}",
@@ -371,6 +377,42 @@ def test_simple_mode_uses_module_level_create_sample_and_persists_full_plan(
     # "vocal_language" (Bard's own plan.json field name) -- confirms
     # _plan_from_query maps it correctly before generation even runs.
     assert params.vocal_language == "ja"
+
+
+def test_create_sample_failure_fails_job_instead_of_generating(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If create_sample reports success=False (e.g. ACE-Step's planner
+    itself failed), the adapter must fail the job with that detail instead
+    of proceeding to generate_music from an empty/fallback caption and
+    lyrics -- mirrors how generate_music's own GenerationResult.success is
+    already checked below."""
+    log: list[tuple] = []
+    _install_fake_acestep(
+        monkeypatch,
+        log,
+        create_sample_result={"success": False, "error": "planner overloaded"},
+    )
+
+    plan = {
+        "query": "dreamy synthwave drive",
+        "caption": "",
+        "lyrics": "",
+        "instrumental": False,
+        "bpm": None,
+        "keyscale": None,
+        "duration_sec": None,
+        "vocal_language": None,
+        "timesignature": None,
+    }
+    job = {"action": "generate", "dit_profile": "iterate", "seed": -1, "src_audio": None}
+
+    with pytest.raises(RuntimeError, match="planner overloaded"):
+        acestep_worker.run_job(job=job, plan=plan, take_id="t2b", take_dir=tmp_path / "take2b")
+
+    # Must fail before ever reaching generate_music -- no audio should have
+    # been produced from the empty/fallback plan.
+    assert not any(e[0] == "generate_music" for e in log)
 
 
 def test_quality_profile_requests_cpu_offload(
