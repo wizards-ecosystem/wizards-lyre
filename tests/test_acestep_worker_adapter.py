@@ -4,12 +4,16 @@
 call-contract mismatch against the real ACE-Step 1.5 Python API (wrong
 method name, wrong argument, a field on the wrong class) would go
 undetected. This module installs fake `acestep.*` modules with the
-signatures ACE-Step 1.5 actually exposes -- `AceStepHandler`/`LLMHandler`
-constructed bare and loaded via `initialize_service(config_path=...)`,
-module-level `create_sample`, `num_inference_steps`/`use_cfg` on
-`GenerationParams` (not `GenerationConfig`) -- and runs `run_job` against
-them, so `worker/acestep_worker.py`'s exact calling convention is verified
-without requiring CUDA or the real acestep package. See SPEC.md sec 13.
+signatures ACE-Step 1.5 actually exposes -- `AceStepHandler` loaded via
+`initialize_service(project_root=..., config_path=<checkpoint name>,
+device=...)`, `LLMHandler` loaded via a *different* method,
+`initialize(project_root=..., config_path=..., device=..., backend=...)`,
+module-level `create_sample`, `inference_steps`/`guidance_scale` on
+`GenerationParams` (not `GenerationConfig`), `generate_music(dit_handler=...)`
+(not `handler=`), and audio results as dicts with the actual seed nested at
+`audio["params"]["seed"]` -- then runs `run_job` against them, so
+`worker/acestep_worker.py`'s exact calling convention is verified without
+requiring CUDA or the real acestep package. See SPEC.md sec 13.
 """
 
 from __future__ import annotations
@@ -45,13 +49,16 @@ class FakeLLMHandler:
     def __init__(self) -> None:
         self.config_path: str | None = None
 
-    def initialize_service(self, *, config_path: str) -> None:
+    def initialize(self, *, project_root: str, config_path: str, device: str, backend: str) -> None:
+        self.project_root = project_root
         self.config_path = config_path
+        self.device = device
+        self.backend = backend
 
 
 class FakeGenerationParams:
     """Mirrors ACE-Step 1.5's real signature: every per-request field,
-    including num_inference_steps/use_cfg, lives here -- not on
+    including inference_steps/guidance_scale, lives here -- not on
     GenerationConfig. A missing/extra/misplaced kwarg raises TypeError,
     same as it would against the real class."""
 
@@ -73,8 +80,8 @@ class FakeGenerationParams:
         repainting_start: Any,
         repainting_end: Any,
         track_name: Any,
-        num_inference_steps: int,
-        use_cfg: bool,
+        inference_steps: int,
+        guidance_scale: float,
     ) -> None:
         self.task_type = task_type
         self.caption = caption
@@ -91,26 +98,20 @@ class FakeGenerationParams:
         self.repainting_start = repainting_start
         self.repainting_end = repainting_end
         self.track_name = track_name
-        self.num_inference_steps = num_inference_steps
-        self.use_cfg = use_cfg
+        self.inference_steps = inference_steps
+        self.guidance_scale = guidance_scale
 
 
 class FakeGenerationConfig:
-    """Only batch_size -- num_inference_steps/use_cfg belong on
+    """Only batch_size -- inference_steps/guidance_scale belong on
     GenerationParams instead (this is exactly what the reviewer flagged)."""
 
     def __init__(self, *, batch_size: int) -> None:
         self.batch_size = batch_size
 
 
-class FakeAudio:
-    def __init__(self, path: str, seed: int) -> None:
-        self.path = path
-        self.seed = seed
-
-
 class FakeResult:
-    def __init__(self, audios: list[FakeAudio], extra_outputs: dict[str, Any]) -> None:
+    def __init__(self, audios: list[dict], extra_outputs: dict[str, Any]) -> None:
         self.success = True
         self.audios = audios
         self.extra_outputs = extra_outputs
@@ -128,9 +129,23 @@ def _install_fake_acestep(
             self.config_path: str | None = None
             self.cpu_offload = False
 
-        def initialize_service(self, *, config_path: str, cpu_offload: bool = False) -> None:
-            log.append(("handler.initialize_service", config_path, cpu_offload))
+        def initialize_service(
+            self, *, project_root: str, config_path: str, device: str, cpu_offload: bool = False
+        ) -> None:
+            log.append(
+                (
+                    "handler.initialize_service",
+                    {
+                        "project_root": project_root,
+                        "config_path": config_path,
+                        "device": device,
+                        "cpu_offload": cpu_offload,
+                    },
+                )
+            )
+            self.project_root = project_root
             self.config_path = config_path
+            self.device = device
             self.cpu_offload = cpu_offload
 
     def create_sample(*, lm_handler: Any, query: str, instrumental: bool) -> dict:
@@ -144,21 +159,27 @@ def _install_fake_acestep(
         }
 
     def generate_music(
-        *, handler: Any, lm_handler: Any, params: Any, config: Any, save_dir: str
+        *, dit_handler: Any, lm_handler: Any, params: Any, config: Any, save_dir: str
     ) -> FakeResult:
-        log.append(("generate_music", handler, lm_handler, params, config, save_dir))
+        log.append(("generate_music", dit_handler, lm_handler, params, config, save_dir))
         # ACE-Step writes its own output filename -- not mix.wav -- so the
         # adapter has to find and rename it (SPEC.md sec 7.3).
         out_path = Path(save_dir) / "output_0.wav"
         _write_tiny_wav(out_path)
+        # Real ACE-Step audio entries are dicts, and the actual seed used is
+        # nested under "params", not top-level -- exactly what the reviewer
+        # flagged as misread.
+        audio = {"path": str(out_path), "params": {"seed": 999}}
         return FakeResult(
-            audios=[FakeAudio(path=str(out_path), seed=999)],
+            audios=[audio],
             extra_outputs={
                 "caption": params.caption,
                 "lyrics": params.lyrics,
                 "bpm": params.bpm,
                 "keyscale": params.keyscale,
                 "duration": params.duration,
+                "vocal_language": "en",
+                "timesignature": "4/4",
             },
         )
 
@@ -205,25 +226,30 @@ def test_run_job_matches_installed_api_contract(
     assert meta["task_type"] == "text2music"
     assert meta["dit_profile"] == "iterate"
     assert meta["caption"] == plan["caption"]
-    assert meta["seed"] == 999  # from the fake audio record, not the -1 request
+    # the actual seed used, read from audio["params"]["seed"] -- not the -1
+    # request, and not silently left as -1 (SPEC.md sec 7.3)
+    assert meta["seed"] == 999
     assert (tmp_path / "take1" / "mix.wav").exists()  # renamed from output_0.wav
 
     handler_init = next(e for e in log if e[0] == "handler.initialize_service")
-    assert handler_init[1] == acestep_worker._config_path("acestep-v15-turbo")
-    assert handler_init[2] is False  # iterate does not need cpu_offload
+    kwargs = handler_init[1]
+    assert kwargs["project_root"] == str(acestep_worker.CHECKPOINTS_ROOT)
+    assert kwargs["config_path"] == "acestep-v15-turbo"
+    assert kwargs["device"] == acestep_worker.DEVICE
+    assert kwargs["cpu_offload"] is False  # iterate does not need cpu_offload
 
     generate_call = next(e for e in log if e[0] == "generate_music")
     params, config = generate_call[3], generate_call[4]
     # SPEC.md sec 4.1: iterate = 8 steps, no CFG -- and these live on
     # GenerationParams, not GenerationConfig (the bug the reviewer flagged).
-    assert params.num_inference_steps == 8
-    assert params.use_cfg is False
+    assert params.inference_steps == 8
+    assert params.guidance_scale == 1.0
     assert config.batch_size == 1
-    assert not hasattr(config, "num_inference_steps")
-    assert not hasattr(config, "use_cfg")
+    assert not hasattr(config, "inference_steps")
+    assert not hasattr(config, "guidance_scale")
 
 
-def test_simple_mode_uses_module_level_create_sample(
+def test_simple_mode_uses_module_level_create_sample_and_persists_full_plan(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     log: list[tuple] = []
@@ -237,6 +263,8 @@ def test_simple_mode_uses_module_level_create_sample(
         "bpm": None,
         "keyscale": None,
         "duration_sec": None,
+        "vocal_language": None,
+        "timesignature": None,
     }
     job = {"action": "generate", "dit_profile": "iterate", "seed": -1, "src_audio": None}
 
@@ -251,6 +279,13 @@ def test_simple_mode_uses_module_level_create_sample(
     assert plan_patch is not None
     assert "dreamy synthwave drive" in plan_patch["caption"]
     assert meta["caption"] == plan_patch["caption"]
+    # SPEC.md sec 7.2: persist everything the LM/ACE-Step filled in, not
+    # just caption/lyrics/bpm/keyscale -- duration and other plan metadata
+    # (language, time signature) must round-trip too.
+    assert plan_patch["duration_sec"] == 30
+    assert plan_patch["vocal_language"] == "en"
+    assert plan_patch["timesignature"] == "4/4"
+    assert meta["duration_sec"] == 30
 
     generate_call = next(e for e in log if e[0] == "generate_music")
     params = generate_call[3]
@@ -282,12 +317,12 @@ def test_quality_profile_requests_cpu_offload(
     assert meta["dit_profile"] == "quality"
 
     handler_init = next(e for e in log if e[0] == "handler.initialize_service")
-    assert handler_init[2] is True  # cpu_offload=True was requested for XL
+    assert handler_init[1]["cpu_offload"] is True  # requested for XL
 
     generate_call = next(e for e in log if e[0] == "generate_music")
     params = generate_call[3]
-    assert params.num_inference_steps == 8
-    assert params.use_cfg is False
+    assert params.inference_steps == 8
+    assert params.guidance_scale == 1.0
 
 
 def test_api_mismatch_raises_worker_unavailable_not_a_crash(

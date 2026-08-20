@@ -16,17 +16,22 @@ ACE-Step/CUDA can't take the FastAPI server down with it either.
 
 Adapter notes (installed ACE-Step 1.5 Python API, SPEC.md sec 13 -- "follow
 ACE-Step's current API and keep Bard's HTTP schema stable with an
-adapter"): `AceStepHandler`/`LLMHandler` are constructed with no arguments
-and then loaded via `initialize_service(config_path=...)`; simple-mode
+adapter"): `AceStepHandler`/`LLMHandler` are constructed with no arguments.
+`AceStepHandler` is loaded via `initialize_service(project_root=...,
+config_path=<checkpoint name>, device=...)`; `LLMHandler` is loaded via
+`initialize(project_root=..., config_path=<lm name>, device=...,
+backend=...)` -- a different method than the DiT handler. Simple-mode
 planning goes through the module-level `acestep.inference.create_sample`
-(not a handler method); `GenerationParams` carries every per-request field,
-including `num_inference_steps`/`use_cfg` (not `duration_sec` -- that's
-`duration`), while `GenerationConfig` only carries `batch_size`;
-`generate_music` takes both. Its `GenerationResult` reports `success` plus
-generated files in `audios` and LM/CoT-filled metadata in `extra_outputs`,
-not directly on the result object. Every acestep call below is wrapped so a
-further API drift raises `WorkerUnavailable` (job `error`, not a crash)
-instead of an unhandled exception; `tests/test_acestep_worker_adapter.py`
+(not a handler method). `GenerationParams` carries every per-request field
+-- `inference_steps` and `guidance_scale` (not `num_inference_steps`/
+`use_cfg`), `duration` (not `duration_sec`) -- while `GenerationConfig`
+only carries `batch_size`; `generate_music` takes both plus `dit_handler`
+(not `handler`) and `lm_handler`. Its `GenerationResult` reports `success`
+plus generated files in `audios` (dicts) and LM/CoT-filled metadata in
+`extra_outputs`; the actual seed used lives nested at
+`audio["params"]["seed"]`, not top-level. Every acestep call below is
+wrapped so a further API drift raises `WorkerUnavailable` (job `error`, not
+a crash) instead of an unhandled exception; `tests/test_acestep_worker_adapter.py`
 exercises this whole call contract against fake acestep modules so a
 mismatch is caught without needing CUDA installed.
 """
@@ -54,25 +59,29 @@ DIT_CHECKPOINTS = {
 DEFAULT_LM = "acestep-5Hz-lm-1.7B"
 LM_BACKEND = "pt"  # SPEC.md sec 4.2: vLLM is not a reliable native-Windows backend.
 
-# SPEC.md sec 6: weights live under checkpoints/<name>/ (gitignored).
+# SPEC.md sec 6: weights live under checkpoints/<name>/ (gitignored). This is
+# `project_root`; `config_path` is just the bare checkpoint name above, not a
+# filesystem path under it.
 CHECKPOINTS_ROOT = Path(os.environ.get("BARD_CHECKPOINTS_DIR", "checkpoints"))
+DEVICE = os.environ.get("BARD_DEVICE", "cuda")
 
 # SPEC.md sec 4.1: XL turbo (`quality`) needs CPU offload on a 16 GB card;
 # every other profile fits without it.
 CPU_OFFLOAD_PROFILES = {"quality"}
 
-# SPEC.md sec 4.1 DiT table: steps / whether CFG is used, per profile.
+# SPEC.md sec 4.1 DiT table: steps / CFG guidance per profile. CFG "no"
+# profiles use a guidance_scale of 1.0 (no classifier-free guidance).
 GENERATION_STEPS = {
     "iterate": 8,
     "polish": 50,
     "quality": 8,
     "studio_ops": 50,
 }
-GENERATION_USE_CFG = {
-    "iterate": False,
-    "polish": True,
-    "quality": False,
-    "studio_ops": True,
+GENERATION_GUIDANCE_SCALE = {
+    "iterate": 1.0,
+    "polish": 7.5,
+    "quality": 1.0,
+    "studio_ops": 7.5,
 }
 
 TASK_TYPE_BY_ACTION = {
@@ -140,10 +149,6 @@ def _api_method_call(step: str, obj: Any, method_name: str, *args, **kwargs):
         ) from exc
 
 
-def _config_path(checkpoint_name: str) -> str:
-    return str(CHECKPOINTS_ROOT / checkpoint_name / "config.yaml")
-
-
 def _handler_supports_cpu_offload(AceStepHandler: Any) -> bool:
     try:
         params = inspect.signature(AceStepHandler.initialize_service).parameters
@@ -193,7 +198,11 @@ def _ensure_loaded(dit_profile: str) -> tuple[Any, Any, Any]:
                 raise WorkerUnavailable(reason)
 
         handler = _api_call("AceStepHandler()", AceStepHandler)
-        init_kwargs: dict[str, Any] = {"config_path": _config_path(checkpoint)}
+        init_kwargs: dict[str, Any] = {
+            "project_root": str(CHECKPOINTS_ROOT),
+            "config_path": checkpoint,
+            "device": DEVICE,
+        }
         if cpu_offload:
             init_kwargs["cpu_offload"] = True
         _api_method_call(
@@ -205,11 +214,16 @@ def _ensure_loaded(dit_profile: str) -> tuple[Any, Any, Any]:
 
     if _STATE["lm"] is None:
         lm = _api_call("LLMHandler()", LLMHandler)
+        # LLMHandler is loaded through `initialize`, not `initialize_service`
+        # -- a different method than the DiT handler above.
         _api_method_call(
-            "LLMHandler.initialize_service",
+            "LLMHandler.initialize",
             lm,
-            "initialize_service",
-            config_path=_config_path(DEFAULT_LM),
+            "initialize",
+            project_root=str(CHECKPOINTS_ROOT),
+            config_path=DEFAULT_LM,
+            device=DEVICE,
+            backend=LM_BACKEND,
         )
         _STATE["lm"] = lm
 
@@ -260,6 +274,8 @@ def _plan_from_query(create_sample_fn: Any, lm: Any, plan: dict[str, Any]) -> di
         "bpm": _field("bpm", plan.get("bpm")),
         "keyscale": _field("keyscale", plan.get("keyscale")),
         "duration_sec": _field("duration", plan.get("duration_sec")),
+        "vocal_language": _field("vocal_language", plan.get("vocal_language")),
+        "timesignature": _field("timesignature", plan.get("timesignature")),
     }
 
 
@@ -318,8 +334,8 @@ def run_job(
             repainting_start=job.get("repainting_start"),
             repainting_end=job.get("repainting_end"),
             track_name=job.get("track_name"),
-            num_inference_steps=GENERATION_STEPS[dit_profile],
-            use_cfg=GENERATION_USE_CFG[dit_profile],
+            inference_steps=GENERATION_STEPS[dit_profile],
+            guidance_scale=GENERATION_GUIDANCE_SCALE[dit_profile],
         )
         config = _api_call(
             "GenerationConfig",
@@ -329,7 +345,7 @@ def run_job(
         result = _api_call(
             "generate_music",
             generate_music,
-            handler=handler,
+            dit_handler=handler,
             lm_handler=lm,
             params=params,
             config=config,
@@ -368,20 +384,37 @@ def run_job(
     bpm = _extra("bpm", effective_plan.get("bpm"))
     keyscale = _extra("keyscale", effective_plan.get("keyscale"))
     duration_sec = _extra("duration", effective_plan.get("duration_sec"))
-    seed = _result_field(audio, "seed", None)
+    vocal_language = _extra("vocal_language", effective_plan.get("vocal_language"))
+    timesignature = _extra("timesignature", effective_plan.get("timesignature"))
+
+    # The actual seed used lives nested under audio["params"]["seed"] --
+    # not top-level on the audio record -- with progressively looser
+    # fallbacks for other upstream versions. Falling through to the
+    # requested seed would silently record -1 for random generation instead
+    # of the seed ACE-Step actually used (SPEC.md sec 7.3).
+    audio_params = _result_field(audio, "params", None)
+    seed = _result_field(audio_params, "seed", None)
     if seed is None:
-        seed = _extra("seed", job.get("seed", -1))
+        seed = _result_field(audio, "seed", None)
+    if seed is None:
+        seed = _extra("seed", None)
+    if seed is None:
+        seed = job.get("seed", -1)
 
     plan_patch = None
     if simple_mode:
         # The LM filled caption/lyrics/metas from `query` -- persist them
-        # onto plan.json instead of discarding them (SPEC.md sec 7.2).
+        # onto plan.json instead of discarding them (SPEC.md sec 7.2),
+        # including duration and any other metadata ACE-Step filled in.
         plan_patch = {
             **plan,
             "caption": caption,
             "lyrics": lyrics,
             "bpm": bpm,
             "keyscale": keyscale,
+            "duration_sec": duration_sec,
+            "vocal_language": vocal_language,
+            "timesignature": timesignature,
         }
 
     meta = {
