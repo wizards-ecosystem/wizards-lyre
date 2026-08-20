@@ -38,9 +38,12 @@ renderer. It has no `negative_tags` or `track_name` field (both raised
 TypeError on every real call): plan.json's `negative` list is not sent
 until a real ACE-Step field name is confirmed, and `track_name` maps to
 the task-specific `instruction` field, sent only for extract/lego/complete
-(SPEC.md sec 4.4). `GenerationConfig` carries `batch_size` and
+(SPEC.md sec 4.4). `GenerationConfig` carries `batch_size`,
 `audio_format="wav"` (ACE-Step defaults to FLAC otherwise, which this
-adapter must not silently relabel as `.wav`); `generate_music` takes both
+adapter must not silently relabel as `.wav`), and `use_random_seed` --
+`GenerationParams.seed` alone is not enough to reproduce a take: this must
+be explicitly `False` whenever a fixed (non--1) seed is requested, or
+ACE-Step's own default (`True`) ignores it; `generate_music` takes both
 plus `dit_handler` (not `handler`)
 and `lm_handler`. Its `GenerationResult` reports `success` plus generated
 files in `audios` (dicts) and LM/CoT-filled metadata in `extra_outputs`;
@@ -377,6 +380,10 @@ def _plan_from_query(create_sample_fn: Any, lm: Any, plan: dict[str, Any]) -> di
         lm_handler=lm,
         query=plan.get("query"),
         instrumental=plan.get("instrumental", False),
+        # Without this, create_sample is free to pick any language for the
+        # lyrics it writes -- the plan's own vocal_language (default "en",
+        # SPEC.md sec 7.2) is what's supposed to constrain that.
+        vocal_language=plan.get("vocal_language"),
     )
 
     def _field(name: str, fallback: Any) -> Any:
@@ -446,6 +453,16 @@ def run_job(
             effective_plan.get(k) is None for k in ("bpm", "keyscale", "duration_sec")
         )
 
+        # SPEC.md sec 7.3: "-1 from the user means worker picks and records
+        # it" -- any other value is a fixed seed the user expects to be able
+        # to reproduce. Passing `seed` on GenerationParams is not enough by
+        # itself: ACE-Step's GenerationConfig.use_random_seed defaults True
+        # upstream and overrides it, so a fixed seed must also flip that off
+        # or a "regenerate with this seed" request can silently come back
+        # different every time.
+        seed = job.get("seed", -1)
+        use_random_seed = seed == -1
+
         # plan.json's `negative` (negative prompts) has no confirmed
         # equivalent in the installed ACE-Step's GenerationParams -- the
         # previous `negative_tags` kwarg didn't exist and raised TypeError
@@ -465,7 +482,7 @@ def run_job(
             timesignature=effective_plan.get("timesignature"),
             thinking=simple_mode,
             use_cot_metas=use_cot_metas,
-            seed=job.get("seed", -1),
+            seed=seed,
             src_audio=job.get("src_audio"),
             audio_cover_strength=job.get("audio_cover_strength"),
             repainting_start=job.get("repainting_start"),
@@ -488,6 +505,7 @@ def run_job(
             # archive we rename to mix.wav below actually is one (SPEC.md
             # sec 7: mix.wav is "preferred archive").
             audio_format="wav",
+            use_random_seed=use_random_seed,
         )
         result = _api_call(
             "generate_music",

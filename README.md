@@ -43,22 +43,29 @@ machine that runs `worker.run_worker`, not on a server-only box. Install it befo
 weights:
 
 ```powershell
+$bardRoot = Get-Location    # `cd -` isn't a thing in Windows PowerShell -- come back explicitly
 git clone https://github.com/ace-step/ACE-Step-1.5 ..\ACE-Step-1.5
 cd ..\ACE-Step-1.5
 pip install -e .          # follow docs/en/INSTALL.md there if this repo's exact steps have drifted
-cd -
+cd $bardRoot
 ```
 
 Once `acestep` is importable and its download entry point is on PATH, pull the turbo checkpoint +
 the default 1.7B 5Hz LM once. The exact command name comes from
 `ACE-Step-1.5/docs/en/INSTALL.md`; if you installed ACE-Step with `uv` instead of `pip`, run it as
-`uv run acestep-download` there instead:
+`uv run acestep-download` there instead. Run it from **this repo's root** (not the `ACE-Step-1.5`
+checkout) -- `worker/acestep_worker.py`'s `CHECKPOINTS_ROOT` resolves the relative default
+`checkpoints/` from wherever `worker.run_worker` is launched, and `acestep-download` writes to a
+`checkpoints/` under its own current directory the same way, so the two must be run from the same
+place or the worker won't find what was downloaded:
 
 ```powershell
 acestep-download
 ```
 
-Weights land under `checkpoints/` by default (override with `BARD_CHECKPOINTS_DIR`) -- see
+Weights land under `checkpoints/` by default, relative to the directory `acestep-download` above
+was run from (override the worker's read side with `BARD_CHECKPOINTS_DIR` if you'd rather point it
+at weights downloaded elsewhere, e.g. the `ACE-Step-1.5` checkout's own `checkpoints/`) -- see
 `worker/acestep_worker.py`'s `CHECKPOINTS_ROOT`.
 
 Without ACE-Step installed, the server still runs; `generate` jobs (phase 1's only accepted

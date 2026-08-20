@@ -107,12 +107,16 @@ class FakeGenerationParams:
 
 
 class FakeGenerationConfig:
-    """Only batch_size -- inference_steps/guidance_scale belong on
-    GenerationParams instead (this is exactly what the reviewer flagged)."""
+    """batch_size/audio_format/use_random_seed -- inference_steps/
+    guidance_scale belong on GenerationParams instead (this is exactly what
+    the reviewer flagged). use_random_seed defaults True upstream and must
+    be explicitly False for a fixed (non--1) seed to actually be honored --
+    also reviewer-flagged."""
 
-    def __init__(self, *, batch_size: int, audio_format: str) -> None:
+    def __init__(self, *, batch_size: int, audio_format: str, use_random_seed: bool) -> None:
         self.batch_size = batch_size
         self.audio_format = audio_format
+        self.use_random_seed = use_random_seed
 
 
 class FakeResult:
@@ -195,8 +199,10 @@ def _install_fake_acestep(
             self.lm_model_path = lm_model_path
             return lm_init_result
 
-    def create_sample(*, lm_handler: Any, query: str, instrumental: bool) -> dict:
-        log.append(("create_sample", lm_handler, query, instrumental))
+    def create_sample(
+        *, lm_handler: Any, query: str, instrumental: bool, vocal_language: Any
+    ) -> dict:
+        log.append(("create_sample", lm_handler, query, instrumental, vocal_language))
         if create_sample_result is not None:
             return create_sample_result
         return {
@@ -329,6 +335,55 @@ def test_run_job_matches_installed_api_contract(
     # only -- see test_track_name_maps_to_instruction_for_studio_ops).
     assert not hasattr(params, "negative_tags")
     assert params.instruction is None
+    # SPEC.md sec 7.3: -1 means "worker picks" -- ACE-Step's own random-seed
+    # path, not a fixed request.
+    assert params.seed == -1
+    assert config.use_random_seed is True
+
+
+def test_fixed_seed_disables_use_random_seed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A positive job seed must actually be reproducible: GenerationParams.seed
+    alone is not enough upstream -- GenerationConfig.use_random_seed defaults
+    True and overrides it unless explicitly turned off (reviewer-flagged:
+    'consequently regenerating with a recorded seed can produce different
+    audio'). -1 keeps ACE-Step's own random path."""
+    log: list[tuple] = []
+    _install_fake_acestep(monkeypatch, log)
+
+    plan = {
+        "query": "",
+        "caption": "orchestral swell",
+        "lyrics": "[Instrumental]",
+        "instrumental": True,
+        "bpm": 90,
+        "keyscale": "D Minor",
+        "duration_sec": 45,
+        "vocal_language": "en",
+        "timesignature": "3/4",
+    }
+
+    acestep_worker.run_job(
+        job={"action": "generate", "dit_profile": "iterate", "seed": 12345, "src_audio": None},
+        plan=plan,
+        take_id="tfixed",
+        take_dir=tmp_path / "take_fixed",
+    )
+    generate_call = next(e for e in log if e[0] == "generate_music")
+    params, config = generate_call[3], generate_call[4]
+    assert params.seed == 12345
+    assert config.use_random_seed is False
+
+    log.clear()
+    acestep_worker.run_job(
+        job={"action": "generate", "dit_profile": "iterate", "seed": -1, "src_audio": None},
+        plan=plan,
+        take_id="trandom",
+        take_dir=tmp_path / "take_random",
+    )
+    generate_call = next(e for e in log if e[0] == "generate_music")
+    params, config = generate_call[3], generate_call[4]
+    assert params.seed == -1
+    assert config.use_random_seed is True
 
 
 def test_simple_mode_uses_module_level_create_sample_and_persists_full_plan(
@@ -345,7 +400,7 @@ def test_simple_mode_uses_module_level_create_sample_and_persists_full_plan(
         "bpm": None,
         "keyscale": None,
         "duration_sec": None,
-        "vocal_language": None,
+        "vocal_language": "es",
         "timesignature": None,
     }
     job = {"action": "generate", "dit_profile": "iterate", "seed": -1, "src_audio": None}
@@ -357,6 +412,9 @@ def test_simple_mode_uses_module_level_create_sample_and_persists_full_plan(
     create_call = next(e for e in log if e[0] == "create_sample")
     assert create_call[2] == "dreamy synthwave drive"  # query passed through
     assert create_call[3] is False  # instrumental
+    # the plan's vocal_language must constrain create_sample's own lyrics
+    # generation, not just get applied after the fact (reviewer-flagged).
+    assert create_call[4] == "es"
 
     assert plan_patch is not None
     assert "dreamy synthwave drive" in plan_patch["caption"]
