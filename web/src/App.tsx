@@ -49,6 +49,7 @@ export default function App() {
   const [selectedTakeId, setSelectedTakeId] = useState<string | null>(null);
   const [region, setRegion] = useState<{ start: number; end: number } | null>(null);
   const [coverStrength, setCoverStrength] = useState(0.7);
+  const [trackName, setTrackName] = useState("");
   const [health, setHealth] = useState<Health | null>(null);
   const [healthError, setHealthError] = useState<string | null>(null);
 
@@ -380,6 +381,46 @@ export default function App() {
     }
   }
 
+  async function extract() {
+    if (!activeId || !selectedTakeId || !trackName.trim()) return;
+    // SPEC.md sec 4.3: one GPU occupant -- swapping between the iterate and
+    // studio_ops base models unloads/reloads the DiT, so this must be a
+    // deliberate, confirmed action, not a side effect of a stray click.
+    if (
+      !window.confirm(
+        "Extract swaps the loaded model to the studio_ops base model (slower, SPEC sec 4.3). Continue?"
+      )
+    ) {
+      return;
+    }
+    setBusy(true);
+    setBusyStatus("queued");
+    setErrorMsg(null);
+    try {
+      // Same race as cover()/repaint(): flush any in-flight plan edit before
+      // the worker reads plan.json off disk.
+      await flushPendingPlanSave();
+      const queued = await api.extract(activeId, selectedTakeId, trackName);
+      const job = await pollJob(queued.id, (update) => setBusyStatus(update.status));
+      if (job.status === "error") {
+        setErrorMsg(job.error ?? "extract job failed");
+      }
+      await refreshDetail(activeId);
+    } catch (err) {
+      setErrorMsg(String(err));
+    } finally {
+      setBusy(false);
+      setBusyStatus(null);
+    }
+  }
+
+  // While an extract/lego/complete job is busy, the base model may still be
+  // mid-swap (SPEC.md sec 4.3) -- the already-running 5s health poll keeps
+  // health.dit_loaded current, so this just reads that instead of polling
+  // again. Falls back to the normal "<verb>ing… (status)" text once the
+  // worker reports studio_ops actually loaded.
+  const studioOpsLoading = busy && health?.dit_loaded !== "studio_ops";
+
   return (
     <div className="app">
       <header className="topbar">
@@ -608,8 +649,35 @@ export default function App() {
                     >
                       {busy ? `Repainting… (${busyStatus ?? "queued"})` : "Repaint"}
                     </button>
-                    <button disabled title="Phase 3 (requires studio_ops)">
-                      Extract
+                    <label className="track-name">
+                      Track name
+                      <input
+                        placeholder="vocals, drums, bass..."
+                        value={trackName}
+                        onChange={(e) => setTrackName(e.target.value)}
+                      />
+                    </label>
+                    <button
+                      onClick={extract}
+                      disabled={
+                        busy ||
+                        !selectedTakeId ||
+                        !trackName.trim() ||
+                        !!detail.takes.find((t) => t.id === selectedTakeId)?.error
+                      }
+                      title={
+                        !selectedTakeId
+                          ? "Select a take first"
+                          : !trackName.trim()
+                            ? "Enter a track name first"
+                            : undefined
+                      }
+                    >
+                      {busy
+                        ? studioOpsLoading
+                          ? "loading base model…"
+                          : `Extracting… (${busyStatus ?? "queued"})`
+                        : "Extract"}
                     </button>
                     <button disabled title="Phase 3 (requires studio_ops)">
                       Lego

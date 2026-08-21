@@ -711,9 +711,11 @@ def test_smoke_gpu_script_writes_under_output_dir(
 def test_phase_gated_actions_rejected_until_their_phase(client: TestClient) -> None:
     """SPEC.md sec 12 (phase order): phase 1 is generate; phase 2 adds cover
     and repaint (now that the web UI has a waveform region-select feeding
-    repainting_start/repainting_end -- see test_repaint_take_flow).
-    extract/lego/complete (phase 3) still need frontend workflow this build
-    doesn't have yet -- a base-model-swap confirmation/loading UX -- so the
+    repainting_start/repainting_end -- see test_repaint_take_flow); phase 3
+    adds extract (now that the web UI has a base-model-swap
+    confirmation/loading workflow -- see
+    tests/test_extract_requires_studio_ops.py). lego/complete still need
+    their own follow-up frontend workflow this build doesn't have yet, so the
     API must reject them outright instead of accepting a job the UI can't
     drive, regardless of how well-formed the rest of the request is."""
     project = client.post("/api/projects", json={"title": "Phase Gate Test"}).json()
@@ -728,7 +730,7 @@ def test_phase_gated_actions_rejected_until_their_phase(client: TestClient) -> N
     assert gen["status"] == "done", gen.get("error")
     source_take_id = gen["take_id"]
 
-    for action in ("extract", "lego", "complete"):
+    for action in ("lego", "complete"):
         # Well-formed in every other respect (real source, studio_ops
         # profile where that would otherwise be required) -- still rejected
         # purely because this action isn't available yet.
