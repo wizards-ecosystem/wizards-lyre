@@ -189,12 +189,32 @@ def export_project(project_id: str, include_stems: bool = True) -> Response:
 @app.post("/api/projects/{project_id}/uploads")
 async def upload_audio(project_id: str, file: UploadFile = File(...)) -> dict:
     # SPEC.md sec 12 Phase 6: drag-drop a local WAV/MP3 in as a cover/repaint
-    # source, path-jailed under projects/. storage.save_upload validates the
-    # extension and size and writes it under projects/<id>/uploads/,
-    # returning the path relative to the project dir that JobBody.upload_path
-    # already knows how to resolve (SPEC.md sec 8.1).
-    content = await file.read()
-    upload_path = storage.save_upload(project_id, file.filename or "", content)
+    # source, path-jailed under projects/. Streamed to disk in bounded
+    # chunks -- never `await file.read()` in one shot -- so MAX_UPLOAD_BYTES
+    # is enforced as bytes arrive; an oversized upload is aborted (and its
+    # partial file deleted) mid-stream instead of only after the entire body
+    # has already been buffered in memory (reviewer-flagged: an unbounded
+    # single read is a memory-exhaustion vector). The final path is only
+    # published (atomic rename) once the whole body has been accepted, and
+    # is exactly what JobBody.upload_path already knows how to resolve
+    # (SPEC.md sec 8.1).
+    tmp_path, dest_path = storage.open_upload_destination(project_id, file.filename or "")
+    total_bytes = 0
+    try:
+        with open(tmp_path, "wb") as out:
+            while chunk := await file.read(storage.UPLOAD_CHUNK_BYTES):
+                total_bytes += len(chunk)
+                if total_bytes > storage.MAX_UPLOAD_BYTES:
+                    raise ValueError(
+                        f"upload too large: exceeds {storage.MAX_UPLOAD_BYTES} bytes"
+                    )
+                out.write(chunk)
+    except BaseException:
+        tmp_path.unlink(missing_ok=True)
+        raise
+    finally:
+        await file.close()
+    upload_path = storage.finalize_upload(tmp_path, dest_path)
     return {"upload_path": upload_path}
 
 

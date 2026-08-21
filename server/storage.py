@@ -435,13 +435,24 @@ def resolve_upload_path(project_id: str, upload_path: str) -> Path:
 # generated/ingested audio, not a new list invented for uploads.
 ALLOWED_UPLOAD_EXTENSIONS = {".wav", ".mp3", ".flac", ".ogg", ".m4a"}
 MAX_UPLOAD_BYTES = 100 * 1024 * 1024
+# Read/write granularity while streaming an upload to disk (see
+# open_upload_destination / finalize_upload below) -- small enough that a
+# single chunk is never a meaningful memory spike, large enough to not
+# dominate upload time with per-chunk overhead.
+UPLOAD_CHUNK_BYTES = 1024 * 1024
 
 
-def save_upload(project_id: str, filename: str, content: bytes) -> str:
-    """Persist a drag-dropped cover/repaint source under
-    `projects/<id>/uploads/` (SPEC.md sec 12 Phase 6) and return its path
-    relative to the project dir -- exactly the string shape
-    `JobBody.upload_path` / `resolve_upload_path` already expect.
+def open_upload_destination(project_id: str, filename: str) -> tuple[Path, Path]:
+    """Validate the extension and allocate a jailed (temp_path, dest_path)
+    pair under `projects/<id>/uploads/` for a drag-dropped cover/repaint
+    source (SPEC.md sec 12 Phase 6), without touching the request body.
+
+    The caller (server.app.upload_audio) streams the multipart body into
+    temp_path in bounded chunks, enforcing MAX_UPLOAD_BYTES as it goes, and
+    only calls `finalize_upload` -- an atomic rename -- once the whole body
+    has been accepted. This keeps an oversized upload from ever being
+    buffered fully in memory, and keeps a rejected/failed upload from ever
+    appearing at a resolvable path.
 
     The client's original filename is discarded entirely in favor of a
     generated id + the (validated) extension, rather than sanitized and
@@ -452,14 +463,22 @@ def save_upload(project_id: str, filename: str, content: bytes) -> str:
     suffix = Path(filename).suffix.lower()
     if suffix not in ALLOWED_UPLOAD_EXTENSIONS:
         raise ValueError(f"unsupported upload extension: {suffix or '(none)'}")
-    if len(content) > MAX_UPLOAD_BYTES:
-        raise ValueError(f"upload too large: {len(content)} bytes (max {MAX_UPLOAD_BYTES})")
 
     udir = uploads_dir(project_id)
     udir.mkdir(parents=True, exist_ok=True)
     dest = udir / f"{new_id()}{suffix}"
-    dest.write_bytes(content)
-    return f"uploads/{dest.name}"
+    tmp = dest.with_name(f"{dest.name}.part")
+    return tmp, dest
+
+
+def finalize_upload(tmp_path: Path, dest_path: Path) -> str:
+    """Atomically publish a fully-streamed, size-validated upload at its
+    final path (`os.replace`, same single-rename approach as `_write_json` --
+    see its docstring) and return the path relative to the project dir --
+    exactly the string shape `JobBody.upload_path` / `resolve_upload_path`
+    already expect."""
+    os.replace(tmp_path, dest_path)
+    return f"uploads/{dest_path.name}"
 
 
 def allocate_take_dir(project_id: str) -> tuple[str, Path]:
