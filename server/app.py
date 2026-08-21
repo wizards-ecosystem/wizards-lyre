@@ -10,7 +10,7 @@ import os
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, Optional
 
-from fastapi import FastAPI
+from fastapi import FastAPI, File, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -184,6 +184,18 @@ def export_project(project_id: str, include_stems: bool = True) -> Response:
         media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+@app.post("/api/projects/{project_id}/uploads")
+async def upload_audio(project_id: str, file: UploadFile = File(...)) -> dict:
+    # SPEC.md sec 12 Phase 6: drag-drop a local WAV/MP3 in as a cover/repaint
+    # source, path-jailed under projects/. storage.save_upload validates the
+    # extension and size and writes it under projects/<id>/uploads/,
+    # returning the path relative to the project dir that JobBody.upload_path
+    # already knows how to resolve (SPEC.md sec 8.1).
+    content = await file.read()
+    upload_path = storage.save_upload(project_id, file.filename or "", content)
+    return {"upload_path": upload_path}
 
 
 @app.get("/api/projects/{project_id}/loras")

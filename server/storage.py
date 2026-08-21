@@ -93,6 +93,10 @@ def take_dir(project_id: str, take_id: str) -> Path:
     return jailed_path(project_id, "takes", take_id)
 
 
+def uploads_dir(project_id: str) -> Path:
+    return jailed_path(project_id, "uploads")
+
+
 def loras_dir(project_id: str) -> Path:
     return jailed_path(project_id, "loras")
 
@@ -425,6 +429,37 @@ def resolve_upload_path(project_id: str, upload_path: str) -> Path:
     if rel.is_absolute() or ".." in rel.parts:
         raise PathJailError(f"upload_path must be a relative path under the project: {upload_path}")
     return jailed_path(project_id, *rel.parts)
+
+
+# SPEC.md sec 3/6: the same extensions the repo's own .gitignore treats as
+# generated/ingested audio, not a new list invented for uploads.
+ALLOWED_UPLOAD_EXTENSIONS = {".wav", ".mp3", ".flac", ".ogg", ".m4a"}
+MAX_UPLOAD_BYTES = 100 * 1024 * 1024
+
+
+def save_upload(project_id: str, filename: str, content: bytes) -> str:
+    """Persist a drag-dropped cover/repaint source under
+    `projects/<id>/uploads/` (SPEC.md sec 12 Phase 6) and return its path
+    relative to the project dir -- exactly the string shape
+    `JobBody.upload_path` / `resolve_upload_path` already expect.
+
+    The client's original filename is discarded entirely in favor of a
+    generated id + the (validated) extension, rather than sanitized and
+    kept: that sidesteps path-traversal/weird-character concerns completely
+    instead of trying to enumerate every dangerous character.
+    """
+    load_project(project_id)
+    suffix = Path(filename).suffix.lower()
+    if suffix not in ALLOWED_UPLOAD_EXTENSIONS:
+        raise ValueError(f"unsupported upload extension: {suffix or '(none)'}")
+    if len(content) > MAX_UPLOAD_BYTES:
+        raise ValueError(f"upload too large: {len(content)} bytes (max {MAX_UPLOAD_BYTES})")
+
+    udir = uploads_dir(project_id)
+    udir.mkdir(parents=True, exist_ok=True)
+    dest = udir / f"{new_id()}{suffix}"
+    dest.write_bytes(content)
+    return f"uploads/{dest.name}"
 
 
 def allocate_take_dir(project_id: str) -> tuple[str, Path]:

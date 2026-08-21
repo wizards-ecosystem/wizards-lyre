@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { DragEvent, useEffect, useRef, useState } from "react";
 import WaveSurfer from "wavesurfer.js";
 import RegionsPlugin from "wavesurfer.js/plugins/regions";
 import { api, Health, Job, Plan, ProjectDetail, ProjectSummary } from "./api";
@@ -49,6 +49,13 @@ export default function App() {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [selectedTakeId, setSelectedTakeId] = useState<string | null>(null);
   const [compareTakeId, setCompareTakeId] = useState<string | null>(null);
+  // A dropped local file (SPEC.md sec 12 Phase 6) is an alternative
+  // cover/repaint source to a selected take -- server.jobs
+  // _resolve_source_audio only ever accepts one or the other. uploadedSourceName
+  // is just for display (the server discards the client's original filename).
+  const [uploadedSourcePath, setUploadedSourcePath] = useState<string | null>(null);
+  const [uploadedSourceName, setUploadedSourceName] = useState<string | null>(null);
+  const [uploadError, setUploadError] = useState<string | null>(null);
   const [region, setRegion] = useState<{ start: number; end: number } | null>(null);
   const [coverStrength, setCoverStrength] = useState(0.7);
   const [trackName, setTrackName] = useState("");
@@ -243,6 +250,8 @@ export default function App() {
   useEffect(() => {
     setSelectedTakeId(null);
     setCompareTakeId(null);
+    setUploadedSourcePath(null);
+    setUploadedSourceName(null);
     if (activeId) {
       refreshDetail(activeId).catch((err) => setErrorMsg(String(err)));
     } else {
@@ -255,6 +264,17 @@ export default function App() {
   // corresponds to anything on screen.
   useEffect(() => {
     setRegion(null);
+  }, [selectedTakeId]);
+
+  // An uploaded file and a selected take are alternative cover/repaint
+  // sources (server.jobs._resolve_source_audio accepts exactly one) --
+  // picking a take deselects whatever was dropped. The reverse (dropping a
+  // file deselects the take) happens directly in the drop handler.
+  useEffect(() => {
+    if (selectedTakeId) {
+      setUploadedSourcePath(null);
+      setUploadedSourceName(null);
+    }
   }, [selectedTakeId]);
 
   // A take picked as A (selectedTakeId) can also already be set as B
@@ -325,6 +345,30 @@ export default function App() {
     setRegion(null);
   }
 
+  function clearUploadedSource() {
+    setUploadedSourcePath(null);
+    setUploadedSourceName(null);
+    setUploadError(null);
+  }
+
+  async function handleDropAudio(event: DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    if (!activeId) return;
+    const file = event.dataTransfer.files[0];
+    if (!file) return;
+    setUploadError(null);
+    try {
+      const { upload_path } = await api.uploadAudio(activeId, file);
+      // An uploaded file and a selected take are alternative sources --
+      // picking this one deselects whatever take was selected.
+      setSelectedTakeId(null);
+      setUploadedSourcePath(upload_path);
+      setUploadedSourceName(file.name);
+    } catch (err) {
+      setUploadError(String(err));
+    }
+  }
+
   async function createProject() {
     setErrorMsg(null);
     try {
@@ -380,7 +424,7 @@ export default function App() {
   }
 
   async function cover() {
-    if (!activeId || !selectedTakeId) return;
+    if (!activeId || (!selectedTakeId && !uploadedSourcePath)) return;
     setBusy(true);
     setBusyStatus("queued");
     setErrorMsg(null);
@@ -390,7 +434,10 @@ export default function App() {
       // reads the on-disk plan, so a stale caption/lyrics edit would
       // otherwise silently leak into the cover job.
       await flushPendingPlanSave();
-      const queued = await api.cover(activeId, selectedTakeId, coverStrength);
+      const source = selectedTakeId
+        ? { takeId: selectedTakeId }
+        : { uploadPath: uploadedSourcePath! };
+      const queued = await api.cover(activeId, source, coverStrength);
       const job = await pollJob(queued.id, (update) => setBusyStatus(update.status));
       if (job.status === "error") {
         setErrorMsg(job.error ?? "cover job failed");
@@ -405,7 +452,16 @@ export default function App() {
   }
 
   async function repaint() {
-    if (!activeId || !selectedTakeId || !region) return;
+    // A region is only drawable on the selected take's waveform -- an
+    // uploaded file has no waveform to drag a region on, so it repaints the
+    // whole file (repainting_start/end default to the same 0/-1 "full
+    // track" the job body itself defaults to).
+    if (!activeId) return;
+    if (selectedTakeId) {
+      if (!region) return;
+    } else if (!uploadedSourcePath) {
+      return;
+    }
     setBusy(true);
     setBusyStatus("queued");
     setErrorMsg(null);
@@ -413,11 +469,16 @@ export default function App() {
       // Same race as generate()/cover(): flush any in-flight plan edit before
       // the worker reads plan.json off disk.
       await flushPendingPlanSave();
-      const queued = await api.repaint(activeId, selectedTakeId, region.start, region.end);
+      const source = selectedTakeId
+        ? { takeId: selectedTakeId }
+        : { uploadPath: uploadedSourcePath! };
+      const start = selectedTakeId ? region!.start : 0;
+      const end = selectedTakeId ? region!.end : -1;
+      const queued = await api.repaint(activeId, source, start, end);
       const job = await pollJob(queued.id, (update) => setBusyStatus(update.status));
       if (job.status === "error") {
         setErrorMsg(job.error ?? "repaint job failed");
-      } else {
+      } else if (selectedTakeId) {
         clearRegion();
       }
       await refreshDetail(activeId);
@@ -916,6 +977,25 @@ export default function App() {
 
                 <section className="pane waveform">
                   <h3>Waveform</h3>
+                  <div
+                    className="upload-dropzone"
+                    onDragOver={(e) => e.preventDefault()}
+                    onDrop={handleDropAudio}
+                  >
+                    {uploadedSourcePath ? (
+                      <span className="upload-dropzone-file">
+                        Source: {uploadedSourceName ?? uploadedSourcePath}
+                        <button type="button" onClick={clearUploadedSource}>
+                          Clear
+                        </button>
+                      </span>
+                    ) : (
+                      <p className="hint">
+                        Drag a local WAV/MP3 here to use it as a Cover/Repaint source
+                      </p>
+                    )}
+                    {uploadError && <p className="upload-error">{uploadError}</p>}
+                  </div>
                   <div className="waveform-canvas">
                     {selectedTakeId &&
                     !detail.takes.find((t) => t.id === selectedTakeId)?.error ? (
@@ -955,10 +1035,14 @@ export default function App() {
                       onClick={cover}
                       disabled={
                         busy ||
-                        !selectedTakeId ||
+                        (!selectedTakeId && !uploadedSourcePath) ||
                         !!detail.takes.find((t) => t.id === selectedTakeId)?.error
                       }
-                      title={selectedTakeId ? undefined : "Select a take first"}
+                      title={
+                        selectedTakeId || uploadedSourcePath
+                          ? undefined
+                          : "Select a take or drop a file first"
+                      }
                     >
                       {busy ? `Covering… (${busyStatus ?? "queued"})` : "Cover"}
                     </button>
@@ -966,14 +1050,14 @@ export default function App() {
                       onClick={repaint}
                       disabled={
                         busy ||
-                        !selectedTakeId ||
-                        !region ||
+                        (!selectedTakeId && !uploadedSourcePath) ||
+                        (!!selectedTakeId && !region) ||
                         !!detail.takes.find((t) => t.id === selectedTakeId)?.error
                       }
                       title={
-                        !selectedTakeId
-                          ? "Select a take first"
-                          : !region
+                        !selectedTakeId && !uploadedSourcePath
+                          ? "Select a take or drop a file first"
+                          : selectedTakeId && !region
                             ? "Drag a region on the waveform first"
                             : undefined
                       }

@@ -208,6 +208,35 @@ body {
   gap: 8px;
 }
 
+.upload-dropzone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 48px;
+  padding: 8px;
+  background: #101116;
+  border: 1px dashed var(--border);
+  border-radius: 4px;
+  margin-bottom: 12px;
+  text-align: center;
+}
+
+.upload-dropzone-file {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.upload-error {
+  color: #e06060;
+  font-size: 12px;
+  margin: 0;
+}
+
 .waveform-canvas {
   height: 120px;
   display: flex;

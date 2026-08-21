@@ -92,8 +92,25 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return resp.json() as Promise<T>;
 }
 
+async function uploadAudio(projectId: string, file: File): Promise<{ upload_path: string }> {
+  // Multipart, not JSON -- can't go through request<T>(), which always
+  // sends Content-Type: application/json.
+  const form = new FormData();
+  form.append("file", file);
+  const resp = await fetch(`/api/projects/${projectId}/uploads`, {
+    method: "POST",
+    body: form,
+  });
+  if (!resp.ok) {
+    const body = await resp.text();
+    throw new Error(`${resp.status} ${resp.statusText}: ${body}`);
+  }
+  return resp.json() as Promise<{ upload_path: string }>;
+}
+
 export const api = {
   health: () => request<Health>("/api/health"),
+  uploadAudio,
   listProjects: () => request<ProjectSummary[]>("/api/projects"),
   createProject: (title: string, query: string) =>
     request<Project>("/api/projects", {
@@ -120,22 +137,30 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ action: "generate", seed: -1 }),
     }),
-  cover: (id: string, sourceTakeId: string, strength: number) =>
+  // Exactly one of source_take_id/upload_path is ever sent, matching
+  // server.jobs._resolve_source_audio's "source_take_id or upload_path"
+  // contract (SPEC.md sec 8.1) -- callers pass whichever source is active.
+  cover: (id: string, source: { takeId: string } | { uploadPath: string }, strength: number) =>
     request<Job>(`/api/projects/${id}/jobs`, {
       method: "POST",
       body: JSON.stringify({
         action: "cover",
-        source_take_id: sourceTakeId,
+        ...("takeId" in source ? { source_take_id: source.takeId } : { upload_path: source.uploadPath }),
         audio_cover_strength: strength,
         seed: -1,
       }),
     }),
-  repaint: (id: string, sourceTakeId: string, start: number, end: number) =>
+  repaint: (
+    id: string,
+    source: { takeId: string } | { uploadPath: string },
+    start: number,
+    end: number,
+  ) =>
     request<Job>(`/api/projects/${id}/jobs`, {
       method: "POST",
       body: JSON.stringify({
         action: "repaint",
-        source_take_id: sourceTakeId,
+        ...("takeId" in source ? { source_take_id: source.takeId } : { upload_path: source.uploadPath }),
         repainting_start: start,
         repainting_end: end,
         seed: -1,
