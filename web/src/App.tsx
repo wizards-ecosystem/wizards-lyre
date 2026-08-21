@@ -242,6 +242,7 @@ export default function App() {
 
   useEffect(() => {
     setSelectedTakeId(null);
+    setCompareTakeId(null);
     if (activeId) {
       refreshDetail(activeId).catch((err) => setErrorMsg(String(err)));
     } else {
@@ -255,6 +256,16 @@ export default function App() {
   useEffect(() => {
     setRegion(null);
   }, [selectedTakeId]);
+
+  // A take picked as A (selectedTakeId) can also already be set as B
+  // (compareTakeId) -- e.g. clicking its row while it's mid-comparison, or
+  // following a parent-take link onto it. Clear the comparison rather than
+  // showing two identical players and a no-op swap.
+  useEffect(() => {
+    if (compareTakeId && compareTakeId === selectedTakeId) {
+      setCompareTakeId(null);
+    }
+  }, [selectedTakeId, compareTakeId]);
 
   // Mounts a fresh WaveSurfer instance pointed at the selected take's audio
   // and tears it down on every change (SPEC.md sec 9.2) -- WaveSurfer owns
@@ -777,7 +788,12 @@ export default function App() {
                           </button>
                           <button
                             type="button"
-                            disabled={!!take.error}
+                            disabled={!!take.error || take.id === selectedTakeId}
+                            title={
+                              take.id === selectedTakeId
+                                ? "Already selected as A -- pick a different take to compare"
+                                : undefined
+                            }
                             onClick={(e) => {
                               e.stopPropagation();
                               setCompareTakeId((prev) => (prev === take.id ? null : take.id));
@@ -856,15 +872,20 @@ export default function App() {
                 </section>
 
                 {compareTakeId &&
-                  !detail.takes.find((t) => t.id === compareTakeId)?.error && (
+                  (() => {
+                    const compareTake = detail.takes.find((t) => t.id === compareTakeId);
+                    if (!compareTake || compareTake.error) return null;
+                    const selectedTake = selectedTakeId
+                      ? detail.takes.find((t) => t.id === selectedTakeId)
+                      : undefined;
+                    return (
                     <section className="pane compare">
                       <h3>Compare</h3>
                       <div className="compare-panel">
                         <div className="compare-slot">
                           <span className="compare-label">A: selected</span>
-                          {selectedTakeId &&
-                          !detail.takes.find((t) => t.id === selectedTakeId)?.error ? (
-                            <audio controls src={api.takeAudioUrl(detail.project.id, selectedTakeId)} />
+                          {selectedTake && !selectedTake.error ? (
+                            <audio controls src={api.takeAudioUrl(detail.project.id, selectedTakeId!)} />
                           ) : (
                             <p className="hint">Select a take to fill A too.</p>
                           )}
@@ -890,7 +911,8 @@ export default function App() {
                         </button>
                       </div>
                     </section>
-                  )}
+                    );
+                  })()}
 
                 <section className="pane waveform">
                   <h3>Waveform</h3>
