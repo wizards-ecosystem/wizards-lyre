@@ -38,29 +38,17 @@ from worker import mock_worker
 # complete, now that the web UI has a base-model-swap confirmation/loading
 # workflow (SPEC.md sec 4.3/9.2) reused by all three. PHASE_GATED_ACTIONS is
 # the one-line lever (move an action here, out of VALID_ACTIONS) for any
-# action that needs to land ahead of its UI -- or, for `train_lora` below,
-# ahead of a production backend that actually implements it.
+# action that needs to land ahead of its UI.
 #
-# `train_lora` (SPEC.md sec 4.4 style pack) is gated rather than live: only
-# worker/mock_worker.py implements it (tests only, no CUDA); production's
-# default backend, worker/acestep_worker.py, has no train_lora at all (real
-# ACE-Step LoRA training/loading needs upstream research out of scope for
-# this change) and there is no web UI workflow for it either. Exposing the
-# action in VALID_ACTIONS would let a client queue a job the production
-# backend can only ever reject -- reviewer-flagged as violating SPEC.md sec
-# 3/4.4's "every job runs ACE-Step locally" requirement. Gating it here
-# means POST /api/projects/{id}/jobs rejects `train_lora` outright, the same
-# as extract/lego/complete were gated through phase 2 above -- moving it
-# from PHASE_GATED_ACTIONS to VALID_ACTIONS is the one-line change once a
-# real backend and a UI workflow both exist. See
-# tests/test_lora_scaffolding.py for the gate test plus unit coverage of the
-# (currently unreachable via the API) resolution helpers below, kept ready
-# for that follow-up. It doesn't fit STUDIO_OPS_ACTIONS/SOURCE_REQUIRED_ACTIONS'
+# `train_lora` (SPEC.md sec 4.4 style pack) is live: worker/acestep_worker.py
+# wraps ACE-Step's DatasetBuilder -> preprocess_to_tensors -> LoRATrainer
+# pipeline, and worker/mock_worker.py implements the same call shape for
+# tests. It doesn't fit STUDIO_OPS_ACTIONS/SOURCE_REQUIRED_ACTIONS'
 # single-`source_take_id` shape -- it takes a `source_take_ids` list instead
-# (see _resolve_lora_sources) and would route to a dedicated worker entry
-# point rather than the generate-shaped run_job path (see run_claimed_job).
-VALID_ACTIONS = {"generate", "cover", "repaint", "extract", "lego", "complete"}
-PHASE_GATED_ACTIONS: set[str] = {"train_lora"}
+# (see _resolve_lora_sources) and routes to a dedicated worker entry point
+# rather than the generate-shaped run_job path (see run_claimed_job).
+VALID_ACTIONS = {"generate", "cover", "repaint", "extract", "lego", "complete", "train_lora"}
+PHASE_GATED_ACTIONS: set[str] = set()
 STUDIO_OPS_ACTIONS = {"extract", "lego", "complete"}
 SOURCE_REQUIRED_ACTIONS = {"cover", "repaint", "extract", "lego", "complete"}
 
@@ -161,6 +149,7 @@ def init_db() -> None:
         # for any jobs.db created before it existed.
         _ensure_column(conn, "jobs", "heartbeat_at", "TEXT")
         _ensure_column(conn, "jobs", "attempts", "INTEGER NOT NULL DEFAULT 0")
+        _ensure_column(conn, "jobs", "lora_id", "TEXT")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS worker_capabilities (
@@ -533,20 +522,15 @@ def enqueue_job(project_id: str, body: dict[str, Any]) -> dict:
     _resolve_source_audio(project_id, action, body)
     track_name = _resolve_track_name(action, body)
     if action == "train_lora":
-        # SPEC.md sec 4.4 style pack: production defaults to
-        # worker.acestep_worker, which this job deliberately does not touch
-        # (real ACE-Step LoRA training needs upstream research that's out of
-        # scope here -- see worker/mock_worker.py's train_lora docstring).
+        name = body.get("name")
+        if not isinstance(name, str) or not name.strip():
+            raise JobError("action 'train_lora' requires a non-empty name")
+        body["name"] = name.strip()
         # worker/run_worker.py publishes whether the active backend actually
-        # has a `train_lora` implementation under this same capability
-        # mechanism as 'quality' above; reject up front when it's known to
-        # be missing (real backend, until a follow-up job wires it up)
-        # instead of presenting the action as available and letting every
-        # request queue only to fail (reviewer-flagged). Same fail-open
-        # semantics as _check_worker_capability elsewhere: unknown/stale
-        # capability (worker hasn't reported yet) still allows the job to
-        # queue -- the runtime check in _run_train_lora_job is the fallback
-        # for that case.
+        # has a `train_lora` implementation. Same fail-open semantics as
+        # _check_worker_capability elsewhere: unknown/stale capability still
+        # allows the job to queue -- the runtime check in _run_train_lora_job
+        # is the fallback for that case.
         _check_worker_capability("train_lora")
         _resolve_lora_sources(project_id, body)
 
@@ -588,12 +572,16 @@ def enqueue_job(project_id: str, body: dict[str, Any]) -> dict:
 
 
 def _set_status(
-    job_id: str, status: str, take_id: str | None = None, error: str | None = None
+    job_id: str,
+    status: str,
+    take_id: str | None = None,
+    lora_id: str | None = None,
+    error: str | None = None,
 ) -> None:
     with closing(_connect()) as conn:
         conn.execute(
-            "UPDATE jobs SET status = ?, take_id = ?, error = ?, updated_at = ? WHERE id = ?",
-            (status, take_id, error, _now(), job_id),
+            "UPDATE jobs SET status = ?, take_id = ?, lora_id = ?, error = ?, updated_at = ? WHERE id = ?",
+            (status, take_id, lora_id, error, _now(), job_id),
         )
         conn.commit()
 
@@ -719,17 +707,9 @@ def _run_train_lora_job(job_id: str, project_id: str, payload: dict[str, Any]) -
         source_paths = [Path(p) for p in _resolve_lora_sources(project_id, payload)]
         worker_module = resolve_worker_module()
         if not hasattr(worker_module, "train_lora"):
-            # SPEC.md sec 4.4 style pack: production defaults to
-            # worker.acestep_worker, which this job deliberately does not
-            # touch (real ACE-Step LoRA training needs upstream research
-            # that's out of scope here -- see worker/mock_worker.py's
-            # train_lora docstring). Surface that as a clear, actionable job
-            # error instead of a bare AttributeError from a missing attribute
-            # (reviewer-flagged).
             raise JobError(
                 f"worker backend '{worker_module.__name__}' does not implement "
-                "train_lora yet -- real ACE-Step LoRA training is not wired up "
-                "(SPEC.md sec 4.4); only the mock backend supports this action today"
+                "train_lora (SPEC.md sec 4.4)"
             )
         lora_id, lora_dir = storage.allocate_lora_dir(project_id)
         meta = worker_module.train_lora(
@@ -740,14 +720,14 @@ def _run_train_lora_job(job_id: str, project_id: str, payload: dict[str, Any]) -
             source_paths=source_paths,
         )
         storage.write_lora_meta(project_id, lora_id, meta)
-        _set_status(job_id, "done")
+        _set_status(job_id, "done", lora_id=lora_id)
     except Exception as exc:  # noqa: BLE001 - persist worker failure onto the job row
         if lora_id is not None:
             try:
                 storage.write_lora_meta(project_id, lora_id, _error_lora_meta(lora_id, payload, str(exc)))
             except Exception:  # noqa: BLE001 - best-effort cleanup only
                 pass
-        _set_status(job_id, "error", error=str(exc))
+        _set_status(job_id, "error", lora_id=lora_id, error=str(exc))
 
 
 def _run_generate_shaped_job(
@@ -899,6 +879,7 @@ def _row_to_dict(row: sqlite3.Row) -> dict:
         "dit_profile": row["dit_profile"],
         "status": row["status"],
         "take_id": row["take_id"],
+        "lora_id": row["lora_id"] if "lora_id" in row.keys() else None,
         "error": row["error"],
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],

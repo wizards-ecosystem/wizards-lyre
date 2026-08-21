@@ -1,20 +1,10 @@
-"""Phase 4 LoRA storage + job scaffolding, phase-gated (SPEC.md sec 12 phase
-order / sec 4.4 "Style pack | LoRA train / load"). `train_lora` sits in
-`server.jobs.PHASE_GATED_ACTIONS`, not `VALID_ACTIONS`, until a production
-backend (worker/acestep_worker.py) actually implements ACE-Step LoRA
-training/loading and a web UI workflow exists to drive it -- only
-worker/mock_worker.py has train_lora today, and it's tests-only, no CUDA
-(reviewer-flagged: exposing the action to POST /api/projects/{id}/jobs while
-only the mock backend supports it would let a client queue a job production
-can only ever reject).
-
-This module covers the phase gate itself, plus direct unit coverage of the
-(currently unreachable via the API) resolution helpers and the mock worker's
-train_lora, kept correct and ready for whichever follow-up lands a real
-backend and moves the action back into VALID_ACTIONS -- the same pattern
-tests/test_phase1_api.py used to keep extract/lego/complete's dit_profile
-logic tested while those actions were themselves phase-gated (see its
-test_resolve_dit_profile_studio_ops_enforcement).
+"""Phase 4 LoRA storage + job scaffolding (SPEC.md sec 12 phase order /
+sec 4.4 "Style pack | LoRA train / load"). `train_lora` is a live action in
+`server.jobs.VALID_ACTIONS`: worker/acestep_worker.py wraps ACE-Step's
+training pipeline, and worker/mock_worker.py implements the same call shape
+for tests (no CUDA). End-to-end enqueue/run coverage lives in
+tests/test_train_lora_flow.py; this module covers the 8+ source floor,
+dedup helpers, and the mock worker's adapter file.
 """
 
 from __future__ import annotations
@@ -76,58 +66,29 @@ def _make_takes(client: TestClient, project_id: str, count: int) -> list[str]:
     return take_ids
 
 
-def test_train_lora_action_is_phase_gated(client: TestClient) -> None:
-    """POST /api/projects/{id}/jobs must reject train_lora outright,
-    regardless of how well-formed the rest of the request is (mirrors the
-    historical treatment of extract/lego/complete during their own gated
-    phase in tests/test_phase1_api.py)."""
-    project = client.post("/api/projects", json={"title": "LoRA Phase Gate"}).json()
+def test_train_lora_rejects_too_few_sources_before_queuing(client: TestClient) -> None:
+    """The 8+ songs floor fires at enqueue time -- no job row is created."""
+    project = client.post("/api/projects", json={"title": "LoRA Too Few"}).json()
     project_id = project["id"]
     client.put(f"/api/projects/{project_id}/plan", json=storage.default_plan())
 
-    take_ids = _make_takes(client, project_id, MIN_LORA_SOURCE_TAKES)
-
     resp = client.post(
         f"/api/projects/{project_id}/jobs",
-        json={"action": "train_lora", "source_take_ids": take_ids, "name": "Gated"},
+        json={"action": "train_lora", "source_take_ids": [], "name": "Too few"},
     )
     assert resp.status_code == 400
-    assert "not available yet" in resp.json()["detail"]
-
-    # no job row and no lora directory left behind by the rejected request
+    assert "8" in resp.json()["detail"]
     assert all(j["action"] != "train_lora" for j in client.get("/api/jobs").json())
-    assert client.get(f"/api/projects/{project_id}/loras").json() == []
-
-
-def test_train_lora_gated_even_with_too_few_or_duplicate_sources(client: TestClient) -> None:
-    """The phase gate fires before any request-shape validation runs -- an
-    otherwise-invalid train_lora request (too few sources) still gets the
-    phase-gate message, not the source-count error, since the action never
-    reaches that validation while gated."""
-    project = client.post("/api/projects", json={"title": "LoRA Gate Before Validation"}).json()
-    project_id = project["id"]
-    client.put(f"/api/projects/{project_id}/plan", json=storage.default_plan())
-
-    resp = client.post(
-        f"/api/projects/{project_id}/jobs",
-        json={"action": "train_lora", "source_take_ids": [], "name": "Gated"},
-    )
-    assert resp.status_code == 400
-    assert "not available yet" in resp.json()["detail"]
 
 
 def test_distinct_lora_source_ids_deduplicates_order_preserving() -> None:
-    """Direct unit coverage for `_distinct_lora_source_ids`, currently
-    unreachable via the API while train_lora is phase-gated -- kept correct
-    for whichever follow-up re-enables the action."""
+    """Direct unit coverage for `_distinct_lora_source_ids`."""
     body = {"source_take_ids": ["a", "b", "a", "c", "b"]}
     assert jobs_module._distinct_lora_source_ids(body) == ["a", "b", "c"]
 
 
 def test_resolve_lora_sources_requires_min_distinct_takes(client: TestClient) -> None:
-    """Direct unit coverage for `_resolve_lora_sources` against real
-    take_ids, currently unreachable via the API while train_lora is
-    phase-gated -- kept correct for whichever follow-up re-enables it."""
+    """Direct unit coverage for `_resolve_lora_sources` against real take_ids."""
     project = client.post("/api/projects", json={"title": "LoRA Sources Unit"}).json()
     project_id = project["id"]
     client.put(f"/api/projects/{project_id}/plan", json=storage.default_plan())
@@ -149,10 +110,7 @@ def test_resolve_lora_sources_requires_min_distinct_takes(client: TestClient) ->
 
 
 def test_mock_worker_train_lora_writes_adapter_and_meta(tmp_path: Path) -> None:
-    """Direct unit coverage of worker/mock_worker.py's train_lora -- the
-    only backend that implements it today (tests only, no CUDA) -- kept
-    correct and ready to be swapped for a real implementation without this
-    coverage lapsing while the action itself stays phase-gated."""
+    """Direct unit coverage of worker/mock_worker.py's train_lora."""
     lora_dir = tmp_path / "lora"
     meta = mock_worker.train_lora(
         job={"name": "My Style"},

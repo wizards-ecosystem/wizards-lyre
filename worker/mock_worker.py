@@ -187,8 +187,8 @@ def train_lora(
 ) -> dict:
     """Mocked LoRA style-pack training (SPEC.md sec 4.4/7): writes a tiny
     fake adapter file plus a spec-shaped meta.json, no acestep/CUDA/torch
-    import. The real ACE-Step training call is a follow-up job's
-    responsibility (see server/jobs.py's train_lora dispatch)."""
+    import. Same call shape as worker.acestep_worker.train_lora so
+    server.jobs can dispatch either backend."""
     lora_dir.mkdir(parents=True, exist_ok=True)
     (lora_dir / "adapter.bin").write_bytes(b"\x00" * 16)
     return {
