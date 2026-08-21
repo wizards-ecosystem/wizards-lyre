@@ -198,6 +198,19 @@ body {
   margin-bottom: 12px;
 }
 
+.waveform-wavesurfer {
+  width: 100%;
+}
+
+.region-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 12px;
+  margin-bottom: 12px;
+}
+
 .waveform-actions {
   display: flex;
   flex-wrap: wrap;

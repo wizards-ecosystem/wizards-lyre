@@ -119,6 +119,17 @@ export const api = {
         seed: -1,
       }),
     }),
+  repaint: (id: string, sourceTakeId: string, start: number, end: number) =>
+    request<Job>(`/api/projects/${id}/jobs`, {
+      method: "POST",
+      body: JSON.stringify({
+        action: "repaint",
+        source_take_id: sourceTakeId,
+        repainting_start: start,
+        repainting_end: end,
+        seed: -1,
+      }),
+    }),
   getJob: (jobId: string) => request<Job>(`/api/jobs/${jobId}`),
   takeAudioUrl: (projectId: string, takeId: string) =>
     `/api/projects/${projectId}/takes/${takeId}/audio`,

@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import WaveSurfer from "wavesurfer.js";
+import RegionsPlugin from "wavesurfer.js/plugins/regions";
 import { api, Health, Job, Plan, ProjectDetail, ProjectSummary } from "./api";
 
 const HEALTH_POLL_INTERVAL_MS = 5000;
@@ -45,6 +47,7 @@ export default function App() {
   const [busyStatus, setBusyStatus] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [selectedTakeId, setSelectedTakeId] = useState<string | null>(null);
+  const [region, setRegion] = useState<{ start: number; end: number } | null>(null);
   const [coverStrength, setCoverStrength] = useState(0.7);
   const [health, setHealth] = useState<Health | null>(null);
   const [healthError, setHealthError] = useState<string | null>(null);
@@ -81,6 +84,10 @@ export default function App() {
   // activeId (and the rest of the UI) is already B -- so a subsequent edit
   // would be saved under B's project id but built from A's plan.
   const activeIdRef = useRef<string | null>(null);
+
+  const waveformContainerRef = useRef<HTMLDivElement | null>(null);
+  const wavesurferRef = useRef<WaveSurfer | null>(null);
+  const regionsPluginRef = useRef<RegionsPlugin | null>(null);
 
   useEffect(() => {
     return () => {
@@ -204,6 +211,71 @@ export default function App() {
     }
   }, [activeId]);
 
+  // A newly selected take has no region yet -- drop whatever was drawn for
+  // the previous one instead of showing a stale start/end that no longer
+  // corresponds to anything on screen.
+  useEffect(() => {
+    setRegion(null);
+  }, [selectedTakeId]);
+
+  // Mounts a fresh WaveSurfer instance pointed at the selected take's audio
+  // and tears it down on every change (SPEC.md sec 9.2) -- WaveSurfer owns
+  // its own <canvas>/audio element inside the container div, so leaving a
+  // stale instance running while a new one is created would leak audio
+  // decoding work and duplicate canvases. activeIdRef (not activeId) is used
+  // for the take URL because it's already kept in sync with the project
+  // actually on screen (see its own comment above); selectedTakeId is reset
+  // to null synchronously on every project switch (the effect just above),
+  // so by the time this effect fires for a non-null selectedTakeId, the
+  // project has already settled.
+  useEffect(() => {
+    const projectId = activeIdRef.current;
+    if (!selectedTakeId || !projectId || !waveformContainerRef.current) return;
+    const take = detail?.takes.find((t) => t.id === selectedTakeId);
+    if (!take || take.error) return;
+
+    const regions = RegionsPlugin.create();
+    const wavesurfer = WaveSurfer.create({
+      container: waveformContainerRef.current,
+      url: api.takeAudioUrl(projectId, selectedTakeId),
+      waveColor: "#7c8cff",
+      progressColor: "#4fd67a",
+      cursorColor: "#e4e6ec",
+      height: 96,
+      plugins: [regions],
+    });
+    wavesurferRef.current = wavesurfer;
+    regionsPluginRef.current = regions;
+
+    // A missing/corrupt/unsupported take would otherwise just leave a blank
+    // waveform with no indication anything went wrong.
+    wavesurfer.on("error", (err) => setErrorMsg(`waveform load failed: ${err.message}`));
+
+    // Only one region at a time (SPEC.md: drag a region -> repaint) -- a new
+    // drag replaces whatever was there before instead of accumulating.
+    regions.on("region-created", (created) => {
+      for (const existing of regions.getRegions()) {
+        if (existing.id !== created.id) existing.remove();
+      }
+      setRegion({ start: created.start, end: created.end });
+    });
+    regions.on("region-updated", (updated) => {
+      setRegion({ start: updated.start, end: updated.end });
+    });
+    regions.enableDragSelection({});
+
+    return () => {
+      wavesurfer.destroy();
+      wavesurferRef.current = null;
+      regionsPluginRef.current = null;
+    };
+  }, [selectedTakeId]);
+
+  function clearRegion() {
+    regionsPluginRef.current?.clearRegions();
+    setRegion(null);
+  }
+
   async function createProject() {
     setErrorMsg(null);
     try {
@@ -273,6 +345,29 @@ export default function App() {
       const job = await pollJob(queued.id, (update) => setBusyStatus(update.status));
       if (job.status === "error") {
         setErrorMsg(job.error ?? "cover job failed");
+      }
+      await refreshDetail(activeId);
+    } catch (err) {
+      setErrorMsg(String(err));
+    } finally {
+      setBusy(false);
+      setBusyStatus(null);
+    }
+  }
+
+  async function repaint() {
+    if (!activeId || !selectedTakeId || !region) return;
+    setBusy(true);
+    setBusyStatus("queued");
+    setErrorMsg(null);
+    try {
+      // Same race as generate()/cover(): flush any in-flight plan edit before
+      // the worker reads plan.json off disk.
+      await flushPendingPlanSave();
+      const queued = await api.repaint(activeId, selectedTakeId, region.start, region.end);
+      const job = await pollJob(queued.id, (update) => setBusyStatus(update.status));
+      if (job.status === "error") {
+        setErrorMsg(job.error ?? "repaint job failed");
       }
       await refreshDetail(activeId);
     } catch (err) {
@@ -452,8 +547,21 @@ export default function App() {
                 <section className="pane waveform">
                   <h3>Waveform</h3>
                   <div className="waveform-canvas">
-                    <p className="hint">no active take</p>
+                    {selectedTakeId &&
+                    !detail.takes.find((t) => t.id === selectedTakeId)?.error ? (
+                      <div ref={waveformContainerRef} className="waveform-wavesurfer" />
+                    ) : (
+                      <p className="hint">no active take</p>
+                    )}
                   </div>
+                  {region && (
+                    <div className="region-info">
+                      <span>
+                        Region: {region.start.toFixed(1)}s – {region.end.toFixed(1)}s
+                      </span>
+                      <button onClick={clearRegion}>Clear region</button>
+                    </div>
+                  )}
                   <div className="waveform-actions">
                     <button onClick={generate} disabled={busy}>
                       {busy ? `Generating… (${busyStatus ?? "queued"})` : "Generate"}
@@ -479,6 +587,24 @@ export default function App() {
                       title={selectedTakeId ? undefined : "Select a take first"}
                     >
                       {busy ? `Covering… (${busyStatus ?? "queued"})` : "Cover"}
+                    </button>
+                    <button
+                      onClick={repaint}
+                      disabled={
+                        busy ||
+                        !selectedTakeId ||
+                        !region ||
+                        !!detail.takes.find((t) => t.id === selectedTakeId)?.error
+                      }
+                      title={
+                        !selectedTakeId
+                          ? "Select a take first"
+                          : !region
+                            ? "Drag a region on the waveform first"
+                            : undefined
+                      }
+                    >
+                      {busy ? `Repainting… (${busyStatus ?? "queued"})` : "Repaint"}
                     </button>
                     <button disabled title="Phase 3 (requires studio_ops)">
                       Extract
