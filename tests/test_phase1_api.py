@@ -1009,13 +1009,13 @@ def test_ordinary_profiles_queue_despite_total_worker_startup_failure(
         )
     jobs_module.publish_worker_status(False, "boom: no GPU found", None)
 
-    resp = client.post(
-        f"/api/projects/{project_id}/jobs",
-        json={"action": "generate", "dit_profile": "iterate"},
-    )
-    assert resp.status_code == 200, resp.json()
-    assert resp.json()["status"] == "queued"
-
+    # Check quality's rejection *before* enqueueing anything else: the
+    # `client` fixture's background run_loop thread claims and finishes
+    # queued jobs almost immediately (0.01s poll) and republishes
+    # capabilities from live state after every one it runs, which would
+    # overwrite this test's forced "every profile unsupported" state back to
+    # "supported" -- flaky if the iterate job below were posted first and
+    # got claimed/finished before this assertion runs.
     # quality remains gated even in this scenario -- it's the one profile
     # SPEC.md actually calls for early rejection of.
     resp = client.post(
@@ -1023,6 +1023,13 @@ def test_ordinary_profiles_queue_despite_total_worker_startup_failure(
         json={"action": "generate", "dit_profile": "quality"},
     )
     assert resp.status_code == 400
+
+    resp = client.post(
+        f"/api/projects/{project_id}/jobs",
+        json={"action": "generate", "dit_profile": "iterate"},
+    )
+    assert resp.status_code == 200, resp.json()
+    assert resp.json()["status"] == "queued"
 
 
 def test_quality_profile_allowed_when_worker_has_not_reported(
