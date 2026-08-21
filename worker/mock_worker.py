@@ -197,4 +197,5 @@ def train_lora(
         "created_at": datetime.now(timezone.utc).isoformat(),
         "source_take_count": len(source_paths),
         "base_checkpoint": "studio_ops",
+        "error": None,
     }

@@ -109,3 +109,113 @@ def test_train_lora_rejects_fewer_than_eight_sources(client: TestClient) -> None
     # no job row is left behind for a rejected action
     assert all(j["action"] != "train_lora" for j in client.get("/api/jobs").json())
     assert client.get(f"/api/projects/{project_id}/loras").json() == []
+
+
+def test_train_lora_rejects_duplicate_source_ids(client: TestClient) -> None:
+    """The '8+ songs' floor (SPEC.md sec 4.4) must not be satisfiable by
+    repeating one real take_id -- distinct sources are required, not just a
+    list of the required length (reviewer-flagged)."""
+    project = client.post("/api/projects", json={"title": "LoRA Duplicate Sources"}).json()
+    project_id = project["id"]
+    client.put(f"/api/projects/{project_id}/plan", json=storage.default_plan())
+
+    take_ids = _make_takes(client, project_id, 1)
+    duplicated = take_ids * MIN_LORA_SOURCE_TAKES  # 8 entries, 1 distinct take
+
+    resp = client.post(
+        f"/api/projects/{project_id}/jobs",
+        json={"action": "train_lora", "source_take_ids": duplicated, "name": "Dupes"},
+    )
+    assert resp.status_code == 400
+    assert "distinct" in resp.json()["detail"]
+    assert all(j["action"] != "train_lora" for j in client.get("/api/jobs").json())
+    assert client.get(f"/api/projects/{project_id}/loras").json() == []
+
+
+def test_train_lora_rejects_duplicates_mixed_with_enough_distinct_sources(
+    client: TestClient,
+) -> None:
+    """8 raw ids but only 7 distinct (one repeated) must still be rejected --
+    the floor is on distinct songs, not list length."""
+    project = client.post("/api/projects", json={"title": "LoRA Mixed Dupes"}).json()
+    project_id = project["id"]
+    client.put(f"/api/projects/{project_id}/plan", json=storage.default_plan())
+
+    take_ids = _make_takes(client, project_id, MIN_LORA_SOURCE_TAKES - 1)
+    submitted = take_ids + [take_ids[0]]  # 8 entries, 7 distinct
+    assert len(submitted) == MIN_LORA_SOURCE_TAKES
+
+    resp = client.post(
+        f"/api/projects/{project_id}/jobs",
+        json={"action": "train_lora", "source_take_ids": submitted, "name": "Mixed Dupes"},
+    )
+    assert resp.status_code == 400
+    assert client.get(f"/api/projects/{project_id}/loras").json() == []
+
+
+def test_train_lora_fails_cleanly_when_backend_lacks_train_lora(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Production defaults to worker.acestep_worker, which this job
+    deliberately does not touch (real ACE-Step LoRA training needs upstream
+    research that's out of scope here). Simulate that missing-backend
+    situation against the mock and assert the job fails with a clear,
+    actionable message -- not a bare AttributeError -- and, since the
+    capability check runs before any directory is allocated, no orphan
+    loras/<id>/ directory is left on disk (reviewer-flagged)."""
+    project = client.post("/api/projects", json={"title": "LoRA Backend Missing"}).json()
+    project_id = project["id"]
+    client.put(f"/api/projects/{project_id}/plan", json=storage.default_plan())
+
+    take_ids = _make_takes(client, project_id, MIN_LORA_SOURCE_TAKES)
+
+    import worker.mock_worker as mock_worker_module
+
+    monkeypatch.delattr(mock_worker_module, "train_lora")
+
+    resp = client.post(
+        f"/api/projects/{project_id}/jobs",
+        json={"action": "train_lora", "source_take_ids": take_ids, "name": "No Backend"},
+    )
+    job = _wait_for_job(client, resp.json()["id"])
+    assert job["status"] == "error"
+    assert "does not implement train_lora" in job["error"]
+
+    # no orphan directory: the capability check rejects before allocating one
+    assert not storage.loras_dir(project_id).exists() or not any(
+        storage.loras_dir(project_id).iterdir()
+    )
+    assert client.get(f"/api/projects/{project_id}/loras").json() == []
+
+
+def test_train_lora_error_meta_tracked_when_worker_fails_mid_training(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A backend that *does* implement train_lora but blows up mid-run (e.g.
+    a real future ACE-Step training failure) must still leave a tracked,
+    visible entry with `error` set -- not a meta-less orphan directory that
+    GET .../loras silently skips (reviewer-flagged)."""
+    project = client.post("/api/projects", json={"title": "LoRA Mid Training Failure"}).json()
+    project_id = project["id"]
+    client.put(f"/api/projects/{project_id}/plan", json=storage.default_plan())
+
+    take_ids = _make_takes(client, project_id, MIN_LORA_SOURCE_TAKES)
+
+    import worker.mock_worker as mock_worker_module
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("synthetic training failure")
+
+    monkeypatch.setattr(mock_worker_module, "train_lora", _boom)
+
+    resp = client.post(
+        f"/api/projects/{project_id}/jobs",
+        json={"action": "train_lora", "source_take_ids": take_ids, "name": "Boom"},
+    )
+    job = _wait_for_job(client, resp.json()["id"])
+    assert job["status"] == "error"
+    assert "synthetic training failure" in job["error"]
+
+    loras = client.get(f"/api/projects/{project_id}/loras").json()
+    assert len(loras) == 1
+    assert loras[0]["error"] and "synthetic training failure" in loras[0]["error"]

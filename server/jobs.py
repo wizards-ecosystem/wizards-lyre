@@ -432,17 +432,26 @@ def _resolve_lora_sources(project_id: str, body: dict[str, Any]) -> list[str]:
     paths (SPEC.md sec 4.4 / sec 11), sibling to `_resolve_source_audio`
     above -- that helper resolves a single `source_take_id`, while
     `train_lora` instead takes a list and requires SPEC's '8+ songs' floor.
-    Called both at enqueue time (fail fast, before any job row exists) and
-    again when the job runs (payload_json only stores the client's
-    identifiers, not the resolved paths)."""
+    Deduplicates first (reviewer-flagged: repeating one take_id N times must
+    not satisfy the floor) so both the count check and the paths actually
+    handed to the worker reflect distinct songs, not raw list length. Called
+    both at enqueue time (fail fast, before any job row exists) and again
+    when the job runs (payload_json only stores the client's identifiers,
+    not the resolved paths)."""
     source_take_ids = body.get("source_take_ids") or []
-    if len(source_take_ids) < MIN_LORA_SOURCE_TAKES:
+    seen: set[str] = set()
+    distinct_ids: list[str] = []
+    for take_id in source_take_ids:
+        if take_id not in seen:
+            seen.add(take_id)
+            distinct_ids.append(take_id)
+    if len(distinct_ids) < MIN_LORA_SOURCE_TAKES:
         raise JobError(
-            f"action 'train_lora' requires at least {MIN_LORA_SOURCE_TAKES} "
-            f"source_take_ids (got {len(source_take_ids)})"
+            f"action 'train_lora' requires at least {MIN_LORA_SOURCE_TAKES} distinct "
+            f"source_take_ids (got {len(distinct_ids)} distinct of {len(source_take_ids)} submitted)"
         )
     paths: list[str] = []
-    for take_id in source_take_ids:
+    for take_id in distinct_ids:
         try:
             paths.append(str(storage.take_audio_path(project_id, take_id)))
         except storage.TakeNotFound as exc:
@@ -643,11 +652,44 @@ def run_claimed_job(job: dict[str, Any]) -> None:
         heartbeat_thread.join(timeout=HEARTBEAT_INTERVAL_SEC)
 
 
+def _error_lora_meta(lora_id: str, payload: dict[str, Any], error: str) -> dict:
+    """Spec-shaped meta.json for a LoRA whose training failed, mirroring
+    `_error_take_meta` above -- written into the directory `allocate_lora_dir`
+    already created so a failed attempt is a tracked, visible entry in
+    `GET .../loras` (reviewer-flagged: without this, a failure between
+    `allocate_lora_dir` and `write_lora_meta` -- e.g. the worker backend not
+    implementing `train_lora` yet -- left a meta-less directory that
+    `list_loras` silently skips)."""
+    return {
+        "id": lora_id,
+        "name": payload.get("name") or "Untitled LoRA",
+        "created_at": _now(),
+        "source_take_count": len(payload.get("source_take_ids") or []),
+        "base_checkpoint": None,
+        "error": error,
+    }
+
+
 def _run_train_lora_job(job_id: str, project_id: str, payload: dict[str, Any]) -> None:
+    lora_id: str | None = None
     try:
         source_paths = [Path(p) for p in _resolve_lora_sources(project_id, payload)]
+        worker_module = resolve_worker_module()
+        if not hasattr(worker_module, "train_lora"):
+            # SPEC.md sec 4.4 style pack: production defaults to
+            # worker.acestep_worker, which this job deliberately does not
+            # touch (real ACE-Step LoRA training needs upstream research
+            # that's out of scope here -- see worker/mock_worker.py's
+            # train_lora docstring). Surface that as a clear, actionable job
+            # error instead of a bare AttributeError from a missing attribute
+            # (reviewer-flagged).
+            raise JobError(
+                f"worker backend '{worker_module.__name__}' does not implement "
+                "train_lora yet -- real ACE-Step LoRA training is not wired up "
+                "(SPEC.md sec 4.4); only the mock backend supports this action today"
+            )
         lora_id, lora_dir = storage.allocate_lora_dir(project_id)
-        meta = resolve_worker_module().train_lora(
+        meta = worker_module.train_lora(
             job={**payload, "action": "train_lora"},
             project_id=project_id,
             lora_id=lora_id,
@@ -657,6 +699,11 @@ def _run_train_lora_job(job_id: str, project_id: str, payload: dict[str, Any]) -
         storage.write_lora_meta(project_id, lora_id, meta)
         _set_status(job_id, "done")
     except Exception as exc:  # noqa: BLE001 - persist worker failure onto the job row
+        if lora_id is not None:
+            try:
+                storage.write_lora_meta(project_id, lora_id, _error_lora_meta(lora_id, payload, str(exc)))
+            except Exception:  # noqa: BLE001 - best-effort cleanup only
+                pass
         _set_status(job_id, "error", error=str(exc))
 
 
