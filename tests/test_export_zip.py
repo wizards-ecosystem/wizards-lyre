@@ -1,9 +1,12 @@
 """SPEC.md sec 12 Phase 5 / sec 9.2: GET /api/projects/{id}/export builds an
 in-memory zip of project.json, plan.json, the active take's mix, and
-(optionally) every extract/lego/complete take's audio -- see
+(optionally) every extract/lego take's audio -- see
 storage.build_export_zip's docstring for why "stems" means "these
 task_types" rather than a stems/ directory that nothing in the current
-storage layout actually writes.
+storage layout actually writes. `complete` is deliberately excluded: SPEC's
+data-model diagram (sec 12 Phase 5 / sec 7) labels stems/ "extract / lego
+outputs" specifically -- `complete` produces a full alternate mix, not an
+isolated or added track.
 """
 
 from __future__ import annotations
@@ -144,6 +147,94 @@ def test_export_includes_or_excludes_extract_stem_by_flag(client: TestClient) ->
     resp_default = client.get(f"/api/projects/{project_id}/export")
     names_default = set(zipfile.ZipFile(io.BytesIO(resp_default.content)).namelist())
     assert expected_stem_name in names_default
+
+
+def test_export_excludes_complete_takes_from_stems(client: TestClient) -> None:
+    """`complete` ("Fill arrangement") produces a full alternate mix, not an
+    isolated/added track -- SPEC's stems/ description covers extract/lego
+    only (reviewer-flagged), so a complete take must never show up under a
+    stem-style arcname even with include_stems=true."""
+    project = client.post("/api/projects", json={"title": "Complete Not A Stem"}).json()
+    project_id = project["id"]
+    client.put(
+        f"/api/projects/{project_id}/plan",
+        json={**storage.default_plan(), "caption": "test tone, sine wave"},
+    )
+
+    gen_resp = client.post(
+        f"/api/projects/{project_id}/jobs",
+        json={"action": "generate", "dit_profile": "iterate", "seed": -1},
+    )
+    gen = _wait_for_job(client, gen_resp.json()["id"])
+    assert gen["status"] == "done", gen.get("error")
+    source_take_id = gen["take_id"]
+
+    complete_resp = client.post(
+        f"/api/projects/{project_id}/jobs",
+        json={
+            "action": "complete",
+            "dit_profile": "studio_ops",
+            "source_take_id": source_take_id,
+            "track_name": "vocals, drums, bass",
+        },
+    )
+    complete_job = _wait_for_job(client, complete_resp.json()["id"])
+    assert complete_job["status"] == "done", complete_job.get("error")
+    complete_take_id = complete_job["take_id"]
+
+    resp = client.get(f"/api/projects/{project_id}/export?include_stems=true")
+    assert resp.status_code == 200
+    names = set(zipfile.ZipFile(io.BytesIO(resp.content)).namelist())
+    assert not any(name.startswith(f"{complete_take_id}-complete-") for name in names)
+    # the complete take is still the active take, so it's present once, under
+    # the generic mix name
+    assert "mix.wav" in names or "mix.mp3" in names
+
+
+def test_export_does_not_duplicate_active_take_that_is_also_a_stem(client: TestClient) -> None:
+    """extract/lego promote their output to the active take (like every other
+    job), so the common export-right-after-extract case must not write that
+    take's audio twice -- once as "mix<ext>" and again under its stem arcname
+    (reviewer-flagged: silently doubles that file's bytes in the archive)."""
+    project = client.post("/api/projects", json={"title": "No Duplicate Active Stem"}).json()
+    project_id = project["id"]
+    client.put(
+        f"/api/projects/{project_id}/plan",
+        json={**storage.default_plan(), "caption": "test tone, sine wave"},
+    )
+
+    gen_resp = client.post(
+        f"/api/projects/{project_id}/jobs",
+        json={"action": "generate", "dit_profile": "iterate", "seed": -1},
+    )
+    gen = _wait_for_job(client, gen_resp.json()["id"])
+    assert gen["status"] == "done", gen.get("error")
+    source_take_id = gen["take_id"]
+
+    extract_resp = client.post(
+        f"/api/projects/{project_id}/jobs",
+        json={
+            "action": "extract",
+            "dit_profile": "studio_ops",
+            "source_take_id": source_take_id,
+            "track_name": "vocals",
+        },
+    )
+    extract_job = _wait_for_job(client, extract_resp.json()["id"])
+    assert extract_job["status"] == "done", extract_job.get("error")
+    stem_take_id = extract_job["take_id"]
+
+    project_after = client.get(f"/api/projects/{project_id}").json()
+    assert project_after["project"]["active_take_id"] == stem_take_id
+
+    resp = client.get(f"/api/projects/{project_id}/export?include_stems=true")
+    assert resp.status_code == 200
+    names = zipfile.ZipFile(io.BytesIO(resp.content)).namelist()
+
+    stem_name = f"{stem_take_id}-extract-vocals.wav"
+    assert names.count(stem_name) == 1
+    # not duplicated a second time under the generic "mix" name either
+    assert "mix.wav" not in names and "mix.mp3" not in names
 
 
 def test_export_sanitizes_path_traversing_track_name(client: TestClient) -> None:
