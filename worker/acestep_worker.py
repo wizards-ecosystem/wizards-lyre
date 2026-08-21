@@ -61,7 +61,13 @@ top-level. Every acestep call below is wrapped so a further API drift
 raises `WorkerUnavailable` (job `error`, not a crash) instead of an
 unhandled exception; `tests/test_acestep_worker_adapter.py` exercises this
 whole call contract against fake acestep modules so a mismatch is caught
-without needing CUDA installed.
+without needing CUDA installed. There's no quality-score field on
+`GenerationResult`/`extra_outputs` itself (SPEC.md sec 12 Phase 4); ACE-Step
+1.5's real scoring path is a second call, `AceStepHandler.get_lyric_score`,
+against decoder-attention tensors `generate_music` already returns in
+`extra_outputs` when lyrics are non-empty -- see `_quality_score` for the
+full contract. Unlike the calls above, a scoring failure never raises
+`WorkerUnavailable`; it only ever falls back to `score: None`.
 """
 
 from __future__ import annotations
@@ -455,6 +461,73 @@ def _result_field(container: Any, name: str, fallback: Any) -> Any:
     return getattr(container, name, fallback)
 
 
+def _quality_score(
+    handler: Any,
+    extra_lookup: Callable[[str, Any], Any],
+    lyrics: Any,
+    vocal_language: Any,
+    dit_profile: str,
+) -> float | None:
+    """SPEC.md sec 12 Phase 4: "ACE-Step quality score on takes". Checked
+    upstream `acestep.inference.generate_music`/`GenerationResult` directly
+    (ace-step/ACE-Step-1.5 main branch, since this isn't documented in
+    INFERENCE.md/Tutorial.md at the field level): neither `GenerationResult`
+    nor its `extra_outputs`/per-audio dict carries a score field on its own.
+    There *is* a real, callable scoring API though -- `AceStepHandler.
+    get_lyric_score(...)` (the DiT Lyrics Alignment Score Tutorial.md sec
+    "Automatic Scoring Mechanism" calls upstream's own favorite metric) --
+    it just isn't a value `generate_music` hands back; it's a second forward
+    pass through the already-loaded model, reusing decoder-attention tensors
+    (`pred_latents`, `encoder_hidden_states`, `encoder_attention_mask`,
+    `context_latents`, `lyric_token_idss`) that `generate_music` *does* put
+    in `extra_outputs` -- unless ACE-Step's own save-memory mode is on, in
+    which case they're absent and there's nothing to score from. Requires
+    non-empty lyrics (mirrors upstream's own scoring UI, which skips
+    alignment scoring for instrumental/lyric-less takes the same way).
+    Best-effort like every other `extra_outputs` field pulled in `run_job`:
+    a scoring failure must never fail an otherwise-successful take, so this
+    never raises `WorkerUnavailable` (or anything else) -- unlike the
+    surrounding `_api_call`-wrapped calls that *are* allowed to fail the
+    job, this one only ever falls back to `None`. Runs under `_LOCK`
+    because it's a real extra GPU forward pass through the shared loaded
+    model (SPEC.md sec 4.3: "one GPU occupant... jobs serialize"), same as
+    the `generate_music` call above.
+    """
+    if not lyrics or not str(lyrics).strip():
+        return None
+    pred_latents = extra_lookup("pred_latents", None)
+    encoder_hidden_states = extra_lookup("encoder_hidden_states", None)
+    encoder_attention_mask = extra_lookup("encoder_attention_mask", None)
+    context_latents = extra_lookup("context_latents", None)
+    lyric_token_ids = extra_lookup("lyric_token_idss", None)
+    if None in (
+        pred_latents,
+        encoder_hidden_states,
+        encoder_attention_mask,
+        context_latents,
+        lyric_token_ids,
+    ):
+        return None
+    try:
+        with _LOCK:
+            score_result = handler.get_lyric_score(
+                pred_latent=pred_latents,
+                encoder_hidden_states=encoder_hidden_states,
+                encoder_attention_mask=encoder_attention_mask,
+                context_latents=context_latents,
+                lyric_token_ids=lyric_token_ids,
+                vocal_language=vocal_language or "en",
+                inference_steps=GENERATION_STEPS[dit_profile],
+                seed=42,
+            )
+        if not _result_field(score_result, "success", False):
+            return None
+        dit_score = _result_field(score_result, "dit_score", None)
+        return float(dit_score) if dit_score is not None else None
+    except Exception:  # noqa: BLE001 - scoring is optional, never fails the take
+        return None
+
+
 def run_job(
     job: dict[str, Any],
     plan: dict[str, Any],
@@ -631,6 +704,9 @@ def run_job(
     duration_sec = _extra("duration", effective_plan.get("duration_sec"))
     vocal_language = _extra("vocal_language", effective_plan.get("vocal_language"))
     timesignature = _extra("timesignature", effective_plan.get("timesignature"))
+    score = _quality_score(
+        handler, extra_lookup=_extra, lyrics=lyrics, vocal_language=vocal_language, dit_profile=dit_profile
+    )
 
     # The actual seed used lives nested under audio["params"]["seed"] --
     # not top-level on the audio record -- with progressively looser
@@ -679,22 +755,14 @@ def run_job(
         "bpm": bpm,
         "keyscale": keyscale,
         "created_at": datetime.now(timezone.utc).isoformat(),
-        # No quality score to report (SPEC.md sec 12 Phase 4). Checked
-        # upstream `acestep.inference.generate_music`/`GenerationResult`
-        # directly (ACE-Step 1.5, ace-step/ACE-Step-1.5 main branch): neither
-        # `GenerationResult` nor its `extra_outputs`/per-audio dict carries a
-        # score field. The only scoring code in the repo (PMI quality score
-        # + DiT lyric-alignment score, under `acestep/ui/`'s browser-demo
-        # event handlers -- see SPEC.md sec 2's "no browser demo" non-goal)
-        # calls `dit_handler.get_lyric_score(...)` and
-        # `calculate_pmi_score_per_condition(...)` directly with raw
-        # model-internal tensors (pred_latent, encoder_hidden_states,
-        # lyric_token_ids) plus a separately loaded auxiliary HF PMI scorer
-        # with its own VRAM budget, none of which `generate_music` returns
-        # or our adapter has access to. There is no stable field to wire up
-        # here yet; revisit if a future ACE-Step release exposes scoring
-        # through the public inference API.
-        "score": None,
+        # ACE-Step 1.5's DiT Lyrics Alignment Score (see `_quality_score`
+        # above for exactly what was checked upstream and why this is a
+        # second handler call rather than a `GenerationResult` field). None
+        # when lyrics are empty, the decoder-attention tensors weren't in
+        # `extra_outputs` (e.g. ACE-Step's save-memory mode), or scoring
+        # itself failed -- a missing score must never fail an otherwise-
+        # successful take.
+        "score": score,
         "error": None,
         "repaint": _repaint_meta(job),
         "track_name": job.get("track_name"),
