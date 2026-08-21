@@ -144,3 +144,64 @@ def test_export_includes_or_excludes_extract_stem_by_flag(client: TestClient) ->
     resp_default = client.get(f"/api/projects/{project_id}/export")
     names_default = set(zipfile.ZipFile(io.BytesIO(resp_default.content)).namelist())
     assert expected_stem_name in names_default
+
+
+def test_export_sanitizes_path_traversing_track_name(client: TestClient) -> None:
+    """`track_name` is free text forwarded to ACE-Step's `instruction` field
+    (SPEC.md sec 4.4) -- `_resolve_track_name` only trims whitespace, it
+    doesn't restrict characters, so a request posted straight to the HTTP API
+    (bypassing the web UI) can set track_name to something like
+    `../../../evil`. The export archive must never turn that into a
+    path-traversing zip member (zip-slip), regardless of what's stored on
+    the take (reviewer-flagged)."""
+    project = client.post("/api/projects", json={"title": "Zip Slip Guard"}).json()
+    project_id = project["id"]
+    client.put(
+        f"/api/projects/{project_id}/plan",
+        json={**storage.default_plan(), "caption": "test tone, sine wave"},
+    )
+
+    gen_resp = client.post(
+        f"/api/projects/{project_id}/jobs",
+        json={"action": "generate", "dit_profile": "iterate", "seed": -1},
+    )
+    gen = _wait_for_job(client, gen_resp.json()["id"])
+    assert gen["status"] == "done", gen.get("error")
+    source_take_id = gen["take_id"]
+
+    malicious_track_name = "../../../../evil"
+    extract_resp = client.post(
+        f"/api/projects/{project_id}/jobs",
+        json={
+            "action": "extract",
+            "dit_profile": "studio_ops",
+            "source_take_id": source_take_id,
+            "track_name": malicious_track_name,
+        },
+    )
+    extract_job = _wait_for_job(client, extract_resp.json()["id"])
+    assert extract_job["status"] == "done", extract_job.get("error")
+    stem_take_id = extract_job["take_id"]
+
+    # confirm the raw malicious value really was persisted verbatim on the
+    # take -- the guard has to live in the export path, not upstream of it
+    take = next(
+        t for t in client.get(f"/api/projects/{project_id}").json()["takes"] if t["id"] == stem_take_id
+    )
+    assert take["track_name"] == malicious_track_name
+
+    resp = client.get(f"/api/projects/{project_id}/export?include_stems=true")
+    assert resp.status_code == 200
+    names = zipfile.ZipFile(io.BytesIO(resp.content)).namelist()
+
+    for name in names:
+        assert not name.startswith("/"), name
+        assert ".." not in name.split("/"), name
+        assert "\\" not in name, name
+
+    # the sanitized member is still present under a safe name derived from
+    # the same take -- the malicious characters are stripped, not dropped
+    # entirely
+    stem_members = [n for n in names if n.startswith(f"{stem_take_id}-extract-")]
+    assert len(stem_members) == 1
+    assert stem_members[0] == f"{stem_take_id}-extract-evil.wav"

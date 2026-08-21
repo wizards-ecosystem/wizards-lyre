@@ -9,6 +9,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import posixpath
 import re
 import time
 import uuid
@@ -452,12 +453,36 @@ def write_take_lrc(project_id: str, take_id: str, lrc_text: str) -> None:
     _write_text(path, lrc_text)
 
 
-def sanitize_filename(name: str) -> str:
+def _sanitize_component(value: str, fallback: str) -> str:
     """Strip anything that isn't alnum/space/hyphen/underscore from a
-    user-controlled string (project title) before using it in a
-    Content-Disposition filename (SPEC.md sec 12 Phase 5)."""
-    cleaned = re.sub(r"[^A-Za-z0-9 _-]+", "", name).strip()
-    return cleaned or "project"
+    user-controlled string before using it as a filesystem path component --
+    either a Content-Disposition filename (project title) or a member name
+    inside the export archive (take `track_name`). This removes path
+    separators (`/`, `\\`), `.`/`..` segments (dots aren't in the allowed
+    set at all), control characters, and platform-special characters
+    (`:`, `*`, `?`, `"`, `<`, `>`, `|`) alike, so a track name like
+    `../../evil` or `a/..\\b` can't turn into a path-traversing zip entry
+    (zip-slip risk, reviewer-flagged; SPEC.md sec 12 Phase 5)."""
+    cleaned = re.sub(r"[^A-Za-z0-9 _-]+", "", value).strip()
+    return cleaned or fallback
+
+
+def sanitize_filename(name: str) -> str:
+    return _sanitize_component(name, fallback="project")
+
+
+def _assert_safe_zip_member(name: str) -> str:
+    """Defense in depth on top of `_sanitize_component`: normalize the fully
+    composed archive member name and reject it outright if it's still
+    absolute or escapes the archive root via a `..` segment. Every dynamic
+    piece of a member name is sanitized before this runs, so this should
+    never actually trigger -- it exists so a future component that forgets
+    to sanitize its own input fails loudly instead of producing a
+    zip-slip-able archive (reviewer-flagged)."""
+    normalized = posixpath.normpath(name)
+    if normalized in ("..", ".") or normalized.startswith("../") or normalized.startswith("/"):
+        raise ValueError(f"unsafe zip member name: {name!r}")
+    return name
 
 
 def build_export_zip(project_id: str, include_stems: bool = True) -> bytes:
@@ -467,6 +492,13 @@ def build_export_zip(project_id: str, include_stems: bool = True) -> bytes:
     `zipfile.ZipFile`) -- nothing new touches disk, so there's no path-jail
     concern for the archive itself; the member audio is read via the
     existing jailed `take_audio_path`/`take_dir` helpers.
+
+    Audio members are added with `ZipFile.write()` against the source path
+    rather than `writestr(name, path.read_bytes())`: `write()` streams the
+    file into the archive in chunks internally, so a project with several
+    long WAV stems never needs the *entire* raw file held as a second
+    in-memory `bytes` object alongside the zip buffer while it's being
+    compressed (reviewer-flagged: peak memory on large exports).
     """
     project = load_project(project_id)
     plan = load_plan(project_id)
@@ -483,7 +515,8 @@ def build_export_zip(project_id: str, include_stems: bool = True) -> bytes:
             except TakeNotFound:
                 active_path = None
             if active_path is not None:
-                zf.writestr(f"mix{active_path.suffix}", active_path.read_bytes())
+                arcname = _assert_safe_zip_member(f"mix{active_path.suffix}")
+                zf.write(active_path, arcname=arcname)
 
         if include_stems:
             for take in list_takes(project_id):
@@ -493,8 +526,10 @@ def build_export_zip(project_id: str, include_stems: bool = True) -> bytes:
                     stem_path = take_audio_path(project_id, take["id"])
                 except TakeNotFound:
                     continue
-                track = take.get("track_name") or "track"
-                arcname = f"{take['id']}-{take['task_type']}-{track}{stem_path.suffix}"
-                zf.writestr(arcname, stem_path.read_bytes())
+                track = _sanitize_component(take.get("track_name") or "track", fallback="track")
+                arcname = _assert_safe_zip_member(
+                    f"{take['id']}-{take['task_type']}-{track}{stem_path.suffix}"
+                )
+                zf.write(stem_path, arcname=arcname)
 
     return buf.getvalue()
