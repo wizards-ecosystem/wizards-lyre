@@ -21,12 +21,16 @@ from typing import Callable, Iterator
 
 from server import config
 
-# SPEC.md sec 12 Phase 5 / sec 9.2: task_types produced by extract/lego/
-# complete jobs are the closest thing this codebase has to the "stems"
-# mentioned in the sec 6/7 data-model diagram -- no separate stems/
-# directory is ever written (see storage.take_dir / write_take_meta), so
-# "optional stems" in an export means "optionally include these takes".
-STEM_TASK_TYPES = {"extract", "lego", "complete"}
+# SPEC.md sec 7's data-model diagram labels the stems/ directory "extract /
+# lego outputs" specifically (sec 12 Phase 5 line: "stems/  extract / lego
+# outputs") -- `complete` ("Fill arrangement", sec 4.2) instead produces a
+# full alternate mix, the same shape as the active take, not an isolated or
+# added track. No separate stems/ directory is ever written on disk (see
+# storage.take_dir / write_take_meta), so "optional stems" in an export
+# means "optionally include these takes" -- but only the extract/lego ones,
+# else `complete` outputs (and the active mix, when it happens to be a
+# complete take) would get packaged as if they were stems (reviewer-flagged).
+STEM_TASK_TYPES = {"extract", "lego"}
 
 VALID_DIT_PROFILES = {"iterate", "polish", "quality", "studio_ops"}
 
@@ -487,8 +491,8 @@ def _assert_safe_zip_member(name: str) -> str:
 
 def build_export_zip(project_id: str, include_stems: bool = True) -> bytes:
     """SPEC.md sec 12 Phase 5 / sec 9.2: zip project.json, plan.json, the
-    active take's audio, and (when `include_stems`) every extract/lego/
-    complete take's audio. Built entirely in memory (`io.BytesIO` +
+    active take's audio, and (when `include_stems`) every extract/lego
+    take's audio. Built entirely in memory (`io.BytesIO` +
     `zipfile.ZipFile`) -- nothing new touches disk, so there's no path-jail
     concern for the archive itself; the member audio is read via the
     existing jailed `take_audio_path`/`take_dir` helpers.
@@ -502,12 +506,21 @@ def build_export_zip(project_id: str, include_stems: bool = True) -> bytes:
     """
     project = load_project(project_id)
     plan = load_plan(project_id)
+    takes = list_takes(project_id)
 
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
         zf.writestr("project.json", json.dumps(project, indent=2))
         zf.writestr("plan.json", json.dumps(plan, indent=2))
 
+        # The active take's audio always lands at the fixed "mix<ext>" path
+        # -- consumers (a DAW, a script) need one predictable, unconditional
+        # place to find it, regardless of whether that same take also
+        # qualifies as a stem below. Deduplicating away this entry when the
+        # active take happens to be an extract/lego result breaks that
+        # contract (reviewer-flagged): the two arcnames serve different
+        # semantic roles (active mix vs. named stem) even when their bytes
+        # happen to be identical.
         active_take_id = project.get("active_take_id")
         if active_take_id:
             try:
@@ -519,7 +532,7 @@ def build_export_zip(project_id: str, include_stems: bool = True) -> bytes:
                 zf.write(active_path, arcname=arcname)
 
         if include_stems:
-            for take in list_takes(project_id):
+            for take in takes:
                 if take.get("task_type") not in STEM_TASK_TYPES:
                     continue
                 try:
