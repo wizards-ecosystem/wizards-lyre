@@ -91,6 +91,44 @@ def test_upload_rejects_disallowed_extension(client: TestClient) -> None:
     assert resp.status_code == 400
 
 
+def test_upload_rejects_extension_outside_wav_mp3(client: TestClient) -> None:
+    # SPEC.md sec 12 Phase 6 scopes drag-drop ingest to "a local WAV/MP3"
+    # specifically -- .flac is a real audio format but outside that scope
+    # (reviewer-flagged: the .gitignore-derived extension list silently
+    # widened the feature's contract).
+    project = client.post("/api/projects", json={"title": "Upload Scope Test"}).json()
+    project_id = project["id"]
+
+    resp = client.post(
+        f"/api/projects/{project_id}/uploads",
+        files={"file": ("source.flac", _tiny_wav_bytes(), "audio/flac")},
+    )
+    assert resp.status_code == 400
+
+
+def test_oversized_upload_rejected_before_reaching_disk(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # An oversized body must be rejected at the ASGI receive layer -- before
+    # Starlette's multipart parser spools it to a temp file -- not only
+    # after the fact by the endpoint's own byte counter (reviewer-flagged:
+    # the endpoint-only check let an arbitrarily large body consume
+    # temp-disk space before MAX_UPLOAD_BYTES was ever checked).
+    monkeypatch.setattr(storage, "MAX_UPLOAD_BYTES", 10)
+    project = client.post("/api/projects", json={"title": "Upload Oversize Test"}).json()
+    project_id = project["id"]
+
+    oversized = b"0" * 200_000  # well past MAX_UPLOAD_BYTES(10) + middleware slack
+    resp = client.post(
+        f"/api/projects/{project_id}/uploads",
+        files={"file": ("big.wav", oversized, "audio/wav")},
+    )
+    assert resp.status_code == 413, resp.text
+
+    uploads_dir = storage.uploads_dir(project_id)
+    assert not uploads_dir.exists() or list(uploads_dir.iterdir()) == []
+
+
 def test_cover_from_uploaded_source(client: TestClient) -> None:
     project = client.post("/api/projects", json={"title": "Upload Cover Flow"}).json()
     project_id = project["id"]

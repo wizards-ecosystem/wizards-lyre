@@ -354,17 +354,25 @@ export default function App() {
   async function handleDropAudio(event: DragEvent<HTMLDivElement>) {
     event.preventDefault();
     if (!activeId) return;
+    const projectId = activeId;
     const file = event.dataTransfer.files[0];
     if (!file) return;
     setUploadError(null);
     try {
-      const { upload_path } = await api.uploadAudio(activeId, file);
+      const { upload_path } = await api.uploadAudio(projectId, file);
+      // Discard a response that's no longer for the active project (same
+      // activeIdRef race guard as refreshDetail above) -- otherwise a slow
+      // upload that resolves after the user has switched projects would
+      // populate uploadedSourcePath (and thus a subsequent Cover/Repaint
+      // job's upload_path) against the wrong project.
+      if (activeIdRef.current !== projectId) return;
       // An uploaded file and a selected take are alternative sources --
       // picking this one deselects whatever take was selected.
       setSelectedTakeId(null);
       setUploadedSourcePath(upload_path);
       setUploadedSourceName(file.name);
     } catch (err) {
+      if (activeIdRef.current !== projectId) return;
       setUploadError(String(err));
     }
   }

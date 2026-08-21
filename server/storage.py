@@ -431,9 +431,12 @@ def resolve_upload_path(project_id: str, upload_path: str) -> Path:
     return jailed_path(project_id, *rel.parts)
 
 
-# SPEC.md sec 3/6: the same extensions the repo's own .gitignore treats as
-# generated/ingested audio, not a new list invented for uploads.
-ALLOWED_UPLOAD_EXTENSIONS = {".wav", ".mp3", ".flac", ".ogg", ".m4a"}
+# SPEC.md sec 12 Phase 6 scopes drag-drop ingest to "a local WAV/MP3"
+# specifically -- not the broader set of audio extensions the repo's
+# .gitignore treats as generated/ingested audio, which would silently widen
+# this feature's contract (and pass formats to the worker it never promised
+# to support) without SPEC.md saying so.
+ALLOWED_UPLOAD_EXTENSIONS = {".wav", ".mp3"}
 MAX_UPLOAD_BYTES = 100 * 1024 * 1024
 # Read/write granularity while streaming an upload to disk (see
 # open_upload_destination / finalize_upload below) -- small enough that a
