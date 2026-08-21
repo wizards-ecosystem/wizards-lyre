@@ -304,6 +304,29 @@ button:disabled {
   min-width: 90px;
 }
 
+.export-panel {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.include-stems {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.export-link {
+  color: var(--accent);
+  font-weight: 600;
+  text-decoration: none;
+}
+
 .error {
   background: #3a1f22;
   border: 1px solid #6c2b33;

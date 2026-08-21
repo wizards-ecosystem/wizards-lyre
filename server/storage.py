@@ -6,16 +6,26 @@ files under projects/<id>/ are the source of truth.
 
 from __future__ import annotations
 
+import io
 import json
 import os
+import re
 import time
 import uuid
+import zipfile
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterator
 
 from server import config
+
+# SPEC.md sec 12 Phase 5 / sec 9.2: task_types produced by extract/lego/
+# complete jobs are the closest thing this codebase has to the "stems"
+# mentioned in the sec 6/7 data-model diagram -- no separate stems/
+# directory is ever written (see storage.take_dir / write_take_meta), so
+# "optional stems" in an export means "optionally include these takes".
+STEM_TASK_TYPES = {"extract", "lego", "complete"}
 
 VALID_DIT_PROFILES = {"iterate", "polish", "quality", "studio_ops"}
 
@@ -440,3 +450,51 @@ def write_take_lrc(project_id: str, take_id: str, lrc_text: str) -> None:
     it, same division of labor as `write_take_meta` above."""
     path = take_dir(project_id, take_id) / "lyrics.lrc"
     _write_text(path, lrc_text)
+
+
+def sanitize_filename(name: str) -> str:
+    """Strip anything that isn't alnum/space/hyphen/underscore from a
+    user-controlled string (project title) before using it in a
+    Content-Disposition filename (SPEC.md sec 12 Phase 5)."""
+    cleaned = re.sub(r"[^A-Za-z0-9 _-]+", "", name).strip()
+    return cleaned or "project"
+
+
+def build_export_zip(project_id: str, include_stems: bool = True) -> bytes:
+    """SPEC.md sec 12 Phase 5 / sec 9.2: zip project.json, plan.json, the
+    active take's audio, and (when `include_stems`) every extract/lego/
+    complete take's audio. Built entirely in memory (`io.BytesIO` +
+    `zipfile.ZipFile`) -- nothing new touches disk, so there's no path-jail
+    concern for the archive itself; the member audio is read via the
+    existing jailed `take_audio_path`/`take_dir` helpers.
+    """
+    project = load_project(project_id)
+    plan = load_plan(project_id)
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("project.json", json.dumps(project, indent=2))
+        zf.writestr("plan.json", json.dumps(plan, indent=2))
+
+        active_take_id = project.get("active_take_id")
+        if active_take_id:
+            try:
+                active_path = take_audio_path(project_id, active_take_id)
+            except TakeNotFound:
+                active_path = None
+            if active_path is not None:
+                zf.writestr(f"mix{active_path.suffix}", active_path.read_bytes())
+
+        if include_stems:
+            for take in list_takes(project_id):
+                if take.get("task_type") not in STEM_TASK_TYPES:
+                    continue
+                try:
+                    stem_path = take_audio_path(project_id, take["id"])
+                except TakeNotFound:
+                    continue
+                track = take.get("track_name") or "track"
+                arcname = f"{take['id']}-{take['task_type']}-{track}{stem_path.suffix}"
+                zf.writestr(arcname, stem_path.read_bytes())
+
+    return buf.getvalue()

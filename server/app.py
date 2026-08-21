@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, Optional
 
 from fastapi import FastAPI
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -154,6 +154,20 @@ def get_take_lrc(project_id: str, take_id: str) -> FileResponse:
     # a hypothetical always-present route.
     path = storage.take_lrc_path(project_id, take_id)
     return FileResponse(path, media_type="text/plain", filename=path.name)
+
+
+@app.get("/api/projects/{project_id}/export")
+def export_project(project_id: str, include_stems: bool = True) -> Response:
+    # SPEC.md sec 12 Phase 5 / sec 9.2: project.json + plan.json + active
+    # mix + optional stems, built in memory by storage.build_export_zip.
+    project = storage.load_project(project_id)
+    zip_bytes = storage.build_export_zip(project_id, include_stems=include_stems)
+    filename = f"{storage.sanitize_filename(project['title'])}-export.zip"
+    return Response(
+        content=zip_bytes,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @app.get("/api/projects/{project_id}/loras")
