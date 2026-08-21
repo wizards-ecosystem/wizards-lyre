@@ -32,6 +32,7 @@ acestep package. See SPEC.md sec 13.
 
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 import types
@@ -154,6 +155,7 @@ def _install_fake_acestep(
     create_sample_result: dict | None = None,
     lyric_score_tensors: dict[str, Any] | None = None,
     lyric_score_result: dict[str, Any] | None = None,
+    lyric_timestamp_result: dict[str, Any] | None = None,
 ) -> None:
     """Register fake `acestep.*` modules so `worker.acestep_worker`'s lazy
     `from acestep... import ...` statements resolve to them instead of the
@@ -176,7 +178,13 @@ def _install_fake_acestep(
     needs; omitted (the default) matches ACE-Step's save-memory mode / no
     tensors captured, so the adapter must not attempt scoring.
     `lyric_score_result` overrides the fake handler's `get_lyric_score`
-    return; defaults to a canned success payload."""
+    return; defaults to a canned success payload. `lyric_timestamp_result`
+    is the same override for `get_lyric_timestamp` (SPEC.md sec 12 Phase 4;
+    also gated on `lyric_score_tensors`, since ACE-Step's real
+    `LyricTimestampMixin.get_lyric_timestamp` consumes the exact same five
+    decoder-attention tensors as `LyricScoreMixin.get_lyric_score`);
+    defaults to a canned success payload with `[mm:ss.xx]`-formatted
+    `lrc_text`."""
 
     class DefaultFakeAceStepHandler:
         def __init__(self) -> None:
@@ -194,6 +202,29 @@ def _install_fake_acestep(
             if lyric_score_result is not None:
                 return lyric_score_result
             return {"lm_score": 0.5, "dit_score": 0.8123, "success": True, "error": None}
+
+        def get_lyric_timestamp(self, **kwargs: Any) -> dict[str, Any]:
+            # Real signature: pred_latent, encoder_hidden_states,
+            # encoder_attention_mask, context_latents, lyric_token_ids,
+            # total_duration_seconds, vocal_language, inference_steps, seed
+            # -- returns a dict with lrc_text (already `[mm:ss.xx]line`
+            # formatted)/sentence_timestamps/token_timestamps/success/error
+            # (worker/acestep_worker.py's `_lyric_timestamps` uses lrc_text
+            # as-is, per acestep/core/scoring/dit_alignment.py's
+            # MusicStampsAligner.get_timestamps_and_lrc).
+            log.append(("handler.get_lyric_timestamp", kwargs))
+            if lyric_timestamp_result is not None:
+                return lyric_timestamp_result
+            return {
+                "lrc_text": "[00:00.00]We were born to run\n[00:02.50]Down the neon highway",
+                "sentence_timestamps": [
+                    {"text": "We were born to run", "start": 0.0, "end": 2.5},
+                    {"text": "Down the neon highway", "start": 2.5, "end": 5.0},
+                ],
+                "token_timestamps": [],
+                "success": True,
+                "error": None,
+            }
 
         def initialize_service(
             self, *, project_root: str, config_path: str, device: str, offload_to_cpu: bool = False
@@ -332,7 +363,7 @@ def test_run_job_matches_installed_api_contract(
     }
     job = {"action": "generate", "dit_profile": "iterate", "seed": -1, "src_audio": None}
 
-    meta, plan_patch = acestep_worker.run_job(
+    meta, plan_patch, lrc_text = acestep_worker.run_job(
         job=job, plan=plan, take_id="t1", take_dir=tmp_path / "take1"
     )
 
@@ -349,6 +380,11 @@ def test_run_job_matches_installed_api_contract(
     # must not be attempted, not fabricated (SPEC.md sec 12 Phase 4).
     assert meta["score"] is None
     assert not any(e[0] == "handler.get_lyric_score" for e in log)
+    # Same reasoning applies to lyric timestamps (SPEC.md sec 12 Phase 4:
+    # "LRC if upstream provides timestamps") -- no tensors, no attempt.
+    assert meta["has_lrc"] is False
+    assert lrc_text is None
+    assert not any(e[0] == "handler.get_lyric_timestamp" for e in log)
 
     handler_init = next(e for e in log if e[0] == "handler.initialize_service")
     kwargs = handler_init[1]
@@ -438,7 +474,7 @@ def test_dit_lyric_score_flows_into_take_meta(
     }
     job = {"action": "generate", "dit_profile": "iterate", "seed": -1, "src_audio": None}
 
-    meta, _ = acestep_worker.run_job(
+    meta, _, _ = acestep_worker.run_job(
         job=job, plan=plan, take_id="t-score", take_dir=tmp_path / "take-score"
     )
 
@@ -494,12 +530,116 @@ def test_dit_lyric_score_failure_falls_back_to_none(
     }
     job = {"action": "generate", "dit_profile": "iterate", "seed": -1, "src_audio": None}
 
-    meta, _ = acestep_worker.run_job(
+    meta, _, _ = acestep_worker.run_job(
         job=job, plan=plan, take_id="t-score-fail", take_dir=tmp_path / "take-score-fail"
     )
 
     assert meta["score"] is None
     assert any(e[0] == "handler.get_lyric_score" for e in log)
+
+
+def test_lyric_timestamps_flow_into_take_meta_and_lrc_text(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SPEC.md sec 12 Phase 4: "LRC if upstream provides timestamps" -- it
+    does. ACE-Step 1.5 exposes a real per-line timestamp call --
+    `AceStepHandler.get_lyric_timestamp` -- that reuses the exact same
+    decoder-attention tensors `generate_music` puts in `extra_outputs` as
+    `get_lyric_score`. This fake mirrors that: once those tensors show up,
+    `run_job` must call `get_lyric_timestamp` with them (plus
+    total_duration_seconds/vocal_language/inference_steps/seed) and
+    round-trip its already-`[mm:ss.xx]`-formatted `lrc_text` as the take's
+    returned lrc text, with `has_lrc: True` on the take meta."""
+    log: list[tuple] = []
+    tensors = {
+        "pred_latents": "fake-pred-latents",
+        "encoder_hidden_states": "fake-encoder-hidden-states",
+        "encoder_attention_mask": "fake-encoder-attention-mask",
+        "context_latents": "fake-context-latents",
+        "lyric_token_idss": "fake-lyric-token-ids",
+    }
+    _install_fake_acestep(monkeypatch, log, lyric_score_tensors=tensors)
+
+    plan = {
+        "query": "",
+        "caption": "anthemic pop chorus",
+        "lyrics": "[Verse]\nWe were born to run",
+        "instrumental": False,
+        "bpm": 120,
+        "keyscale": "C Major",
+        "duration_sec": 30,
+        "vocal_language": "en",
+        "timesignature": "4/4",
+    }
+    job = {"action": "generate", "dit_profile": "iterate", "seed": -1, "src_audio": None}
+
+    meta, _, lrc_text = acestep_worker.run_job(
+        job=job, plan=plan, take_id="t-lrc", take_dir=tmp_path / "take-lrc"
+    )
+
+    assert meta["has_lrc"] is True
+    assert lrc_text is not None
+    lines = [line for line in lrc_text.splitlines() if line.strip()]
+    assert lines, "expected at least one timed lyric line"
+    for line in lines:
+        assert re.match(r"^\[\d{2}:\d{2}\.\d{2}\].+", line), line
+
+    ts_call = next(e for e in log if e[0] == "handler.get_lyric_timestamp")
+    kwargs = ts_call[1]
+    assert kwargs["pred_latent"] == tensors["pred_latents"]
+    assert kwargs["encoder_hidden_states"] == tensors["encoder_hidden_states"]
+    assert kwargs["encoder_attention_mask"] == tensors["encoder_attention_mask"]
+    assert kwargs["context_latents"] == tensors["context_latents"]
+    assert kwargs["lyric_token_ids"] == tensors["lyric_token_idss"]
+    assert kwargs["total_duration_seconds"] == 30
+    assert kwargs["vocal_language"] == "en"
+    # SPEC.md sec 4.1: iterate = 8 steps -- the same inference_steps this
+    # take was actually generated with, not a hardcoded default.
+    assert kwargs["inference_steps"] == 8
+    assert kwargs["seed"] == 42
+
+
+def test_lyric_timestamps_failure_falls_back_to_none(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A timestamp-alignment failure must fall back to `None` (no
+    `lyrics.lrc`), not fail the whole take -- best-effort, unlike the
+    surrounding `_api_call`-wrapped calls that raise `WorkerUnavailable`."""
+    log: list[tuple] = []
+    tensors = {
+        "pred_latents": "fake-pred-latents",
+        "encoder_hidden_states": "fake-encoder-hidden-states",
+        "encoder_attention_mask": "fake-encoder-attention-mask",
+        "context_latents": "fake-context-latents",
+        "lyric_token_idss": "fake-lyric-token-ids",
+    }
+    _install_fake_acestep(
+        monkeypatch,
+        log,
+        lyric_score_tensors=tensors,
+        lyric_timestamp_result={"success": False, "error": "alignment failed"},
+    )
+
+    plan = {
+        "query": "",
+        "caption": "anthemic pop chorus",
+        "lyrics": "[Verse]\nWe were born to run",
+        "instrumental": False,
+        "bpm": 120,
+        "keyscale": "C Major",
+        "duration_sec": 30,
+        "vocal_language": "en",
+        "timesignature": "4/4",
+    }
+    job = {"action": "generate", "dit_profile": "iterate", "seed": -1, "src_audio": None}
+
+    meta, _, lrc_text = acestep_worker.run_job(
+        job=job, plan=plan, take_id="t-lrc-fail", take_dir=tmp_path / "take-lrc-fail"
+    )
+
+    assert lrc_text is None
+    assert meta["has_lrc"] is False
+    assert any(e[0] == "handler.get_lyric_timestamp" for e in log)
 
 
 def test_checkpoints_project_root_matches_ace_step_resolution(
@@ -588,7 +728,7 @@ def test_simple_mode_uses_module_level_create_sample_and_persists_full_plan(
     }
     job = {"action": "generate", "dit_profile": "iterate", "seed": -1, "src_audio": None}
 
-    meta, plan_patch = acestep_worker.run_job(
+    meta, plan_patch, _ = acestep_worker.run_job(
         job=job, plan=plan, take_id="t2", take_dir=tmp_path / "take2"
     )
 
@@ -676,7 +816,9 @@ def test_quality_profile_requests_cpu_offload(
     }
     job = {"action": "generate", "dit_profile": "quality", "seed": -1, "src_audio": None}
 
-    meta, _ = acestep_worker.run_job(job=job, plan=plan, take_id="t3", take_dir=tmp_path / "take3")
+    meta, _, _ = acestep_worker.run_job(
+        job=job, plan=plan, take_id="t3", take_dir=tmp_path / "take3"
+    )
     assert meta["dit_profile"] == "quality"
 
     handler_init = next(e for e in log if e[0] == "handler.initialize_service")

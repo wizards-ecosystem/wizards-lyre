@@ -647,6 +647,14 @@ export default function App() {
                             >
                               download
                             </a>
+                            {take.has_lrc && (
+                              <a
+                                href={api.takeLrcUrl(detail.project.id, take.id)}
+                                download={`${take.id}.lrc`}
+                              >
+                                lyrics (.lrc)
+                              </a>
+                            )}
                           </>
                         )}
                       </li>

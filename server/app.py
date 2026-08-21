@@ -144,6 +144,16 @@ def get_take_audio(project_id: str, take_id: str) -> FileResponse:
     return FileResponse(path, media_type=media_type, filename=path.name)
 
 
+@app.get("/api/projects/{project_id}/takes/{take_id}/lrc")
+def get_take_lrc(project_id: str, take_id: str) -> FileResponse:
+    # SPEC.md sec 7 lyrics.lrc: optional, phase 4. take_lrc_path raises
+    # storage.TakeNotFound (-> 404, see the exception handler above) when
+    # this take has none, rather than the UI having to guess from a 404 on
+    # a hypothetical always-present route.
+    path = storage.take_lrc_path(project_id, take_id)
+    return FileResponse(path, media_type="text/plain", filename=path.name)
+
+
 @app.post("/api/projects/{project_id}/jobs")
 def create_job(project_id: str, body: JobBody) -> dict:
     return jobs.enqueue_job(project_id, body.model_dump())

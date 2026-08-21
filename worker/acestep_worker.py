@@ -68,6 +68,20 @@ against decoder-attention tensors `generate_music` already returns in
 `extra_outputs` when lyrics are non-empty -- see `_quality_score` for the
 full contract. Unlike the calls above, a scoring failure never raises
 `WorkerUnavailable`; it only ever falls back to `score: None`.
+
+SPEC.md sec 12 Phase 4 also lists "LRC if upstream provides timestamps",
+hedged as conditional on upstream support -- it is supported: `AceStepHandler`
+also mixes in `LyricTimestampMixin`
+(`acestep/core/generation/handler/lyric_timestamp.py`, not documented at the
+field level in INFERENCE.md/Tutorial.md either), whose `get_lyric_timestamp`
+takes the same five decoder-attention tensors as `get_lyric_score` (plus
+`total_duration_seconds`) and returns an already-`[mm:ss.xx]`-formatted
+`lrc_text` (via `MusicStampsAligner.get_timestamps_and_lrc` in
+`acestep/core/scoring/dit_alignment.py`) alongside raw
+`sentence_timestamps`/`token_timestamps` -- see `_lyric_timestamps` for the
+full contract. Same as scoring: best-effort, never fails the take, falls
+back to `lrc_text: None` (`meta["has_lrc"] = False`, no `lyrics.lrc`
+written) rather than fabricating timestamps from a guessed duration.
 """
 
 from __future__ import annotations
@@ -528,18 +542,96 @@ def _quality_score(
         return None
 
 
+def _lyric_timestamps(
+    handler: Any,
+    extra_lookup: Callable[[str, Any], Any],
+    lyrics: Any,
+    vocal_language: Any,
+    dit_profile: str,
+    duration_sec: Any,
+) -> str | None:
+    """SPEC.md sec 12 Phase 4: "LRC if upstream provides timestamps" -- SPEC
+    hedges this as conditional on upstream support. Checked upstream directly
+    (ace-step/ACE-Step-1.5 main branch; same gap as `_quality_score` above --
+    not documented at the field level in INFERENCE.md/Tutorial.md):
+    `AceStepHandler` mixes in `LyricTimestampMixin`
+    (`acestep/core/generation/handler/lyric_timestamp.py`), and its
+    `get_lyric_timestamp(...)` genuinely exists and returns real per-line
+    timing -- upstream support is real, not absent. Its signature mirrors
+    `get_lyric_score` almost exactly: the same five decoder-attention tensors
+    (`pred_latents`/`encoder_hidden_states`/`encoder_attention_mask`/
+    `context_latents`/`lyric_token_idss`) `generate_music` already puts in
+    `extra_outputs` when lyrics are non-empty (absent under ACE-Step's
+    save-memory mode, same as scoring), plus `total_duration_seconds` to
+    scale the timestamps and the usual `vocal_language`/`inference_steps`/
+    `seed`. Internally it delegates to
+    `MusicStampsAligner.get_timestamps_and_lrc`
+    (`acestep/core/scoring/dit_alignment.py`), which already formats
+    `[mm:ss.xx]line text` per lyric line (structure tags like [Verse]/
+    [Chorus] are stripped before alignment, not emitted as timed lines) --
+    so the returned `lrc_text` is used as-is here rather than re-derived from
+    `sentence_timestamps`/`token_timestamps`. Best-effort like
+    `_quality_score`: a timestamp failure must never fail an otherwise-
+    successful take, so this never raises -- it only ever falls back to
+    `None`, meaning no `lyrics.lrc` is written for the take."""
+    if not lyrics or not str(lyrics).strip():
+        return None
+    if not duration_sec:
+        return None
+    pred_latents = extra_lookup("pred_latents", None)
+    encoder_hidden_states = extra_lookup("encoder_hidden_states", None)
+    encoder_attention_mask = extra_lookup("encoder_attention_mask", None)
+    context_latents = extra_lookup("context_latents", None)
+    lyric_token_ids = extra_lookup("lyric_token_idss", None)
+    if None in (
+        pred_latents,
+        encoder_hidden_states,
+        encoder_attention_mask,
+        context_latents,
+        lyric_token_ids,
+    ):
+        return None
+    try:
+        with _LOCK:
+            result = handler.get_lyric_timestamp(
+                pred_latent=pred_latents,
+                encoder_hidden_states=encoder_hidden_states,
+                encoder_attention_mask=encoder_attention_mask,
+                context_latents=context_latents,
+                lyric_token_ids=lyric_token_ids,
+                total_duration_seconds=float(duration_sec),
+                vocal_language=vocal_language or "en",
+                inference_steps=GENERATION_STEPS[dit_profile],
+                seed=42,
+            )
+        if not _result_field(result, "success", False):
+            return None
+        lrc_text = _result_field(result, "lrc_text", None)
+        if not lrc_text or not str(lrc_text).strip():
+            return None
+        return str(lrc_text)
+    except Exception:  # noqa: BLE001 - timestamps are optional, never fail the take
+        return None
+
+
 def run_job(
     job: dict[str, Any],
     plan: dict[str, Any],
     take_id: str,
     take_dir: Path,
     on_dit_loaded: Callable[[str], None] | None = None,
-) -> tuple[dict, dict | None]:
-    """Run one real ACE-Step job. Returns `(take_meta, plan_patch)`;
+) -> tuple[dict, dict | None, str | None]:
+    """Run one real ACE-Step job. Returns `(take_meta, plan_patch, lrc_text)`;
     `plan_patch` is a delta of the LM-filled fields to persist when this was
     a simple-mode generation, else None (SPEC.md sec 7.2: "Persist the
     filled plan."). `server.jobs` merges it onto the plan that's current on
     disk when the job finishes, not the stale snapshot passed in as `plan`.
+    `lrc_text` is standard `[mm:ss.xx]line`-formatted LRC text when ACE-Step
+    could produce lyric timestamps for this take (SPEC.md sec 12 Phase 4;
+    see `_lyric_timestamps`), else None. This module only returns it, same
+    as `plan_patch` -- `server.jobs` is what actually persists it, via
+    `server.storage.write_take_lrc`, to `takes/<take_id>/lyrics.lrc`, only
+    when not None.
 
     `job["src_audio"]` must already be a resolved, jailed filesystem path (or
     None for `generate`) -- `server.jobs` resolves `source_take_id` /
@@ -707,6 +799,14 @@ def run_job(
     score = _quality_score(
         handler, extra_lookup=_extra, lyrics=lyrics, vocal_language=vocal_language, dit_profile=dit_profile
     )
+    lrc_text = _lyric_timestamps(
+        handler,
+        extra_lookup=_extra,
+        lyrics=lyrics,
+        vocal_language=vocal_language,
+        dit_profile=dit_profile,
+        duration_sec=duration_sec,
+    )
 
     # The actual seed used lives nested under audio["params"]["seed"] --
     # not top-level on the audio record -- with progressively looser
@@ -763,8 +863,13 @@ def run_job(
         # itself failed -- a missing score must never fail an otherwise-
         # successful take.
         "score": score,
+        # SPEC.md sec 7 `lyrics.lrc ... optional, phase 4`: True only when
+        # `_lyric_timestamps` actually produced LRC text -- the UI must not
+        # guess a lyrics.lrc exists from this alone and hit a 404 (see
+        # `_lyric_timestamps` for exactly when this is None).
+        "has_lrc": lrc_text is not None,
         "error": None,
         "repaint": _repaint_meta(job),
         "track_name": job.get("track_name"),
     }
-    return meta, plan_patch
+    return meta, plan_patch, lrc_text

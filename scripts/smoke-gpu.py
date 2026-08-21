@@ -64,7 +64,9 @@ def main() -> int:
         "seed": -1,
     }
     try:
-        meta, _plan_patch = run_job(job=job, plan=INSTRUMENTAL_PLAN, take_id=take_id, take_dir=take_dir)
+        meta, _plan_patch, _lrc_text = run_job(
+            job=job, plan=INSTRUMENTAL_PLAN, take_id=take_id, take_dir=take_dir
+        )
     except WorkerUnavailable as exc:
         print(f"GPU smoke unavailable: {exc}", file=sys.stderr)
         print(
