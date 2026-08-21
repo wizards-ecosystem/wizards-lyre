@@ -50,6 +50,7 @@ export default function App() {
   const [region, setRegion] = useState<{ start: number; end: number } | null>(null);
   const [coverStrength, setCoverStrength] = useState(0.7);
   const [trackName, setTrackName] = useState("");
+  const [includeStems, setIncludeStems] = useState(true);
   const [health, setHealth] = useState<Health | null>(null);
   const [healthError, setHealthError] = useState<string | null>(null);
 
@@ -660,6 +661,23 @@ export default function App() {
                       </li>
                     ))}
                   </ul>
+                  <div className="export-panel">
+                    <label className="include-stems">
+                      <input
+                        type="checkbox"
+                        checked={includeStems}
+                        onChange={(e) => setIncludeStems(e.target.checked)}
+                      />
+                      Include stems (extract / lego / complete takes)
+                    </label>
+                    <a
+                      className="export-link"
+                      href={`${api.exportUrl(detail.project.id)}?include_stems=${includeStems}`}
+                      download={`${detail.project.title}-export.zip`}
+                    >
+                      Export project (.zip)
+                    </a>
+                  </div>
                 </section>
 
                 <section className="pane waveform">

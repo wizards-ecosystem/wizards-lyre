@@ -178,4 +178,5 @@ export const api = {
     `/api/projects/${projectId}/takes/${takeId}/audio`,
   takeLrcUrl: (projectId: string, takeId: string) =>
     `/api/projects/${projectId}/takes/${takeId}/lrc`,
+  exportUrl: (projectId: string) => `/api/projects/${projectId}/export`,
 };

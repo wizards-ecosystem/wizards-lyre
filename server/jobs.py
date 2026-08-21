@@ -37,15 +37,30 @@ from worker import mock_worker
 # feeding repainting_start/repainting_end). Phase 3 adds extract, lego, and
 # complete, now that the web UI has a base-model-swap confirmation/loading
 # workflow (SPEC.md sec 4.3/9.2) reused by all three. PHASE_GATED_ACTIONS is
-# now empty -- every SPEC.md sec 4.4 action is live -- but stays in place as
 # the one-line lever (move an action here, out of VALID_ACTIONS) for any
-# future action that needs to land ahead of its UI. `train_lora` (SPEC.md
-# sec 4.4 style pack) doesn't fit STUDIO_OPS_ACTIONS/SOURCE_REQUIRED_ACTIONS'
+# action that needs to land ahead of its UI -- or, for `train_lora` below,
+# ahead of a production backend that actually implements it.
+#
+# `train_lora` (SPEC.md sec 4.4 style pack) is gated rather than live: only
+# worker/mock_worker.py implements it (tests only, no CUDA); production's
+# default backend, worker/acestep_worker.py, has no train_lora at all (real
+# ACE-Step LoRA training/loading needs upstream research out of scope for
+# this change) and there is no web UI workflow for it either. Exposing the
+# action in VALID_ACTIONS would let a client queue a job the production
+# backend can only ever reject -- reviewer-flagged as violating SPEC.md sec
+# 3/4.4's "every job runs ACE-Step locally" requirement. Gating it here
+# means POST /api/projects/{id}/jobs rejects `train_lora` outright, the same
+# as extract/lego/complete were gated through phase 2 above -- moving it
+# from PHASE_GATED_ACTIONS to VALID_ACTIONS is the one-line change once a
+# real backend and a UI workflow both exist. See
+# tests/test_lora_scaffolding.py for the gate test plus unit coverage of the
+# (currently unreachable via the API) resolution helpers below, kept ready
+# for that follow-up. It doesn't fit STUDIO_OPS_ACTIONS/SOURCE_REQUIRED_ACTIONS'
 # single-`source_take_id` shape -- it takes a `source_take_ids` list instead
-# (see _resolve_lora_sources) and is routed to a dedicated worker entry point
-# rather than the generate-shaped run_job path (see run_claimed_job).
-VALID_ACTIONS = {"generate", "cover", "repaint", "extract", "lego", "complete", "train_lora"}
-PHASE_GATED_ACTIONS: set[str] = set()
+# (see _resolve_lora_sources) and would route to a dedicated worker entry
+# point rather than the generate-shaped run_job path (see run_claimed_job).
+VALID_ACTIONS = {"generate", "cover", "repaint", "extract", "lego", "complete"}
+PHASE_GATED_ACTIONS: set[str] = {"train_lora"}
 STUDIO_OPS_ACTIONS = {"extract", "lego", "complete"}
 SOURCE_REQUIRED_ACTIONS = {"cover", "repaint", "extract", "lego", "complete"}
 

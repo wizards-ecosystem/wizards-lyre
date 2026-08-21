@@ -6,16 +6,27 @@ files under projects/<id>/ are the source of truth.
 
 from __future__ import annotations
 
+import io
 import json
 import os
+import posixpath
+import re
 import time
 import uuid
+import zipfile
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterator
 
 from server import config
+
+# SPEC.md sec 12 Phase 5 / sec 9.2: task_types produced by extract/lego/
+# complete jobs are the closest thing this codebase has to the "stems"
+# mentioned in the sec 6/7 data-model diagram -- no separate stems/
+# directory is ever written (see storage.take_dir / write_take_meta), so
+# "optional stems" in an export means "optionally include these takes".
+STEM_TASK_TYPES = {"extract", "lego", "complete"}
 
 VALID_DIT_PROFILES = {"iterate", "polish", "quality", "studio_ops"}
 
@@ -440,3 +451,85 @@ def write_take_lrc(project_id: str, take_id: str, lrc_text: str) -> None:
     it, same division of labor as `write_take_meta` above."""
     path = take_dir(project_id, take_id) / "lyrics.lrc"
     _write_text(path, lrc_text)
+
+
+def _sanitize_component(value: str, fallback: str) -> str:
+    """Strip anything that isn't alnum/space/hyphen/underscore from a
+    user-controlled string before using it as a filesystem path component --
+    either a Content-Disposition filename (project title) or a member name
+    inside the export archive (take `track_name`). This removes path
+    separators (`/`, `\\`), `.`/`..` segments (dots aren't in the allowed
+    set at all), control characters, and platform-special characters
+    (`:`, `*`, `?`, `"`, `<`, `>`, `|`) alike, so a track name like
+    `../../evil` or `a/..\\b` can't turn into a path-traversing zip entry
+    (zip-slip risk, reviewer-flagged; SPEC.md sec 12 Phase 5)."""
+    cleaned = re.sub(r"[^A-Za-z0-9 _-]+", "", value).strip()
+    return cleaned or fallback
+
+
+def sanitize_filename(name: str) -> str:
+    return _sanitize_component(name, fallback="project")
+
+
+def _assert_safe_zip_member(name: str) -> str:
+    """Defense in depth on top of `_sanitize_component`: normalize the fully
+    composed archive member name and reject it outright if it's still
+    absolute or escapes the archive root via a `..` segment. Every dynamic
+    piece of a member name is sanitized before this runs, so this should
+    never actually trigger -- it exists so a future component that forgets
+    to sanitize its own input fails loudly instead of producing a
+    zip-slip-able archive (reviewer-flagged)."""
+    normalized = posixpath.normpath(name)
+    if normalized in ("..", ".") or normalized.startswith("../") or normalized.startswith("/"):
+        raise ValueError(f"unsafe zip member name: {name!r}")
+    return name
+
+
+def build_export_zip(project_id: str, include_stems: bool = True) -> bytes:
+    """SPEC.md sec 12 Phase 5 / sec 9.2: zip project.json, plan.json, the
+    active take's audio, and (when `include_stems`) every extract/lego/
+    complete take's audio. Built entirely in memory (`io.BytesIO` +
+    `zipfile.ZipFile`) -- nothing new touches disk, so there's no path-jail
+    concern for the archive itself; the member audio is read via the
+    existing jailed `take_audio_path`/`take_dir` helpers.
+
+    Audio members are added with `ZipFile.write()` against the source path
+    rather than `writestr(name, path.read_bytes())`: `write()` streams the
+    file into the archive in chunks internally, so a project with several
+    long WAV stems never needs the *entire* raw file held as a second
+    in-memory `bytes` object alongside the zip buffer while it's being
+    compressed (reviewer-flagged: peak memory on large exports).
+    """
+    project = load_project(project_id)
+    plan = load_plan(project_id)
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("project.json", json.dumps(project, indent=2))
+        zf.writestr("plan.json", json.dumps(plan, indent=2))
+
+        active_take_id = project.get("active_take_id")
+        if active_take_id:
+            try:
+                active_path = take_audio_path(project_id, active_take_id)
+            except TakeNotFound:
+                active_path = None
+            if active_path is not None:
+                arcname = _assert_safe_zip_member(f"mix{active_path.suffix}")
+                zf.write(active_path, arcname=arcname)
+
+        if include_stems:
+            for take in list_takes(project_id):
+                if take.get("task_type") not in STEM_TASK_TYPES:
+                    continue
+                try:
+                    stem_path = take_audio_path(project_id, take["id"])
+                except TakeNotFound:
+                    continue
+                track = _sanitize_component(take.get("track_name") or "track", fallback="track")
+                arcname = _assert_safe_zip_member(
+                    f"{take['id']}-{take['task_type']}-{track}{stem_path.suffix}"
+                )
+                zf.write(stem_path, arcname=arcname)
+
+    return buf.getvalue()
