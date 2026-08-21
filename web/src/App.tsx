@@ -370,6 +370,7 @@ export default function App() {
         setErrorMsg(job.error ?? "repaint job failed");
       }
       await refreshDetail(activeId);
+      clearRegion();
     } catch (err) {
       setErrorMsg(String(err));
     } finally {
