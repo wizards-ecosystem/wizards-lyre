@@ -26,6 +26,7 @@ import threading
 import uuid
 from contextlib import closing
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Callable
 
 from server import config, storage
@@ -38,11 +39,18 @@ from worker import mock_worker
 # workflow (SPEC.md sec 4.3/9.2) reused by all three. PHASE_GATED_ACTIONS is
 # now empty -- every SPEC.md sec 4.4 action is live -- but stays in place as
 # the one-line lever (move an action here, out of VALID_ACTIONS) for any
-# future action that needs to land ahead of its UI.
-VALID_ACTIONS = {"generate", "cover", "repaint", "extract", "lego", "complete"}
+# future action that needs to land ahead of its UI. `train_lora` (SPEC.md
+# sec 4.4 style pack) doesn't fit STUDIO_OPS_ACTIONS/SOURCE_REQUIRED_ACTIONS'
+# single-`source_take_id` shape -- it takes a `source_take_ids` list instead
+# (see _resolve_lora_sources) and is routed to a dedicated worker entry point
+# rather than the generate-shaped run_job path (see run_claimed_job).
+VALID_ACTIONS = {"generate", "cover", "repaint", "extract", "lego", "complete", "train_lora"}
 PHASE_GATED_ACTIONS: set[str] = set()
 STUDIO_OPS_ACTIONS = {"extract", "lego", "complete"}
 SOURCE_REQUIRED_ACTIONS = {"cover", "repaint", "extract", "lego", "complete"}
+
+# SPEC.md sec 4.4: "Style pack | LoRA train / load | 8+ songs".
+MIN_LORA_SOURCE_TAKES = 8
 
 HEARTBEAT_INTERVAL_SEC = 5.0
 STALE_AFTER_SEC = 60.0
@@ -419,6 +427,29 @@ def _resolve_source_audio(project_id: str, action: str, body: dict[str, Any]) ->
     return str(path)
 
 
+def _resolve_lora_sources(project_id: str, body: dict[str, Any]) -> list[str]:
+    """Resolve `train_lora`'s `source_take_ids` to real, jailed filesystem
+    paths (SPEC.md sec 4.4 / sec 11), sibling to `_resolve_source_audio`
+    above -- that helper resolves a single `source_take_id`, while
+    `train_lora` instead takes a list and requires SPEC's '8+ songs' floor.
+    Called both at enqueue time (fail fast, before any job row exists) and
+    again when the job runs (payload_json only stores the client's
+    identifiers, not the resolved paths)."""
+    source_take_ids = body.get("source_take_ids") or []
+    if len(source_take_ids) < MIN_LORA_SOURCE_TAKES:
+        raise JobError(
+            f"action 'train_lora' requires at least {MIN_LORA_SOURCE_TAKES} "
+            f"source_take_ids (got {len(source_take_ids)})"
+        )
+    paths: list[str] = []
+    for take_id in source_take_ids:
+        try:
+            paths.append(str(storage.take_audio_path(project_id, take_id)))
+        except storage.TakeNotFound as exc:
+            raise JobError(f"source_take_ids entry not found: {take_id}") from exc
+    return paths
+
+
 def _resolve_track_name(action: str, body: dict[str, Any]) -> str | None:
     """extract/lego/complete route their target track through `track_name`,
     which the worker forwards onto ACE-Step's task-specific `instruction`
@@ -464,6 +495,8 @@ def enqueue_job(project_id: str, body: dict[str, Any]) -> dict:
         _check_worker_capability(dit_profile)
     _resolve_source_audio(project_id, action, body)
     track_name = _resolve_track_name(action, body)
+    if action == "train_lora":
+        _resolve_lora_sources(project_id, body)
 
     job_id = uuid.uuid4().hex
     now = _now()
@@ -596,7 +629,40 @@ def run_claimed_job(job: dict[str, Any]) -> None:
         target=_heartbeat_loop, args=(job_id, stop_heartbeat), daemon=True
     )
     heartbeat_thread.start()
+    try:
+        if action == "train_lora":
+            # train_lora has no take/DiT-swap shape at all (no source audio
+            # generation, no plan) -- it gets its own worker entry point
+            # (resolve_worker_module().train_lora) instead of the
+            # generate-shaped run_job path every other action uses below.
+            _run_train_lora_job(job_id, project_id, payload)
+        else:
+            _run_generate_shaped_job(job_id, project_id, action, dit_profile, payload)
+    finally:
+        stop_heartbeat.set()
+        heartbeat_thread.join(timeout=HEARTBEAT_INTERVAL_SEC)
 
+
+def _run_train_lora_job(job_id: str, project_id: str, payload: dict[str, Any]) -> None:
+    try:
+        source_paths = [Path(p) for p in _resolve_lora_sources(project_id, payload)]
+        lora_id, lora_dir = storage.allocate_lora_dir(project_id)
+        meta = resolve_worker_module().train_lora(
+            job={**payload, "action": "train_lora"},
+            project_id=project_id,
+            lora_id=lora_id,
+            lora_dir=lora_dir,
+            source_paths=source_paths,
+        )
+        storage.write_lora_meta(project_id, lora_id, meta)
+        _set_status(job_id, "done")
+    except Exception as exc:  # noqa: BLE001 - persist worker failure onto the job row
+        _set_status(job_id, "error", error=str(exc))
+
+
+def _run_generate_shaped_job(
+    job_id: str, project_id: str, action: str, dit_profile: str, payload: dict[str, Any]
+) -> None:
     def _publish_dit_loaded(loaded_profile: str) -> None:
         # Fires as soon as the worker backend confirms `loaded_profile` is
         # actually loaded (right after any base-model swap, before
@@ -665,9 +731,6 @@ def run_claimed_job(job: dict[str, Any]) -> None:
                 # times it out via reclaim_stale_jobs instead of failing fast.
                 pass
         _set_status(job_id, "error", take_id=take_id, error=str(exc))
-    finally:
-        stop_heartbeat.set()
-        heartbeat_thread.join(timeout=HEARTBEAT_INTERVAL_SEC)
 
 
 def reclaim_stale_jobs(stale_after: float = STALE_AFTER_SEC) -> list[str]:

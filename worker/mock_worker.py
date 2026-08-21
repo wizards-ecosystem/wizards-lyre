@@ -176,3 +176,25 @@ def run_job(
         "track_name": job.get("track_name"),
     }
     return meta, plan_patch, None
+
+
+def train_lora(
+    job: dict[str, Any],
+    project_id: str,
+    lora_id: str,
+    lora_dir: Path,
+    source_paths: list[Path],
+) -> dict:
+    """Mocked LoRA style-pack training (SPEC.md sec 4.4/7): writes a tiny
+    fake adapter file plus a spec-shaped meta.json, no acestep/CUDA/torch
+    import. The real ACE-Step training call is a follow-up job's
+    responsibility (see server/jobs.py's train_lora dispatch)."""
+    lora_dir.mkdir(parents=True, exist_ok=True)
+    (lora_dir / "adapter.bin").write_bytes(b"\x00" * 16)
+    return {
+        "id": lora_id,
+        "name": job.get("name") or "Untitled LoRA",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "source_take_count": len(source_paths),
+        "base_checkpoint": "studio_ops",
+    }
