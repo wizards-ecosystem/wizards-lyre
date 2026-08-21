@@ -427,6 +427,24 @@ def _resolve_source_audio(project_id: str, action: str, body: dict[str, Any]) ->
     return str(path)
 
 
+def _distinct_lora_source_ids(body: dict[str, Any]) -> list[str]:
+    """Order-preserving de-duplication of `train_lora`'s `source_take_ids`,
+    shared by `_resolve_lora_sources` (validation/path resolution) and
+    `_error_lora_meta` below (reviewer-flagged: error metadata was computing
+    `source_take_count` from the raw submitted list while success metadata
+    used the deduplicated paths -- an accepted request with 8+ distinct ids
+    plus extra duplicates reported inconsistent counts depending on whether
+    training succeeded or failed). Single source of truth for what "the
+    source songs" means for this job."""
+    seen: set[str] = set()
+    distinct_ids: list[str] = []
+    for take_id in body.get("source_take_ids") or []:
+        if take_id not in seen:
+            seen.add(take_id)
+            distinct_ids.append(take_id)
+    return distinct_ids
+
+
 def _resolve_lora_sources(project_id: str, body: dict[str, Any]) -> list[str]:
     """Resolve `train_lora`'s `source_take_ids` to real, jailed filesystem
     paths (SPEC.md sec 4.4 / sec 11), sibling to `_resolve_source_audio`
@@ -438,14 +456,9 @@ def _resolve_lora_sources(project_id: str, body: dict[str, Any]) -> list[str]:
     both at enqueue time (fail fast, before any job row exists) and again
     when the job runs (payload_json only stores the client's identifiers,
     not the resolved paths)."""
-    source_take_ids = body.get("source_take_ids") or []
-    seen: set[str] = set()
-    distinct_ids: list[str] = []
-    for take_id in source_take_ids:
-        if take_id not in seen:
-            seen.add(take_id)
-            distinct_ids.append(take_id)
+    distinct_ids = _distinct_lora_source_ids(body)
     if len(distinct_ids) < MIN_LORA_SOURCE_TAKES:
+        source_take_ids = body.get("source_take_ids") or []
         raise JobError(
             f"action 'train_lora' requires at least {MIN_LORA_SOURCE_TAKES} distinct "
             f"source_take_ids (got {len(distinct_ids)} distinct of {len(source_take_ids)} submitted)"
@@ -505,6 +518,21 @@ def enqueue_job(project_id: str, body: dict[str, Any]) -> dict:
     _resolve_source_audio(project_id, action, body)
     track_name = _resolve_track_name(action, body)
     if action == "train_lora":
+        # SPEC.md sec 4.4 style pack: production defaults to
+        # worker.acestep_worker, which this job deliberately does not touch
+        # (real ACE-Step LoRA training needs upstream research that's out of
+        # scope here -- see worker/mock_worker.py's train_lora docstring).
+        # worker/run_worker.py publishes whether the active backend actually
+        # has a `train_lora` implementation under this same capability
+        # mechanism as 'quality' above; reject up front when it's known to
+        # be missing (real backend, until a follow-up job wires it up)
+        # instead of presenting the action as available and letting every
+        # request queue only to fail (reviewer-flagged). Same fail-open
+        # semantics as _check_worker_capability elsewhere: unknown/stale
+        # capability (worker hasn't reported yet) still allows the job to
+        # queue -- the runtime check in _run_train_lora_job is the fallback
+        # for that case.
+        _check_worker_capability("train_lora")
         _resolve_lora_sources(project_id, body)
 
     job_id = uuid.uuid4().hex
@@ -664,7 +692,7 @@ def _error_lora_meta(lora_id: str, payload: dict[str, Any], error: str) -> dict:
         "id": lora_id,
         "name": payload.get("name") or "Untitled LoRA",
         "created_at": _now(),
-        "source_take_count": len(payload.get("source_take_ids") or []),
+        "source_take_count": len(_distinct_lora_source_ids(payload)),
         "base_checkpoint": None,
         "error": error,
     }
