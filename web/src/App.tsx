@@ -39,6 +39,7 @@ async function pollJob(jobId: string, onUpdate?: (job: Job) => void): Promise<Jo
 
 export default function App() {
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
+  const [librarySearch, setLibrarySearch] = useState("");
   const [activeId, setActiveId] = useState<string | null>(null);
   const [detail, setDetail] = useState<ProjectDetail | null>(null);
   const [newTitle, setNewTitle] = useState("");
@@ -167,6 +168,15 @@ export default function App() {
 
   async function refreshProjects() {
     setProjects(await api.listProjects());
+  }
+
+  async function toggleFavorite(p: ProjectSummary): Promise<void> {
+    try {
+      await api.patchProject(p.id, { favorite: !p.favorite });
+      await refreshProjects();
+    } catch (err) {
+      setErrorMsg(String(err));
+    }
   }
 
   async function refreshDetail(id: string) {
@@ -588,20 +598,39 @@ export default function App() {
             />
             <button onClick={createProject}>New project</button>
           </div>
+          <input
+            className="library-search"
+            placeholder="Search projects"
+            value={librarySearch}
+            onChange={(e) => setLibrarySearch(e.target.value)}
+          />
           <ul className="project-list">
-            {projects.map((p) => (
-              <li key={p.id} className={p.id === activeId ? "active" : ""}>
-                <div className="project-row" onClick={() => switchActiveProject(p.id)}>
-                  <span className="project-title">{p.title}</span>
-                  <span className="project-updated">
-                    {p.updated_at ? new Date(p.updated_at).toLocaleString() : ""}
-                  </span>
-                </div>
-                <button className="open-btn" onClick={() => switchActiveProject(p.id)}>
-                  Open
-                </button>
-              </li>
-            ))}
+            {projects
+              .filter((p) => p.title.toLowerCase().includes(librarySearch.toLowerCase()))
+              .sort((a, b) => Number(b.favorite) - Number(a.favorite))
+              .map((p) => (
+                <li key={p.id} className={p.id === activeId ? "active" : ""}>
+                  <div className="project-row" onClick={() => switchActiveProject(p.id)}>
+                    <span className="project-title">{p.title}</span>
+                    <span className="project-updated">
+                      {p.updated_at ? new Date(p.updated_at).toLocaleString() : ""}
+                    </span>
+                  </div>
+                  <button
+                    className={`favorite-btn ${p.favorite ? "favorited" : ""}`}
+                    title={p.favorite ? "Unfavorite" : "Favorite"}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggleFavorite(p);
+                    }}
+                  >
+                    {p.favorite ? "★" : "☆"}
+                  </button>
+                  <button className="open-btn" onClick={() => switchActiveProject(p.id)}>
+                    Open
+                  </button>
+                </li>
+              ))}
           </ul>
         </aside>
 

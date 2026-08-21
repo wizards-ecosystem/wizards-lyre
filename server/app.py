@@ -35,6 +35,7 @@ class CreateProjectBody(BaseModel):
 class PatchProjectBody(BaseModel):
     title: Optional[str] = None
     dit_profile: Optional[str] = None
+    favorite: Optional[bool] = None
 
 
 class JobBody(BaseModel):
