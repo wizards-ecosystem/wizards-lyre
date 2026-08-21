@@ -421,6 +421,23 @@ def _resolve_source_audio(project_id: str, action: str, body: dict[str, Any]) ->
     return str(path)
 
 
+def _resolve_track_name(action: str, body: dict[str, Any]) -> str | None:
+    """extract/lego/complete route their target track through `track_name`,
+    which the worker forwards onto ACE-Step's task-specific `instruction`
+    field (SPEC.md sec 4.4) -- missing, non-string, or blank input would
+    otherwise reach ACE-Step as a meaningless instruction. The web UI
+    disables its Extract button until a track name is typed, but that's a
+    client-side convenience only; a request posted straight to the HTTP API
+    must be rejected the same way. Returns the trimmed name for actions that
+    require one, else None."""
+    if action not in STUDIO_OPS_ACTIONS:
+        return None
+    track_name = body.get("track_name")
+    if not isinstance(track_name, str) or not track_name.strip():
+        raise JobError(f"action '{action}' requires a non-empty track_name")
+    return track_name.strip()
+
+
 def enqueue_job(project_id: str, body: dict[str, Any]) -> dict:
     project = storage.load_project(project_id)
 
@@ -450,11 +467,14 @@ def enqueue_job(project_id: str, body: dict[str, Any]) -> dict:
     if dit_profile == "quality":
         _check_worker_capability(dit_profile)
     _resolve_source_audio(project_id, action, body)
+    track_name = _resolve_track_name(action, body)
 
     job_id = uuid.uuid4().hex
     now = _now()
     payload = dict(body)
     payload["dit_profile"] = dit_profile
+    if track_name is not None:
+        payload["track_name"] = track_name
     # SPEC.md sec 8.1: "batch_size > 1 is optional later; v1 may force 1 on
     # 16 GB." Force it rather than trust an unvalidated client value straight
     # into the GPU backend (0, negative, or huge batches -> invalid calls or
@@ -580,6 +600,19 @@ def run_claimed_job(job: dict[str, Any]) -> None:
     )
     heartbeat_thread.start()
 
+    def _publish_dit_loaded(loaded_profile: str) -> None:
+        # Fires as soon as the worker backend confirms `loaded_profile` is
+        # actually loaded (right after any base-model swap, before
+        # generation runs) -- not just after the whole job finishes, like
+        # worker/run_worker.py's own post-job republish. Without this, a
+        # studio_ops job (SPEC.md sec 4.3) would leave /api/health reporting
+        # the *previous* profile for the job's entire duration, making a
+        # "loading base model..." UI state indistinguishable from ordinary
+        # in-progress generation (reviewer-flagged).
+        publish_worker_status(
+            True, f"worker: '{loaded_profile}' DiT + LM currently loaded", loaded_profile
+        )
+
     take_id: str | None = None
     try:
         worker_fn = _resolve_worker()
@@ -591,6 +624,7 @@ def run_claimed_job(job: dict[str, Any]) -> None:
             plan=plan,
             take_id=take_id,
             take_dir=tdir,
+            on_dit_loaded=_publish_dit_loaded,
         )
         storage.write_take_meta(project_id, take_id, meta)
         if plan_patch is not None:

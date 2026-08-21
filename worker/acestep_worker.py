@@ -72,7 +72,7 @@ import shutil
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 # One GPU occupant: one loaded DiT + one LM, jobs serialize (SPEC.md sec 4.3).
 _LOCK = threading.Lock()
@@ -456,7 +456,11 @@ def _result_field(container: Any, name: str, fallback: Any) -> Any:
 
 
 def run_job(
-    job: dict[str, Any], plan: dict[str, Any], take_id: str, take_dir: Path
+    job: dict[str, Any],
+    plan: dict[str, Any],
+    take_id: str,
+    take_dir: Path,
+    on_dit_loaded: Callable[[str], None] | None = None,
 ) -> tuple[dict, dict | None]:
     """Run one real ACE-Step job. Returns `(take_meta, plan_patch)`;
     `plan_patch` is a delta of the LM-filled fields to persist when this was
@@ -469,6 +473,14 @@ def run_job(
     `upload_path` before calling this, so the worker never has to reach back
     into project storage itself.
 
+    `on_dit_loaded`, if given, is called with the now-loaded dit_profile
+    immediately after `_ensure_loaded` returns -- i.e. once any base-model
+    swap has actually finished, but before the (potentially long-running)
+    generation call below starts. This lets a caller publish worker_status
+    right away instead of only after the whole job completes (SPEC.md sec
+    4.3: a client polling worker status should see "loading" only for the
+    swap itself, not for the inference that follows it).
+
     Raises `WorkerUnavailable` if acestep/CUDA isn't usable or its API no
     longer matches this adapter; `server.jobs` catches that and marks the
     job `error` without crashing the HTTP process.
@@ -480,6 +492,8 @@ def run_job(
 
     with _LOCK:
         handler, lm, dit_profile = _ensure_loaded(job["dit_profile"])
+        if on_dit_loaded is not None:
+            on_dit_loaded(dit_profile)
 
         effective_plan = _plan_from_query(create_sample, lm, plan) if simple_mode else plan
         # Null/omitted bpm, key, or duration: let ACE-Step's CoT fill them in

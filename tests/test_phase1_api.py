@@ -167,9 +167,9 @@ def test_worker_republishes_status_after_recovering_from_startup_failure(
     proceed_with_job = threading.Event()
     real_run_job = mock_worker_module.run_job
 
-    def blocking_run_job(job, plan, take_id, take_dir):
+    def blocking_run_job(job, plan, take_id, take_dir, **kwargs):
         proceed_with_job.wait(timeout=5)
-        return real_run_job(job, plan, take_id, take_dir)
+        return real_run_job(job, plan, take_id, take_dir, **kwargs)
 
     monkeypatch.setattr(mock_worker_module, "run_job", blocking_run_job)
 
@@ -391,14 +391,14 @@ def test_plan_patch_merge_preserves_concurrent_edits(
 
     real_run_job = mock_worker_module.run_job
 
-    def _run_job_with_concurrent_edit(job, plan, take_id, take_dir):
+    def _run_job_with_concurrent_edit(job, plan, take_id, take_dir, **kwargs):
         # Simulate a user's PUT /plan landing while this "long-running" job
         # is executing -- server.jobs loaded `plan` before this call.
         current = storage.load_plan(project_id)
         storage.save_plan(
             project_id, {**current, "negative": ["concurrent edit"], "instrumental": True}
         )
-        return real_run_job(job=job, plan=plan, take_id=take_id, take_dir=take_dir)
+        return real_run_job(job=job, plan=plan, take_id=take_id, take_dir=take_dir, **kwargs)
 
     monkeypatch.setattr(mock_worker_module, "run_job", _run_job_with_concurrent_edit)
 
@@ -936,9 +936,9 @@ def test_batch_size_forced_to_one(client: TestClient, monkeypatch: pytest.Monkey
     seen_batch_sizes: list[Any] = []
     real_run_job = mock_worker_module.run_job
 
-    def _spy_run_job(job, plan, take_id, take_dir):
+    def _spy_run_job(job, plan, take_id, take_dir, **kwargs):
         seen_batch_sizes.append(job.get("batch_size"))
-        return real_run_job(job=job, plan=plan, take_id=take_id, take_dir=take_dir)
+        return real_run_job(job=job, plan=plan, take_id=take_id, take_dir=take_dir, **kwargs)
 
     monkeypatch.setattr(mock_worker_module, "run_job", _spy_run_job)
 

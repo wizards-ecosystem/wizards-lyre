@@ -417,8 +417,13 @@ export default function App() {
   // While an extract/lego/complete job is busy, the base model may still be
   // mid-swap (SPEC.md sec 4.3) -- the already-running 5s health poll keeps
   // health.dit_loaded current, so this just reads that instead of polling
-  // again. Falls back to the normal "<verb>ing… (status)" text once the
-  // worker reports studio_ops actually loaded.
+  // again. This is only accurate because server.jobs.run_claimed_job
+  // publishes worker_status as soon as the worker backend confirms the swap
+  // itself is done (right before generation starts), not just once the
+  // whole job finishes -- otherwise dit_loaded would stay on the pre-swap
+  // profile for the entire job and this would say "loading base model…"
+  // throughout the actual extraction too. Falls back to the normal
+  // "<verb>ing… (status)" text once the worker reports studio_ops loaded.
   const studioOpsLoading = busy && health?.dit_loaded !== "studio_ops";
 
   return (
