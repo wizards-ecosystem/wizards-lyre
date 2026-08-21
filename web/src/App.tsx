@@ -179,6 +179,17 @@ export default function App() {
     }
   }
 
+  async function setActiveTake(takeId: string): Promise<void> {
+    if (!activeId) return;
+    try {
+      await api.setActiveTake(activeId, takeId);
+      await refreshDetail(activeId);
+      await refreshProjects();
+    } catch (err) {
+      setErrorMsg(String(err));
+    }
+  }
+
   async function refreshDetail(id: string) {
     const data = await api.getProject(id);
     // Discard a response that's no longer for the active project (see
@@ -725,7 +736,12 @@ export default function App() {
                     {detail.takes.map((take) => (
                       <li
                         key={take.id}
-                        className={take.id === selectedTakeId ? "selected" : ""}
+                        className={[
+                          take.id === selectedTakeId ? "selected" : "",
+                          take.id === detail.project.active_take_id ? "active-take" : "",
+                        ]
+                          .filter(Boolean)
+                          .join(" ")}
                         onClick={() => setSelectedTakeId(take.id)}
                       >
                         <div className="take-meta">
@@ -735,6 +751,38 @@ export default function App() {
                             {take.duration_sec != null ? `${take.duration_sec.toFixed(1)}s` : "—"}
                           </span>
                           <span>score {take.score ?? "—"}</span>
+                          {take.id === detail.project.active_take_id && (
+                            <span className="active-take-badge">active</span>
+                          )}
+                        </div>
+                        <div className="take-actions">
+                          <button
+                            type="button"
+                            disabled={take.id === detail.project.active_take_id || !!take.error}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setActiveTake(take.id);
+                            }}
+                          >
+                            Set active
+                          </button>
+                          {take.parent_take_id &&
+                            (detail.takes.find((t) => t.id === take.parent_take_id) ? (
+                              <button
+                                type="button"
+                                className="parent-take-link"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setSelectedTakeId(take.parent_take_id);
+                                }}
+                              >
+                                from {take.parent_take_id.slice(0, 8)}
+                              </button>
+                            ) : (
+                              <span className="parent-take-id">
+                                from {take.parent_take_id.slice(0, 8)}
+                              </span>
+                            ))}
                         </div>
                         {take.error ? (
                           // A take whose generation failed has no audio file

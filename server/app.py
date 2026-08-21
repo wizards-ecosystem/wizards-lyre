@@ -38,6 +38,10 @@ class PatchProjectBody(BaseModel):
     favorite: Optional[bool] = None
 
 
+class ActiveTakeBody(BaseModel):
+    take_id: str
+
+
 class JobBody(BaseModel):
     action: str
     dit_profile: Optional[str] = None
@@ -138,6 +142,17 @@ def put_plan(project_id: str, body: dict[str, Any]) -> dict:
 @app.get("/api/projects/{project_id}/takes")
 def list_takes(project_id: str) -> list[dict]:
     return storage.list_takes(project_id)
+
+
+@app.post("/api/projects/{project_id}/active_take")
+def set_active_take(project_id: str, body: ActiveTakeBody) -> dict:
+    # storage.get_take raises TakeNotFound (-> 404, see the exception handler
+    # above) if the take doesn't exist. An active take must be playable, so
+    # reject a take that failed generation (SPEC.md sec 7.3 `error`).
+    take = storage.get_take(project_id, body.take_id)
+    if take.get("error") is not None:
+        raise ValueError(f"take has an error, cannot set active: {body.take_id}")
+    return storage.set_active_take(project_id, body.take_id)
 
 
 @app.get("/api/projects/{project_id}/takes/{take_id}/audio")
