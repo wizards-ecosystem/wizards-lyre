@@ -82,6 +82,58 @@ takes the same five decoder-attention tensors as `get_lyric_score` (plus
 full contract. Same as scoring: best-effort, never fails the take, falls
 back to `lrc_text: None` (`meta["has_lrc"] = False`, no `lyrics.lrc`
 written) rather than fabricating timestamps from a guessed duration.
+
+LoRA training (SPEC.md sec 4.4/12 "Style pack | LoRA train / load | 8+
+songs... GPU exclusive"; sec 13 "wrapped -- not [the upstream UI] itself"):
+researched the same way as the two sections above -- this path isn't
+documented at the field level in docs/en/*.md either (the upstream LoRA
+training tutorial documents its own web UI's "Train LoRA" tab, a one-click
+workflow, not a Python call), so this was read directly from
+ace-step/ACE-Step-1.5's source on GitHub. That web UI turns out to be a thin
+client of a real, separately-importable training pipeline: an internal
+FastAPI app under `acestep/api/train_api_*.py` that the UI process talks to
+over HTTP. Reading `acestep/api/train_api_lora_start_route.py` (its
+`/v1/training/start` handler) surfaces the actual Python entry points behind
+that HTTP hop, which `train_lora` below calls directly -- skipping both the
+UI and that internal HTTP layer, not just the UI (SPEC.md sec 2's "no [
+upstream UI]" rule and sec 3's "fully local" both still apply to it).
+
+The real pipeline is three stages, each a real class/function, not CLI-only:
+`acestep.training.dataset_builder.DatasetBuilder` (`scan_directory(dir)` walks
+a directory of audio files into `AudioSample` records, then
+`preprocess_to_tensors(dit_handler=..., output_dir=...)` runs each *labeled*
+sample through the already-loaded DiT handler's VAE/text/lyric encoders and
+writes one `<sample id>.pt` tensor file per song); `acestep.training.configs.
+LoRAConfig`/`TrainingConfig` (plain dataclasses -- `LoRAConfig(r=..., alpha=
+..., dropout=...)`, `TrainingConfig(learning_rate=..., max_epochs=...,
+save_every_n_epochs=..., output_dir=...)`); and `acestep.training.trainer.
+LoRATrainer(dit_handler=..., lora_config=..., training_config=...)`, whose
+`train_from_preprocessed(tensor_dir)` is a *generator* yielding `(step, loss,
+status)` -- the training loop only actually runs while this generator is
+being iterated, and it writes the final adapter weights to
+`<training_config.output_dir>/final/` itself once exhausted (no separate
+export call needed for a first cut). `dit_handler` is the same `AceStepHandler`
+instance `_ensure_loaded` already produces for generation -- LoRA training
+reuses whichever DiT is currently loaded rather than a second handler.
+
+Two things worth flagging about what `train_lora` deliberately does *not*
+replicate from the real pipeline: (1) `DatasetBuilder.scan_directory` only
+marks a sample `AudioSample.labeled = True` -- and therefore eligible for
+`preprocess_to_tensors`, which silently skips unlabeled samples -- when it
+finds a `.caption.txt` sidecar (or `.json`/CSV) caption next to the audio
+file; this adapter's `train_lora` signature carries no per-song captions,
+only one `name` on the job for the whole style pack, so
+every staged source file is given an identical `.caption.txt` sidecar
+containing `name` -- reasonable for a *style* pack, whose whole point is one
+shared style across its reference songs, but a future job that threads real
+per-take captions through would produce richer per-sample labels. (2) the
+real `/v1/training/start` route also runs a `RuntimeComponentManager` around
+training to offload the VAE/text-encoder/LLM off the GPU first, trading
+extra plumbing for headroom on a 12-16 GB card; `train_lora` skips that --
+SPEC.md sec 4.4 targets "3090-class" (24 GB), and the studio_ops DiT profile
+it trains against is already what `_ensure_loaded` uses for the biggest
+generation jobs, so the same amount of VRAM that already works for those
+jobs works here too.
 """
 
 from __future__ import annotations
@@ -153,6 +205,28 @@ TASK_TYPE_BY_ACTION = {
 # field; generate/cover/repaint don't take one.
 TRACK_INSTRUCTION_ACTIONS = {"extract", "lego", "complete"}
 
+# SPEC.md sec 4.4: "Style pack | LoRA train / load | 8+ songs".
+MIN_LORA_SOURCES = 8
+
+# LoRA training needs a real (non-distilled) fine-tuning target -- the base
+# 2B "studio_ops" checkpoint is that; turbo/xl-turbo are distilled few-step
+# checkpoints ACE-Step's own trainer.py isn't built to run a full diffusion
+# training loop against (see the module docstring's LoRA section).
+LORA_BASE_DIT_PROFILE = "studio_ops"
+
+# Mirrors the upstream training route's own request defaults
+# (`StartTrainingRequest` in acestep/api/train_api_models.py) -- the numbers
+# a user leaves untouched when starting training in the stock UI, and
+# presumably what SPEC.md sec 4.4's "~1 hour on 3090-class GPU" throughput
+# figure is based on.
+LORA_RANK = 64
+LORA_ALPHA = 128
+LORA_DROPOUT = 0.1
+LORA_LEARNING_RATE = 1e-4
+LORA_TRAIN_EPOCHS = 10
+LORA_SAVE_EVERY_N_EPOCHS = 5
+LORA_GRADIENT_ACCUMULATION_STEPS = 4
+
 
 class WorkerUnavailable(RuntimeError):
     """ACE-Step is not installed, has no usable GPU, or its Python API no
@@ -176,6 +250,26 @@ def _import_acestep():
             "for local dev/tests without a GPU."
         ) from exc
     return AceStepHandler, GenerationParams, GenerationConfig, LLMHandler, generate_music, create_sample
+
+
+def _import_lora_training():
+    """Lazy import for the LoRA training pipeline (see the module docstring's
+    LoRA section) -- a separate try/except from `_import_acestep` because
+    `acestep.training.*` is real but distinct from the inference-path
+    modules that function imports, and a machine with plain acestep
+    installed but not its training extras should get a clear message about
+    which half is missing."""
+    try:
+        from acestep.training.configs import LoRAConfig, TrainingConfig
+        from acestep.training.dataset_builder import DatasetBuilder
+        from acestep.training.trainer import LoRATrainer
+    except ImportError as exc:
+        raise WorkerUnavailable(
+            "acestep's LoRA training pipeline (acestep.training.*) is not installed in this "
+            "environment. Install ACE-Step 1.5 with its training dependencies (SPEC.md sec "
+            "4.4/13), or set BARD_WORKER=mock for local dev/tests without a GPU."
+        ) from exc
+    return DatasetBuilder, LoRAConfig, TrainingConfig, LoRATrainer
 
 
 def _api_call(step: str, fn, *args, **kwargs):
@@ -873,3 +967,174 @@ def run_job(
         "track_name": job.get("track_name"),
     }
     return meta, plan_patch, lrc_text
+
+
+def train_lora(
+    job: dict[str, Any],
+    project_id: str,
+    lora_id: str,
+    lora_dir: Path,
+    source_paths: list[Path],
+) -> dict:
+    """Train a style-pack LoRA from `source_paths` (SPEC.md sec 4.4/12; see
+    the module docstring's LoRA section for the real ACE-Step pipeline this
+    wraps: `DatasetBuilder.scan_directory` -> `preprocess_to_tensors` ->
+    `LoRATrainer.train_from_preprocessed`). Requires at least
+    `MIN_LORA_SOURCES` source files -- SPEC.md sec 4.4 is explicit ("8+
+    songs") and the real `DatasetBuilder`/`LoRATrainer` enforce no minimum of
+    their own, so an under-sized request would otherwise train "successfully"
+    on far too little data instead of failing clearly up front. `server.jobs`
+    also enforces this at enqueue time (fail fast, before a GPU job is even
+    queued); this check is the same invariant enforced again at the point
+    that actually matters if this function is ever called directly.
+
+    Call shape matches `worker.mock_worker.train_lora` so `server.jobs`
+    `_run_train_lora_job` can dispatch either backend. Writes the staged
+    source copies, preprocessed tensors, and final adapter weights under
+    `lora_dir` (already allocated and jailed by the caller, same division of
+    labor as `run_job`'s `take_dir`). Returns a meta dict for the caller to
+    persist via `server.storage.write_lora_meta` -- this function never
+    writes `lora_dir/meta.json` itself, mirroring how `run_job` above
+    returns `take_meta` instead of writing it directly.
+
+    Runs entirely under `_LOCK`, including the (potentially ~1 hour, SPEC.md
+    sec 4.4) training loop itself -- "GPU exclusive" (sec 4.4) means no other
+    job may run concurrently, not just that the initial model swap is
+    serialized.
+
+    Raises `WorkerUnavailable` if acestep/CUDA isn't usable, the training
+    pipeline isn't installed, or its API no longer matches this adapter; a
+    plain `RuntimeError` if staging/scanning/preprocessing/training itself
+    fails despite the API matching (e.g. ACE-Step found no audio files, or
+    training produced no adapter weights). Either way `server.jobs` catches
+    it and records the job as `error` without crashing the worker process.
+    """
+    name = (job.get("name") or "").strip() or "Untitled LoRA"
+    if len(source_paths) < MIN_LORA_SOURCES:
+        raise WorkerUnavailable(
+            f"train_lora requires at least {MIN_LORA_SOURCES} source audio files (SPEC.md sec "
+            f"4.4: 'Style pack | LoRA train / load | 8+ songs'), got {len(source_paths)}."
+        )
+
+    DatasetBuilder, LoRAConfig, TrainingConfig, LoRATrainer = _import_lora_training()
+
+    lora_dir.mkdir(parents=True, exist_ok=True)
+    dataset_dir = lora_dir / "dataset"
+    tensor_dir = lora_dir / "tensors"
+    adapter_dir = lora_dir / "adapter"
+    dataset_dir.mkdir(parents=True, exist_ok=True)
+
+    # Stage each source into a scratch directory DatasetBuilder.scan_directory
+    # can walk, with a `.caption.txt` sidecar so ACE-Step marks it `labeled`
+    # (see the module docstring: an audio file with no caption source stays
+    # unlabeled and preprocess_to_tensors silently skips it). This adapter's
+    # signature carries no per-song captions, only one shared `name` -- see
+    # the module docstring for why that's a reasonable simplification for a
+    # style pack specifically.
+    for i, src in enumerate(source_paths):
+        dest = dataset_dir / f"{i:03d}_{src.stem}{src.suffix}"
+        shutil.copyfile(src, dest)
+        dest.with_name(dest.name + ".caption.txt").write_text(name, encoding="utf-8")
+
+    with _LOCK:
+        handler, _lm, dit_profile = _ensure_loaded(LORA_BASE_DIT_PROFILE)
+
+        builder = _api_call("DatasetBuilder", DatasetBuilder)
+        try:
+            builder.metadata.name = name
+            # No per-song lyrics/instrumental info reaches this adapter (see
+            # above) -- treat every staged source as instrumental, the same
+            # conservative default DatasetMetadata itself ships with.
+            builder.metadata.all_instrumental = True
+        except AttributeError as exc:
+            # Same reasoning as _api_method_call: a plain attribute access
+            # would otherwise raise AttributeError straight from this frame
+            # instead of the clean WorkerUnavailable every other API-mismatch
+            # path in this module promises.
+            raise WorkerUnavailable(
+                f"acestep API mismatch in DatasetBuilder.metadata: {exc}. Update "
+                "worker/acestep_worker.py to match the installed acestep version, or set "
+                "BARD_WORKER=mock."
+            ) from exc
+
+        samples, scan_status = _api_method_call(
+            "DatasetBuilder.scan_directory", builder, "scan_directory", str(dataset_dir)
+        )
+        if not samples:
+            raise RuntimeError(f"ACE-Step found no audio files to train on: {scan_status}")
+        labeled_count = _api_method_call(
+            "DatasetBuilder.get_labeled_count", builder, "get_labeled_count"
+        )
+        if labeled_count < MIN_LORA_SOURCES:
+            raise RuntimeError(
+                f"ACE-Step only labeled {labeled_count}/{len(samples)} staged source files "
+                f"(needs >= {MIN_LORA_SOURCES}): {scan_status}"
+            )
+
+        output_paths, preprocess_status = _api_method_call(
+            "DatasetBuilder.preprocess_to_tensors",
+            builder,
+            "preprocess_to_tensors",
+            dit_handler=handler,
+            output_dir=str(tensor_dir),
+            skip_existing=False,
+            progress_callback=None,
+        )
+        if not output_paths:
+            raise RuntimeError(
+                f"ACE-Step preprocessing produced no training tensors: {preprocess_status}"
+            )
+
+        lora_config = _api_call(
+            "LoRAConfig", LoRAConfig, r=LORA_RANK, alpha=LORA_ALPHA, dropout=LORA_DROPOUT
+        )
+        training_config = _api_call(
+            "TrainingConfig",
+            TrainingConfig,
+            learning_rate=LORA_LEARNING_RATE,
+            max_epochs=LORA_TRAIN_EPOCHS,
+            save_every_n_epochs=LORA_SAVE_EVERY_N_EPOCHS,
+            gradient_accumulation_steps=LORA_GRADIENT_ACCUMULATION_STEPS,
+            seed=42,
+            output_dir=str(adapter_dir),
+        )
+        trainer = _api_call(
+            "LoRATrainer",
+            LoRATrainer,
+            dit_handler=handler,
+            lora_config=lora_config,
+            training_config=training_config,
+        )
+
+        train_iter = _api_method_call(
+            "LoRATrainer.train_from_preprocessed",
+            trainer,
+            "train_from_preprocessed",
+            str(tensor_dir),
+        )
+        # train_from_preprocessed is a generator -- the training loop itself
+        # only runs while this is iterated; it writes the final adapter to
+        # <adapter_dir>/final/ once exhausted (see the module docstring).
+        last_step, last_loss, last_status = 0, None, "not started"
+        for step, loss, status in train_iter:
+            last_step, last_loss, last_status = step, loss, status
+
+    final_dir = adapter_dir / "final"
+    if not final_dir.exists() or not any(final_dir.iterdir()):
+        raise RuntimeError(
+            f"ACE-Step training finished (status: {last_status!r}) but wrote no adapter weights "
+            f"to {final_dir}"
+        )
+
+    return {
+        "id": lora_id,
+        "name": name,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "source_take_count": len(source_paths),
+        "base_checkpoint": DIT_CHECKPOINTS[LORA_BASE_DIT_PROFILE],
+        "dit_profile": dit_profile,
+        "final_step": last_step,
+        "final_loss": last_loss,
+        "status": last_status,
+        "error": None,
+    }

@@ -713,8 +713,8 @@ def test_smoke_gpu_script_writes_under_output_dir(
 # workflow (SPEC.md sec 4.3/9.2) each of them reuses -- see
 # tests/test_extract_requires_studio_ops.py, tests/test_lego_flow.py, and
 # tests/test_complete_flow.py for their success-path coverage. `train_lora`
-# is still phase-gated (no production backend implements it yet) -- see
-# tests/test_lora_scaffolding.py::test_train_lora_action_is_phase_gated.
+# is live (production ACE-Step trainer plus mock backend) -- see
+# tests/test_train_lora_flow.py and tests/test_acestep_worker_adapter.py.
 
 
 def test_generate_rejects_studio_ops_dit_profile(client: TestClient) -> None:
