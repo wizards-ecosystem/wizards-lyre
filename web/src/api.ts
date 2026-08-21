@@ -180,6 +180,11 @@ export const api = {
         seed: -1,
       }),
     }),
+  setActiveTake: (id: string, takeId: string) =>
+    request<Project>(`/api/projects/${id}/active_take`, {
+      method: "POST",
+      body: JSON.stringify({ take_id: takeId }),
+    }),
   getJob: (jobId: string) => request<Job>(`/api/jobs/${jobId}`),
   takeAudioUrl: (projectId: string, takeId: string) =>
     `/api/projects/${projectId}/takes/${takeId}/audio`,
