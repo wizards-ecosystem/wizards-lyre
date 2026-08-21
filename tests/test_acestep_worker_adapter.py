@@ -152,6 +152,8 @@ def _install_fake_acestep(
     handler_init_result: tuple[str, bool] = ("dit ready", True),
     audio_path_override: Path | None = None,
     create_sample_result: dict | None = None,
+    lyric_score_tensors: dict[str, Any] | None = None,
+    lyric_score_result: dict[str, Any] | None = None,
 ) -> None:
     """Register fake `acestep.*` modules so `worker.acestep_worker`'s lazy
     `from acestep... import ...` statements resolve to them instead of the
@@ -166,12 +168,32 @@ def _install_fake_acestep(
     audio file at an arbitrary path instead of writing into `save_dir`.
     `create_sample_result` overrides module-level `create_sample`'s default
     successful return -- pass e.g. `{"success": False, "error": "..."}` to
-    simulate a documented planning failure."""
+    simulate a documented planning failure. `lyric_score_tensors`, when
+    given, is merged into `generate_music`'s `extra_outputs` -- mirrors
+    ACE-Step actually populating the decoder-attention tensors
+    (`pred_latents`/`encoder_hidden_states`/`encoder_attention_mask`/
+    `context_latents`/`lyric_token_idss`) `AceStepHandler.get_lyric_score`
+    needs; omitted (the default) matches ACE-Step's save-memory mode / no
+    tensors captured, so the adapter must not attempt scoring.
+    `lyric_score_result` overrides the fake handler's `get_lyric_score`
+    return; defaults to a canned success payload."""
 
     class DefaultFakeAceStepHandler:
         def __init__(self) -> None:
             self.config_path: str | None = None
             self.offload_to_cpu = False
+
+        def get_lyric_score(self, **kwargs: Any) -> dict[str, Any]:
+            # Real signature: pred_latent, encoder_hidden_states,
+            # encoder_attention_mask, context_latents, lyric_token_ids,
+            # vocal_language, inference_steps, seed -- returns a dict with
+            # lm_score/dit_score/success/error (worker/acestep_worker.py's
+            # `_quality_score` uses dit_score, upstream's Tutorial.md
+            # "favorite" metric).
+            log.append(("handler.get_lyric_score", kwargs))
+            if lyric_score_result is not None:
+                return lyric_score_result
+            return {"lm_score": 0.5, "dit_score": 0.8123, "success": True, "error": None}
 
         def initialize_service(
             self, *, project_root: str, config_path: str, device: str, offload_to_cpu: bool = False
@@ -259,18 +281,18 @@ def _install_fake_acestep(
         # nested under "params", not top-level -- exactly what the reviewer
         # flagged as misread.
         audio = {"path": str(out_path), "params": {"seed": 999}}
-        return FakeResult(
-            audios=[audio],
-            extra_outputs={
-                "caption": params.caption,
-                "lyrics": params.lyrics,
-                "bpm": params.bpm,
-                "keyscale": params.keyscale,
-                "duration": params.duration,
-                "vocal_language": "en",
-                "timesignature": "4/4",
-            },
-        )
+        extra_outputs = {
+            "caption": params.caption,
+            "lyrics": params.lyrics,
+            "bpm": params.bpm,
+            "keyscale": params.keyscale,
+            "duration": params.duration,
+            "vocal_language": "en",
+            "timesignature": "4/4",
+        }
+        if lyric_score_tensors is not None:
+            extra_outputs.update(lyric_score_tensors)
+        return FakeResult(audios=[audio], extra_outputs=extra_outputs)
 
     acestep_pkg = types.ModuleType("acestep")
     handler_mod = types.ModuleType("acestep.handler")
@@ -322,6 +344,11 @@ def test_run_job_matches_installed_api_contract(
     # request, and not silently left as -1 (SPEC.md sec 7.3)
     assert meta["seed"] == 999
     assert (tmp_path / "take1" / "mix.wav").exists()  # renamed from output_0.wav
+    # No decoder-attention tensors in extra_outputs here (the default fake
+    # matches ACE-Step's save-memory mode / no tensors captured) -- scoring
+    # must not be attempted, not fabricated (SPEC.md sec 12 Phase 4).
+    assert meta["score"] is None
+    assert not any(e[0] == "handler.get_lyric_score" for e in log)
 
     handler_init = next(e for e in log if e[0] == "handler.initialize_service")
     kwargs = handler_init[1]
@@ -375,6 +402,104 @@ def test_run_job_matches_installed_api_contract(
     # path, not a fixed request.
     assert params.seed == -1
     assert config.use_random_seed is True
+
+
+def test_dit_lyric_score_flows_into_take_meta(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SPEC.md sec 12 Phase 4: "ACE-Step quality score on takes". There's no
+    score field on GenerationResult/extra_outputs itself, but ACE-Step 1.5
+    does expose a real scoring call -- `AceStepHandler.get_lyric_score` --
+    that reuses the decoder-attention tensors `generate_music` puts in
+    `extra_outputs` when lyrics are present. This fake mirrors that: once
+    those tensors show up in `extra_outputs`, `run_job` must call
+    `get_lyric_score` with them (plus vocal_language/inference_steps/seed)
+    and round-trip its `dit_score` into the take's `score` field."""
+    log: list[tuple] = []
+    tensors = {
+        "pred_latents": "fake-pred-latents",
+        "encoder_hidden_states": "fake-encoder-hidden-states",
+        "encoder_attention_mask": "fake-encoder-attention-mask",
+        "context_latents": "fake-context-latents",
+        "lyric_token_idss": "fake-lyric-token-ids",
+    }
+    _install_fake_acestep(monkeypatch, log, lyric_score_tensors=tensors)
+
+    plan = {
+        "query": "",
+        "caption": "anthemic pop chorus",
+        "lyrics": "[Verse]\nWe were born to run",
+        "instrumental": False,
+        "bpm": 120,
+        "keyscale": "C Major",
+        "duration_sec": 30,
+        "vocal_language": "en",
+        "timesignature": "4/4",
+    }
+    job = {"action": "generate", "dit_profile": "iterate", "seed": -1, "src_audio": None}
+
+    meta, _ = acestep_worker.run_job(
+        job=job, plan=plan, take_id="t-score", take_dir=tmp_path / "take-score"
+    )
+
+    assert meta["score"] == 0.8123  # dit_score from the fake's canned success payload
+
+    score_call = next(e for e in log if e[0] == "handler.get_lyric_score")
+    kwargs = score_call[1]
+    assert kwargs["pred_latent"] == tensors["pred_latents"]
+    assert kwargs["encoder_hidden_states"] == tensors["encoder_hidden_states"]
+    assert kwargs["encoder_attention_mask"] == tensors["encoder_attention_mask"]
+    assert kwargs["context_latents"] == tensors["context_latents"]
+    # extra_outputs' real key is "lyric_token_idss" (plural), mapped onto
+    # get_lyric_score's "lyric_token_ids" kwarg.
+    assert kwargs["lyric_token_ids"] == tensors["lyric_token_idss"]
+    assert kwargs["vocal_language"] == "en"
+    # SPEC.md sec 4.1: iterate = 8 steps -- the same inference_steps this
+    # take was actually generated with, not a hardcoded default.
+    assert kwargs["inference_steps"] == 8
+    assert kwargs["seed"] == 42
+
+
+def test_dit_lyric_score_failure_falls_back_to_none(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A scoring failure (e.g. attentions unavailable) must fall back to
+    `None`, not fail the whole take -- scoring is best-effort, unlike the
+    surrounding `_api_call`-wrapped calls that raise `WorkerUnavailable`."""
+    log: list[tuple] = []
+    tensors = {
+        "pred_latents": "fake-pred-latents",
+        "encoder_hidden_states": "fake-encoder-hidden-states",
+        "encoder_attention_mask": "fake-encoder-attention-mask",
+        "context_latents": "fake-context-latents",
+        "lyric_token_idss": "fake-lyric-token-ids",
+    }
+    _install_fake_acestep(
+        monkeypatch,
+        log,
+        lyric_score_tensors=tensors,
+        lyric_score_result={"success": False, "error": "attentions unavailable"},
+    )
+
+    plan = {
+        "query": "",
+        "caption": "anthemic pop chorus",
+        "lyrics": "[Verse]\nWe were born to run",
+        "instrumental": False,
+        "bpm": 120,
+        "keyscale": "C Major",
+        "duration_sec": 30,
+        "vocal_language": "en",
+        "timesignature": "4/4",
+    }
+    job = {"action": "generate", "dit_profile": "iterate", "seed": -1, "src_audio": None}
+
+    meta, _ = acestep_worker.run_job(
+        job=job, plan=plan, take_id="t-score-fail", take_dir=tmp_path / "take-score-fail"
+    )
+
+    assert meta["score"] is None
+    assert any(e[0] == "handler.get_lyric_score" for e in log)
 
 
 def test_checkpoints_project_root_matches_ace_step_resolution(
