@@ -141,6 +141,34 @@ export const api = {
         seed: -1,
       }),
     }),
+  lego: (
+    id: string,
+    sourceTakeId: string,
+    trackName: string,
+    region: { start: number; end: number } | null,
+  ) =>
+    request<Job>(`/api/projects/${id}/jobs`, {
+      method: "POST",
+      body: JSON.stringify({
+        action: "lego",
+        dit_profile: "studio_ops",
+        source_take_id: sourceTakeId,
+        track_name: trackName,
+        seed: -1,
+        ...(region ? { repainting_start: region.start, repainting_end: region.end } : {}),
+      }),
+    }),
+  complete: (id: string, sourceTakeId: string, trackName: string) =>
+    request<Job>(`/api/projects/${id}/jobs`, {
+      method: "POST",
+      body: JSON.stringify({
+        action: "complete",
+        dit_profile: "studio_ops",
+        source_take_id: sourceTakeId,
+        track_name: trackName,
+        seed: -1,
+      }),
+    }),
   getJob: (jobId: string) => request<Job>(`/api/jobs/${jobId}`),
   takeAudioUrl: (projectId: string, takeId: string) =>
     `/api/projects/${projectId}/takes/${takeId}/audio`,

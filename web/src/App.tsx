@@ -414,6 +414,68 @@ export default function App() {
     }
   }
 
+  async function lego() {
+    if (!activeId || !selectedTakeId || !trackName.trim()) return;
+    // Same base-model-swap gate as extract() (SPEC.md sec 4.3).
+    if (
+      !window.confirm(
+        "Lego swaps the loaded model to the studio_ops base model (slower, SPEC sec 4.3). Continue?"
+      )
+    ) {
+      return;
+    }
+    setBusy(true);
+    setBusyStatus("queued");
+    setErrorMsg(null);
+    try {
+      // Same race as cover()/repaint()/extract(): flush any in-flight plan
+      // edit before the worker reads plan.json (and its caption) off disk.
+      await flushPendingPlanSave();
+      const queued = await api.lego(activeId, selectedTakeId, trackName, region);
+      const job = await pollJob(queued.id, (update) => setBusyStatus(update.status));
+      if (job.status === "error") {
+        setErrorMsg(job.error ?? "lego job failed");
+      } else {
+        clearRegion();
+      }
+      await refreshDetail(activeId);
+    } catch (err) {
+      setErrorMsg(String(err));
+    } finally {
+      setBusy(false);
+      setBusyStatus(null);
+    }
+  }
+
+  async function complete() {
+    if (!activeId || !selectedTakeId || !trackName.trim()) return;
+    // Same base-model-swap gate as extract() (SPEC.md sec 4.3).
+    if (
+      !window.confirm(
+        "Complete swaps the loaded model to the studio_ops base model (slower, SPEC sec 4.3). Continue?"
+      )
+    ) {
+      return;
+    }
+    setBusy(true);
+    setBusyStatus("queued");
+    setErrorMsg(null);
+    try {
+      await flushPendingPlanSave();
+      const queued = await api.complete(activeId, selectedTakeId, trackName);
+      const job = await pollJob(queued.id, (update) => setBusyStatus(update.status));
+      if (job.status === "error") {
+        setErrorMsg(job.error ?? "complete job failed");
+      }
+      await refreshDetail(activeId);
+    } catch (err) {
+      setErrorMsg(String(err));
+    } finally {
+      setBusy(false);
+      setBusyStatus(null);
+    }
+  }
+
   // While an extract/lego/complete job is busy, the base model may still be
   // mid-swap (SPEC.md sec 4.3) -- the already-running 5s health poll keeps
   // health.dit_loaded current, so this just reads that instead of polling
@@ -655,7 +717,7 @@ export default function App() {
                       {busy ? `Repainting… (${busyStatus ?? "queued"})` : "Repaint"}
                     </button>
                     <label className="track-name">
-                      Track name
+                      Track name / classes
                       <input
                         placeholder="vocals, drums, bass..."
                         value={trackName}
@@ -684,11 +746,49 @@ export default function App() {
                           : `Extracting… (${busyStatus ?? "queued"})`
                         : "Extract"}
                     </button>
-                    <button disabled title="Phase 3 (requires studio_ops)">
-                      Lego
+                    <button
+                      onClick={lego}
+                      disabled={
+                        busy ||
+                        !selectedTakeId ||
+                        !trackName.trim() ||
+                        !!detail.takes.find((t) => t.id === selectedTakeId)?.error
+                      }
+                      title={
+                        !selectedTakeId
+                          ? "Select a take first"
+                          : !trackName.trim()
+                            ? "Enter a track name first"
+                            : undefined
+                      }
+                    >
+                      {busy
+                        ? studioOpsLoading
+                          ? "loading base model…"
+                          : `Adding track… (${busyStatus ?? "queued"})`
+                        : "Lego"}
                     </button>
-                    <button disabled title="Phase 3 (requires studio_ops)">
-                      Complete
+                    <button
+                      onClick={complete}
+                      disabled={
+                        busy ||
+                        !selectedTakeId ||
+                        !trackName.trim() ||
+                        !!detail.takes.find((t) => t.id === selectedTakeId)?.error
+                      }
+                      title={
+                        !selectedTakeId
+                          ? "Select a take first"
+                          : !trackName.trim()
+                            ? "Enter a track name / classes first"
+                            : undefined
+                      }
+                    >
+                      {busy
+                        ? studioOpsLoading
+                          ? "loading base model…"
+                          : `Completing… (${busyStatus ?? "queued"})`
+                        : "Complete"}
                     </button>
                   </div>
                 </section>

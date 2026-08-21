@@ -11,16 +11,15 @@ Several layers make up this contract in the current codebase:
    task-specific `instruction` field) -- missing, non-string, or
    whitespace-only input is rejected at enqueue time, not just guarded by
    the web UI's disabled-button state.
-3. Phase 3 (SPEC.md sec 12) has landed for extract now that the web UI has a
-   base-model-swap confirmation/loading workflow (SPEC.md sec 4.3/9.2), so
-   POST /api/projects/{id}/jobs actually queues and runs a well-formed
-   extract request. lego/complete remain phase-gated behind their own
-   follow-up UI (see
-   tests/test_phase1_api.py::test_phase_gated_actions_rejected_until_their_phase);
-   this module only covers extract's own dit_profile/track_name
-   enforcement, the layer (1)/(2) contracts above, plus (below) that the
-   base-model swap itself is published as soon as it happens rather than
-   only once the whole job finishes.
+3. Phase 3 (SPEC.md sec 12) has landed for extract, lego, and complete alike
+   now that the web UI has a base-model-swap confirmation/loading workflow
+   (SPEC.md sec 4.3/9.2) shared by all three, so POST /api/projects/{id}/jobs
+   actually queues and runs a well-formed request for any of them. This
+   module only covers extract's own dit_profile/track_name enforcement, the
+   layer (1)/(2) contracts above, plus (below) that the base-model swap
+   itself is published as soon as it happens rather than only once the whole
+   job finishes -- see tests/test_lego_flow.py and tests/test_complete_flow.py
+   for lego/complete's own success-path coverage.
 """
 
 from __future__ import annotations
