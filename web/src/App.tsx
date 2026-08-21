@@ -290,6 +290,24 @@ export default function App() {
     }
   }
 
+  // SPEC.md sec 12 Phase 5: restore an earlier take as active without
+  // deleting history -- every take is immutable (sec 7.3), so this just
+  // repoints project.active_take_id at an existing take rather than
+  // creating a new one. Refreshes both detail (active_take_id) and the
+  // library list (updated_at bumps on every project mutation) so the UI
+  // reflects what's actually on disk, not just local state.
+  async function setActiveTake(takeId: string) {
+    if (!activeId) return;
+    setErrorMsg(null);
+    try {
+      await api.setActiveTake(activeId, takeId);
+      await refreshDetail(activeId);
+      await refreshProjects();
+    } catch (err) {
+      setErrorMsg(String(err));
+    }
+  }
+
   function savePlanField<K extends keyof Plan>(key: K, value: Plan[K]) {
     if (!activeId || !detail) return;
     const plan = { ...detail.plan, [key]: value };
@@ -622,7 +640,12 @@ export default function App() {
                     {detail.takes.map((take) => (
                       <li
                         key={take.id}
-                        className={take.id === selectedTakeId ? "selected" : ""}
+                        className={[
+                          take.id === selectedTakeId ? "selected" : "",
+                          take.id === detail.project.active_take_id ? "active-take" : "",
+                        ]
+                          .filter(Boolean)
+                          .join(" ")}
                         onClick={() => setSelectedTakeId(take.id)}
                       >
                         <div className="take-meta">
@@ -632,6 +655,36 @@ export default function App() {
                             {take.duration_sec != null ? `${take.duration_sec.toFixed(1)}s` : "—"}
                           </span>
                           <span>score {take.score ?? "—"}</span>
+                          {take.id === detail.project.active_take_id && (
+                            <span className="active-take-badge">active</span>
+                          )}
+                        </div>
+                        <div className="take-actions">
+                          {take.parent_take_id &&
+                            (detail.takes.some((t) => t.id === take.parent_take_id) ? (
+                              <button
+                                className="parent-take-link"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setSelectedTakeId(take.parent_take_id);
+                                }}
+                              >
+                                from {take.parent_take_id.slice(0, 8)}
+                              </button>
+                            ) : (
+                              <span className="parent-take-link">
+                                from {take.parent_take_id.slice(0, 8)}
+                              </span>
+                            ))}
+                          <button
+                            disabled={take.id === detail.project.active_take_id || !!take.error}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setActiveTake(take.id);
+                            }}
+                          >
+                            Set active
+                          </button>
                         </div>
                         {take.error ? (
                           // A take whose generation failed has no audio file

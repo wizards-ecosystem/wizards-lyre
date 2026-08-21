@@ -37,6 +37,10 @@ class PatchProjectBody(BaseModel):
     dit_profile: Optional[str] = None
 
 
+class ActiveTakeBody(BaseModel):
+    take_id: str
+
+
 class JobBody(BaseModel):
     action: str
     dit_profile: Optional[str] = None
@@ -127,6 +131,20 @@ def get_project(project_id: str) -> dict:
 @app.patch("/api/projects/{project_id}")
 def patch_project(project_id: str, body: PatchProjectBody) -> dict:
     return storage.patch_project(project_id, body.model_dump(exclude_unset=True))
+
+
+@app.post("/api/projects/{project_id}/active_take")
+def set_active_take(project_id: str, body: ActiveTakeBody) -> dict:
+    # storage.get_take raises storage.TakeNotFound (-> 404, see the exception
+    # handler above) if the take doesn't exist. SPEC.md sec 12 Phase 5: this
+    # is the "walk parent_take_id" restore-as-active path -- an active take
+    # must be playable, so refuse to point active_take_id at one that failed
+    # generation (its meta has no mix.wav, same reason jobs.py never
+    # auto-promotes an error take).
+    take = storage.get_take(project_id, body.take_id)
+    if take.get("error") is not None:
+        raise ValueError(f"take {body.take_id} has an error and cannot be made active")
+    return storage.set_active_take(project_id, body.take_id)
 
 
 @app.put("/api/projects/{project_id}/plan")

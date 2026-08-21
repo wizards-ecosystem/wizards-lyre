@@ -296,6 +296,39 @@ button:disabled {
   background: #23253a;
 }
 
+/* .active-take marks project.active_take_id (the take that actually plays
+   by default) -- a distinct concept from .selected (the waveform-source
+   take the UI happens to have open), so it gets its own color rather than
+   reusing --accent. Combinable with .selected on the same <li>. */
+.takes li.active-take {
+  border-color: #4caf82;
+  box-shadow: inset 0 0 0 1px #4caf82;
+}
+
+.active-take-badge {
+  color: #4caf82;
+  font-weight: 600;
+  text-transform: uppercase;
+  font-size: 0.75em;
+}
+
+.take-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: flex-start;
+}
+
+.parent-take-link {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--muted);
+  text-decoration: underline;
+  cursor: pointer;
+  font-size: 0.85em;
+}
+
 .take-meta {
   display: flex;
   flex-direction: column;
