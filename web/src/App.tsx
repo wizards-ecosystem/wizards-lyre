@@ -48,6 +48,7 @@ export default function App() {
   const [busyStatus, setBusyStatus] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [selectedTakeId, setSelectedTakeId] = useState<string | null>(null);
+  const [compareTakeId, setCompareTakeId] = useState<string | null>(null);
   const [region, setRegion] = useState<{ start: number; end: number } | null>(null);
   const [coverStrength, setCoverStrength] = useState(0.7);
   const [trackName, setTrackName] = useState("");
@@ -188,6 +189,14 @@ export default function App() {
     } catch (err) {
       setErrorMsg(String(err));
     }
+  }
+
+  // Swapping A/B also changes which take Cover/Repaint/Extract/Lego/Complete
+  // act on next, since those all key off selectedTakeId -- that's the
+  // "instant swap" SPEC.md sec 12 calls for, not a separate hidden state.
+  function swapCompare(): void {
+    setSelectedTakeId(compareTakeId);
+    setCompareTakeId(selectedTakeId);
   }
 
   async function refreshDetail(id: string) {
@@ -766,6 +775,16 @@ export default function App() {
                           >
                             Set active
                           </button>
+                          <button
+                            type="button"
+                            disabled={!!take.error}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setCompareTakeId((prev) => (prev === take.id ? null : take.id));
+                            }}
+                          >
+                            {take.id === compareTakeId ? "Comparing" : "Compare"}
+                          </button>
                           {take.parent_take_id &&
                             (detail.takes.find((t) => t.id === take.parent_take_id) ? (
                               <button
@@ -835,6 +854,43 @@ export default function App() {
                     </a>
                   </div>
                 </section>
+
+                {compareTakeId &&
+                  !detail.takes.find((t) => t.id === compareTakeId)?.error && (
+                    <section className="pane compare">
+                      <h3>Compare</h3>
+                      <div className="compare-panel">
+                        <div className="compare-slot">
+                          <span className="compare-label">A: selected</span>
+                          {selectedTakeId &&
+                          !detail.takes.find((t) => t.id === selectedTakeId)?.error ? (
+                            <audio controls src={api.takeAudioUrl(detail.project.id, selectedTakeId)} />
+                          ) : (
+                            <p className="hint">Select a take to fill A too.</p>
+                          )}
+                        </div>
+                        <button
+                          type="button"
+                          className="swap-compare"
+                          disabled={!selectedTakeId}
+                          onClick={swapCompare}
+                        >
+                          Swap A/B
+                        </button>
+                        <div className="compare-slot">
+                          <span className="compare-label">B: comparing</span>
+                          <audio controls src={api.takeAudioUrl(detail.project.id, compareTakeId)} />
+                        </div>
+                        <button
+                          type="button"
+                          className="close-compare"
+                          onClick={() => setCompareTakeId(null)}
+                        >
+                          Close compare
+                        </button>
+                      </div>
+                    </section>
+                  )}
 
                 <section className="pane waveform">
                   <h3>Waveform</h3>
