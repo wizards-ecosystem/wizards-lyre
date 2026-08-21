@@ -368,9 +368,10 @@ export default function App() {
       const job = await pollJob(queued.id, (update) => setBusyStatus(update.status));
       if (job.status === "error") {
         setErrorMsg(job.error ?? "repaint job failed");
+      } else {
+        clearRegion();
       }
       await refreshDetail(activeId);
-      clearRegion();
     } catch (err) {
       setErrorMsg(String(err));
     } finally {
