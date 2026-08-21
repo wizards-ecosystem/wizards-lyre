@@ -130,6 +130,17 @@ export const api = {
         seed: -1,
       }),
     }),
+  extract: (id: string, sourceTakeId: string, trackName: string) =>
+    request<Job>(`/api/projects/${id}/jobs`, {
+      method: "POST",
+      body: JSON.stringify({
+        action: "extract",
+        dit_profile: "studio_ops",
+        source_take_id: sourceTakeId,
+        track_name: trackName,
+        seed: -1,
+      }),
+    }),
   getJob: (jobId: string) => request<Job>(`/api/jobs/${jobId}`),
   takeAudioUrl: (projectId: string, takeId: string) =>
     `/api/projects/${projectId}/takes/${takeId}/audio`,

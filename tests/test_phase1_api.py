@@ -167,9 +167,9 @@ def test_worker_republishes_status_after_recovering_from_startup_failure(
     proceed_with_job = threading.Event()
     real_run_job = mock_worker_module.run_job
 
-    def blocking_run_job(job, plan, take_id, take_dir):
+    def blocking_run_job(job, plan, take_id, take_dir, **kwargs):
         proceed_with_job.wait(timeout=5)
-        return real_run_job(job, plan, take_id, take_dir)
+        return real_run_job(job, plan, take_id, take_dir, **kwargs)
 
     monkeypatch.setattr(mock_worker_module, "run_job", blocking_run_job)
 
@@ -391,14 +391,14 @@ def test_plan_patch_merge_preserves_concurrent_edits(
 
     real_run_job = mock_worker_module.run_job
 
-    def _run_job_with_concurrent_edit(job, plan, take_id, take_dir):
+    def _run_job_with_concurrent_edit(job, plan, take_id, take_dir, **kwargs):
         # Simulate a user's PUT /plan landing while this "long-running" job
         # is executing -- server.jobs loaded `plan` before this call.
         current = storage.load_plan(project_id)
         storage.save_plan(
             project_id, {**current, "negative": ["concurrent edit"], "instrumental": True}
         )
-        return real_run_job(job=job, plan=plan, take_id=take_id, take_dir=take_dir)
+        return real_run_job(job=job, plan=plan, take_id=take_id, take_dir=take_dir, **kwargs)
 
     monkeypatch.setattr(mock_worker_module, "run_job", _run_job_with_concurrent_edit)
 
@@ -711,9 +711,11 @@ def test_smoke_gpu_script_writes_under_output_dir(
 def test_phase_gated_actions_rejected_until_their_phase(client: TestClient) -> None:
     """SPEC.md sec 12 (phase order): phase 1 is generate; phase 2 adds cover
     and repaint (now that the web UI has a waveform region-select feeding
-    repainting_start/repainting_end -- see test_repaint_take_flow).
-    extract/lego/complete (phase 3) still need frontend workflow this build
-    doesn't have yet -- a base-model-swap confirmation/loading UX -- so the
+    repainting_start/repainting_end -- see test_repaint_take_flow); phase 3
+    adds extract (now that the web UI has a base-model-swap
+    confirmation/loading workflow -- see
+    tests/test_extract_requires_studio_ops.py). lego/complete still need
+    their own follow-up frontend workflow this build doesn't have yet, so the
     API must reject them outright instead of accepting a job the UI can't
     drive, regardless of how well-formed the rest of the request is."""
     project = client.post("/api/projects", json={"title": "Phase Gate Test"}).json()
@@ -728,7 +730,7 @@ def test_phase_gated_actions_rejected_until_their_phase(client: TestClient) -> N
     assert gen["status"] == "done", gen.get("error")
     source_take_id = gen["take_id"]
 
-    for action in ("extract", "lego", "complete"):
+    for action in ("lego", "complete"):
         # Well-formed in every other respect (real source, studio_ops
         # profile where that would otherwise be required) -- still rejected
         # purely because this action isn't available yet.
@@ -934,9 +936,9 @@ def test_batch_size_forced_to_one(client: TestClient, monkeypatch: pytest.Monkey
     seen_batch_sizes: list[Any] = []
     real_run_job = mock_worker_module.run_job
 
-    def _spy_run_job(job, plan, take_id, take_dir):
+    def _spy_run_job(job, plan, take_id, take_dir, **kwargs):
         seen_batch_sizes.append(job.get("batch_size"))
-        return real_run_job(job=job, plan=plan, take_id=take_id, take_dir=take_dir)
+        return real_run_job(job=job, plan=plan, take_id=take_id, take_dir=take_dir, **kwargs)
 
     monkeypatch.setattr(mock_worker_module, "run_job", _spy_run_job)
 

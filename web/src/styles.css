@@ -230,6 +230,18 @@ body {
   width: 64px;
 }
 
+.track-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.track-name input {
+  width: 140px;
+}
+
 input,
 textarea,
 button {

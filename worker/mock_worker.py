@@ -16,7 +16,7 @@ import random
 import wave
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 SAMPLE_RATE = 8000
 DURATION_SEC = 0.5
@@ -109,7 +109,11 @@ def _plan_from_query(plan: dict[str, Any]) -> dict[str, Any]:
 
 
 def run_job(
-    job: dict[str, Any], plan: dict[str, Any], take_id: str, take_dir: Path
+    job: dict[str, Any],
+    plan: dict[str, Any],
+    take_id: str,
+    take_dir: Path,
+    on_dit_loaded: Callable[[str], None] | None = None,
 ) -> tuple[dict, dict | None]:
     """Run one mocked job. Returns `(take_meta, plan_patch)`; `plan_patch` is
     a delta of the fields to persist when this job filled the plan in
@@ -119,12 +123,21 @@ def run_job(
 
     `take_dir` must already be inside the projects/ path jail; this function
     only ever writes files inside it.
+
+    `on_dit_loaded`, if given, is called once the (simulated) DiT is
+    "loaded" for this job -- before any of the (simulated) generation work
+    below -- so a caller can publish worker_status immediately instead of
+    only after the whole job finishes (SPEC.md sec 4.3: swapping between
+    iterate and studio_ops should show as "loading" only for the swap
+    itself, not for the inference that follows it).
     """
     global _simulated_loaded_dit_profile
     # A successful job run implies this profile is now "loaded", same as
     # worker.acestep_worker's _ensure_loaded -- this is what makes a worker
     # that reported unavailable at startup show as recovered afterward.
     _simulated_loaded_dit_profile = job.get("dit_profile", DEFAULT_SIMULATED_DIT_PROFILE)
+    if on_dit_loaded is not None:
+        on_dit_loaded(_simulated_loaded_dit_profile)
 
     take_dir.mkdir(parents=True, exist_ok=True)
 
