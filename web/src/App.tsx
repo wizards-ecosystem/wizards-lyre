@@ -247,6 +247,10 @@ export default function App() {
     wavesurferRef.current = wavesurfer;
     regionsPluginRef.current = regions;
 
+    // A missing/corrupt/unsupported take would otherwise just leave a blank
+    // waveform with no indication anything went wrong.
+    wavesurfer.on("error", (err) => setErrorMsg(`waveform load failed: ${err.message}`));
+
     // Only one region at a time (SPEC.md: drag a region -> repaint) -- a new
     // drag replaces whatever was there before instead of accumulating.
     regions.on("region-created", (created) => {
@@ -341,6 +345,29 @@ export default function App() {
       const job = await pollJob(queued.id, (update) => setBusyStatus(update.status));
       if (job.status === "error") {
         setErrorMsg(job.error ?? "cover job failed");
+      }
+      await refreshDetail(activeId);
+    } catch (err) {
+      setErrorMsg(String(err));
+    } finally {
+      setBusy(false);
+      setBusyStatus(null);
+    }
+  }
+
+  async function repaint() {
+    if (!activeId || !selectedTakeId || !region) return;
+    setBusy(true);
+    setBusyStatus("queued");
+    setErrorMsg(null);
+    try {
+      // Same race as generate()/cover(): flush any in-flight plan edit before
+      // the worker reads plan.json off disk.
+      await flushPendingPlanSave();
+      const queued = await api.repaint(activeId, selectedTakeId, region.start, region.end);
+      const job = await pollJob(queued.id, (update) => setBusyStatus(update.status));
+      if (job.status === "error") {
+        setErrorMsg(job.error ?? "repaint job failed");
       }
       await refreshDetail(activeId);
     } catch (err) {
@@ -560,6 +587,24 @@ export default function App() {
                       title={selectedTakeId ? undefined : "Select a take first"}
                     >
                       {busy ? `Covering… (${busyStatus ?? "queued"})` : "Cover"}
+                    </button>
+                    <button
+                      onClick={repaint}
+                      disabled={
+                        busy ||
+                        !selectedTakeId ||
+                        !region ||
+                        !!detail.takes.find((t) => t.id === selectedTakeId)?.error
+                      }
+                      title={
+                        !selectedTakeId
+                          ? "Select a take first"
+                          : !region
+                            ? "Drag a region on the waveform first"
+                            : undefined
+                      }
+                    >
+                      {busy ? `Repainting… (${busyStatus ?? "queued"})` : "Repaint"}
                     </button>
                     <button disabled title="Phase 3 (requires studio_ops)">
                       Extract
