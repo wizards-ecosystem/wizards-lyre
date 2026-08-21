@@ -89,6 +89,12 @@ body {
   margin-bottom: 16px;
 }
 
+.library-search {
+  width: 100%;
+  margin-bottom: 8px;
+  box-sizing: border-box;
+}
+
 .project-list {
   list-style: none;
   margin: 0;
@@ -137,6 +143,21 @@ body {
   font-size: 11px;
   padding: 3px 6px;
   flex: 0 0 auto;
+}
+
+.favorite-btn {
+  font-size: 13px;
+  line-height: 1;
+  padding: 3px 6px;
+  flex: 0 0 auto;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: var(--muted);
+}
+
+.favorite-btn.favorited {
+  color: #f5c518;
 }
 
 .workspace {

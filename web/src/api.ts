@@ -11,6 +11,7 @@ export interface ProjectSummary {
   title: string;
   updated_at: string;
   active_take_id: string | null;
+  favorite: boolean;
 }
 
 export interface Project {
@@ -21,6 +22,7 @@ export interface Project {
   dit_profile: string;
   lm_model: string;
   active_take_id: string | null;
+  favorite: boolean;
 }
 
 export interface Plan {
@@ -99,6 +101,11 @@ export const api = {
       body: JSON.stringify({ title, query }),
     }),
   getProject: (id: string) => request<ProjectDetail>(`/api/projects/${id}`),
+  patchProject: (id: string, patch: Partial<Pick<Project, "title" | "dit_profile" | "favorite">>) =>
+    request<Project>(`/api/projects/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+    }),
   savePlan: (id: string, plan: Plan) =>
     request<Plan>(`/api/projects/${id}/plan`, {
       method: "PUT",

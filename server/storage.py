@@ -273,6 +273,7 @@ def create_project(
         "dit_profile": dit_profile,
         "lm_model": "acestep-5Hz-lm-1.7B",
         "active_take_id": None,
+        "favorite": False,
     }
     pdir = project_dir(project_id)
     pdir.mkdir(parents=True, exist_ok=True)
@@ -305,6 +306,7 @@ def list_projects() -> list[dict]:
                 "title": data.get("title", "Untitled"),
                 "updated_at": data.get("updated_at"),
                 "active_take_id": data.get("active_take_id"),
+                "favorite": data.get("favorite", False),
             }
         )
     out.sort(key=lambda p: p.get("updated_at") or "", reverse=True)
@@ -350,6 +352,8 @@ def patch_project(project_id: str, patch: dict) -> dict:
             if patch["dit_profile"] not in VALID_DIT_PROFILES:
                 raise ValueError(f"invalid dit_profile: {patch['dit_profile']}")
             project["dit_profile"] = patch["dit_profile"]
+        if patch.get("favorite") is not None:
+            project["favorite"] = patch["favorite"]
 
     return _update_project(project_id, mutate)
 
