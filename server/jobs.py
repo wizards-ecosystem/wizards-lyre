@@ -33,16 +33,14 @@ from worker import mock_worker
 
 # SPEC.md sec 12 (phase order): phase 1 is generate; phase 2 adds cover and
 # repaint (now that the web UI has a waveform with drag-to-select region
-# feeding repainting_start/repainting_end). Phase 3 adds extract, now that
-# the web UI has a base-model-swap confirmation/loading workflow (SPEC.md
-# sec 4.3/9.2). lego/complete still need that same workflow's follow-up UI,
-# so the API must not accept them yet even though worker/acestep_worker.py's
-# adapter already implements their call contract (exercised directly by
-# tests/test_acestep_worker_adapter.py, independent of this gate). Moving an
-# action from PHASE_GATED_ACTIONS to VALID_ACTIONS is the one-line change
-# that turns it on once its phase's UI/workflow lands.
-VALID_ACTIONS = {"generate", "cover", "repaint", "extract"}
-PHASE_GATED_ACTIONS = {"lego", "complete"}
+# feeding repainting_start/repainting_end). Phase 3 adds extract, lego, and
+# complete, now that the web UI has a base-model-swap confirmation/loading
+# workflow (SPEC.md sec 4.3/9.2) reused by all three. PHASE_GATED_ACTIONS is
+# now empty -- every SPEC.md sec 4.4 action is live -- but stays in place as
+# the one-line lever (move an action here, out of VALID_ACTIONS) for any
+# future action that needs to land ahead of its UI.
+VALID_ACTIONS = {"generate", "cover", "repaint", "extract", "lego", "complete"}
+PHASE_GATED_ACTIONS: set[str] = set()
 STUDIO_OPS_ACTIONS = {"extract", "lego", "complete"}
 SOURCE_REQUIRED_ACTIONS = {"cover", "repaint", "extract", "lego", "complete"}
 
@@ -444,10 +442,8 @@ def enqueue_job(project_id: str, body: dict[str, Any]) -> dict:
     action = body.get("action")
     if action in PHASE_GATED_ACTIONS:
         raise JobError(
-            f"action '{action}' is not available yet -- this build implements "
-            "'generate', 'cover', 'repaint', and 'extract' (SPEC.md sec 12: "
-            "lego/complete land later in phase 3, each with required UI this "
-            "build doesn't have yet)"
+            f"action '{action}' is not available yet (SPEC.md sec 12: gated "
+            "pending its own required UI)"
         )
     if action not in VALID_ACTIONS:
         raise JobError(f"invalid action: {action}")

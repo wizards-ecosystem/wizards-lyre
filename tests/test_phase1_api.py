@@ -708,46 +708,12 @@ def test_smoke_gpu_script_writes_under_output_dir(
     assert written[0].is_relative_to(output_root)
 
 
-def test_phase_gated_actions_rejected_until_their_phase(client: TestClient) -> None:
-    """SPEC.md sec 12 (phase order): phase 1 is generate; phase 2 adds cover
-    and repaint (now that the web UI has a waveform region-select feeding
-    repainting_start/repainting_end -- see test_repaint_take_flow); phase 3
-    adds extract (now that the web UI has a base-model-swap
-    confirmation/loading workflow -- see
-    tests/test_extract_requires_studio_ops.py). lego/complete still need
-    their own follow-up frontend workflow this build doesn't have yet, so the
-    API must reject them outright instead of accepting a job the UI can't
-    drive, regardless of how well-formed the rest of the request is."""
-    project = client.post("/api/projects", json={"title": "Phase Gate Test"}).json()
-    project_id = project["id"]
-    client.put(f"/api/projects/{project_id}/plan", json=storage.default_plan())
-
-    resp = client.post(
-        f"/api/projects/{project_id}/jobs",
-        json={"action": "generate", "dit_profile": "iterate"},
-    )
-    gen = _wait_for_job(client, resp.json()["id"])
-    assert gen["status"] == "done", gen.get("error")
-    source_take_id = gen["take_id"]
-
-    for action in ("lego", "complete"):
-        # Well-formed in every other respect (real source, studio_ops
-        # profile where that would otherwise be required) -- still rejected
-        # purely because this action isn't available yet.
-        resp = client.post(
-            f"/api/projects/{project_id}/jobs",
-            json={
-                "action": action,
-                "dit_profile": "studio_ops",
-                "source_take_id": source_take_id,
-                "track_name": "vocals",
-            },
-        )
-        assert resp.status_code == 400, action
-        assert "not available yet" in resp.json()["detail"], action
-
-        # No job row is left behind for a rejected action.
-        assert all(j["action"] != action for j in client.get("/api/jobs").json())
+# Phase 3 (SPEC.md sec 12) is complete: extract, lego, and complete are all
+# live now that the web UI has the base-model-swap confirmation/loading
+# workflow (SPEC.md sec 4.3/9.2) each of them reuses. PHASE_GATED_ACTIONS is
+# empty, so there is no longer any action to assert gets rejected here -- see
+# tests/test_extract_requires_studio_ops.py, tests/test_lego_flow.py, and
+# tests/test_complete_flow.py for their success-path coverage instead.
 
 
 def test_generate_rejects_studio_ops_dit_profile(client: TestClient) -> None:
@@ -822,11 +788,9 @@ def test_cover_rejects_out_of_range_audio_cover_strength(client: TestClient) -> 
 
 def test_resolve_dit_profile_studio_ops_enforcement() -> None:
     """Direct unit coverage for _resolve_dit_profile's studio_ops coercion
-    (SPEC.md sec 8.1) -- currently unreachable via enqueue_job (see
-    test_phase_gated_actions_rejected_until_their_phase) because
-    extract/lego/complete are phase-3-gated, but the logic stays correct and
-    tested so enabling those actions later is just a PHASE_GATED_ACTIONS
-    edit, not new/unverified logic."""
+    (SPEC.md sec 8.1), exercised directly here for all three studio_ops
+    actions (extract/lego/complete are all live via enqueue_job now, but this
+    keeps the full action list covered in one place)."""
     from server import jobs as jobs_module
 
     for action in ("extract", "lego", "complete"):
