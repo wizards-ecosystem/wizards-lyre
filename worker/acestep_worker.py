@@ -679,6 +679,21 @@ def run_job(
         "bpm": bpm,
         "keyscale": keyscale,
         "created_at": datetime.now(timezone.utc).isoformat(),
+        # No quality score to report (SPEC.md sec 12 Phase 4). Checked
+        # upstream `acestep.inference.generate_music`/`GenerationResult`
+        # directly (ACE-Step 1.5, ace-step/ACE-Step-1.5 main branch): neither
+        # `GenerationResult` nor its `extra_outputs`/per-audio dict carries a
+        # score field. The only scoring code in the repo (PMI quality score
+        # + DiT lyric-alignment score, under `acestep/ui/`'s browser-demo
+        # event handlers -- see SPEC.md sec 2's "no browser demo" non-goal)
+        # calls `dit_handler.get_lyric_score(...)` and
+        # `calculate_pmi_score_per_condition(...)` directly with raw
+        # model-internal tensors (pred_latent, encoder_hidden_states,
+        # lyric_token_ids) plus a separately loaded auxiliary HF PMI scorer
+        # with its own VRAM budget, none of which `generate_music` returns
+        # or our adapter has access to. There is no stable field to wire up
+        # here yet; revisit if a future ACE-Step release exposes scoring
+        # through the public inference API.
         "score": None,
         "error": None,
         "repaint": _repaint_meta(job),
