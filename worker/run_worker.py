@@ -156,6 +156,34 @@ def _publish_capabilities(ready: bool, message: str) -> None:
             jobs.publish_worker_capability(dit_profile, supported, reason)
         else:
             jobs.publish_worker_capability(dit_profile, True, None)
+    _publish_train_lora_capability(module, ready, message)
+
+
+def _publish_train_lora_capability(module, ready: bool, message: str) -> None:
+    """`train_lora` (SPEC.md sec 4.4 style pack) isn't a `dit_profile`, so it
+    doesn't fit the per-profile loop above -- it's published under its own
+    key in the same `worker_capabilities` table, read by
+    `server.jobs.enqueue_job`'s `_check_worker_capability("train_lora")` so a
+    real backend that hasn't wired up LoRA training yet (this job
+    deliberately doesn't touch `worker.acestep_worker`) is rejected at
+    enqueue time -- 'phase-gated' for that backend specifically -- rather
+    than presented as available and failing every request. The mock backend
+    always has `train_lora` (worker/mock_worker.py), so this never blocks
+    the mocked dev/test flow."""
+    if not ready:
+        jobs.publish_worker_capability("train_lora", False, message)
+        return
+    supported = hasattr(module, "train_lora")
+    reason = (
+        None
+        if supported
+        else (
+            f"worker backend '{module.__name__}' does not implement train_lora yet "
+            "-- real ACE-Step LoRA training is not wired up (SPEC.md sec 4.4); "
+            "only the mock backend supports this action today"
+        )
+    )
+    jobs.publish_worker_capability("train_lora", supported, reason)
 
 
 def _refresh_published_state(startup_ready: bool, startup_message: str) -> None:

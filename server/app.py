@@ -41,10 +41,12 @@ class JobBody(BaseModel):
     action: str
     dit_profile: Optional[str] = None
     source_take_id: Optional[str] = None
+    source_take_ids: Optional[list[str]] = None
     upload_path: Optional[str] = None
     repainting_start: float = 0
     repainting_end: float = -1
     track_name: Optional[str] = None
+    name: Optional[str] = None
     # SPEC.md sec 8.1: audio_cover_strength is a 0-1 mix ratio ACE-Step
     # expects; ge/le also reject NaN/+-inf (any comparison with NaN is
     # False, so it fails both bounds) instead of forwarding them to the
@@ -152,6 +154,11 @@ def get_take_lrc(project_id: str, take_id: str) -> FileResponse:
     # a hypothetical always-present route.
     path = storage.take_lrc_path(project_id, take_id)
     return FileResponse(path, media_type="text/plain", filename=path.name)
+
+
+@app.get("/api/projects/{project_id}/loras")
+def list_loras(project_id: str) -> list[dict]:
+    return storage.list_loras(project_id)
 
 
 @app.post("/api/projects/{project_id}/jobs")

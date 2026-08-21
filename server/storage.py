@@ -78,6 +78,14 @@ def take_dir(project_id: str, take_id: str) -> Path:
     return jailed_path(project_id, "takes", take_id)
 
 
+def loras_dir(project_id: str) -> Path:
+    return jailed_path(project_id, "loras")
+
+
+def lora_dir(project_id: str, lora_id: str) -> Path:
+    return jailed_path(project_id, "loras", lora_id)
+
+
 def project_json_path(project_id: str) -> Path:
     return jailed_path(project_id, "project.json")
 
@@ -351,6 +359,19 @@ def list_takes(project_id: str) -> list[dict]:
     return out
 
 
+def list_loras(project_id: str) -> list[dict]:
+    load_project(project_id)
+    ldir = loras_dir(project_id)
+    out: list[dict] = []
+    if ldir.exists():
+        for entry in sorted(ldir.iterdir()):
+            meta_path = entry / "meta.json"
+            if meta_path.exists():
+                out.append(_read_json(meta_path))
+    out.sort(key=lambda t: t.get("created_at") or "", reverse=True)
+    return out
+
+
 def get_take(project_id: str, take_id: str) -> dict:
     path = take_dir(project_id, take_id) / "meta.json"
     if not path.exists():
@@ -397,6 +418,19 @@ def allocate_take_dir(project_id: str) -> tuple[str, Path]:
 
 def write_take_meta(project_id: str, take_id: str, meta: dict) -> None:
     path = take_dir(project_id, take_id) / "meta.json"
+    _write_json(path, meta)
+
+
+def allocate_lora_dir(project_id: str) -> tuple[str, Path]:
+    load_project(project_id)
+    lora_id = new_id()
+    ldir = lora_dir(project_id, lora_id)
+    ldir.mkdir(parents=True, exist_ok=False)
+    return lora_id, ldir
+
+
+def write_lora_meta(project_id: str, lora_id: str, meta: dict) -> None:
+    path = lora_dir(project_id, lora_id) / "meta.json"
     _write_json(path, meta)
 
 
