@@ -507,25 +507,22 @@ def build_export_zip(project_id: str, include_stems: bool = True) -> bytes:
     project = load_project(project_id)
     plan = load_plan(project_id)
     takes = list_takes(project_id)
-    takes_by_id = {take["id"]: take for take in takes}
 
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
         zf.writestr("project.json", json.dumps(project, indent=2))
         zf.writestr("plan.json", json.dumps(plan, indent=2))
 
+        # The active take's audio always lands at the fixed "mix<ext>" path
+        # -- consumers (a DAW, a script) need one predictable, unconditional
+        # place to find it, regardless of whether that same take also
+        # qualifies as a stem below. Deduplicating away this entry when the
+        # active take happens to be an extract/lego result breaks that
+        # contract (reviewer-flagged): the two arcnames serve different
+        # semantic roles (active mix vs. named stem) even when their bytes
+        # happen to be identical.
         active_take_id = project.get("active_take_id")
-        active_take = takes_by_id.get(active_take_id) if active_take_id else None
-        # An extract/lego take that's also the active take (the common case
-        # right after running one, since every job promotes its output to
-        # active) gets written once below, under its descriptive stem
-        # arcname, instead of a second time here under the generic "mix"
-        # name -- writing both would silently double that file's bytes in
-        # the archive for identical content (reviewer-flagged).
-        active_included_as_stem = (
-            include_stems and active_take is not None and active_take.get("task_type") in STEM_TASK_TYPES
-        )
-        if active_take_id and not active_included_as_stem:
+        if active_take_id:
             try:
                 active_path = take_audio_path(project_id, active_take_id)
             except TakeNotFound:

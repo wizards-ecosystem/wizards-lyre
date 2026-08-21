@@ -495,13 +495,13 @@ export default function App() {
   // "<verb>ing… (status)" text once the worker reports studio_ops loaded.
   const studioOpsLoading = busy && health?.dit_loaded !== "studio_ops";
 
-  // Keyboard shortcuts (SPEC.md sec 12 Phase 5). Gated on no project being
-  // open (there's nothing to act on) and on focus *not* being in a text
-  // field -- otherwise typing "g" in the caption/lyrics/query/track-name
-  // inputs (or hitting Space in one) would hijack the keystroke instead of
-  // entering it. There's no command palette / help screen elsewhere in the
-  // app, so the bindings are only discoverable via the title on the
-  // Generate button and the README.
+  // Keyboard shortcuts (SPEC.md sec 12 Phase 5). Gated on a project being
+  // open (there's nothing to act on otherwise). Save is exempt from the
+  // text-entry guard below -- it's the one shortcut users need most while
+  // actually typing in the caption/lyrics/query fields, and Ctrl/Cmd+S is
+  // never a literal character those fields would otherwise receive.
+  // Generate / play-pause / prev-next-take *are* guarded, since "g" and
+  // Space are ordinary characters those same fields need to accept normally.
   useEffect(() => {
     function isTextEntryFocused(): boolean {
       const tag = document.activeElement?.tagName;
@@ -510,7 +510,6 @@ export default function App() {
 
     function onKeyDown(event: KeyboardEvent) {
       if (!activeId || !detail) return;
-      if (isTextEntryFocused()) return;
 
       const key = event.key;
 
@@ -519,6 +518,8 @@ export default function App() {
         flushPendingPlanSave().catch((err) => setErrorMsg(String(err)));
         return;
       }
+
+      if (isTextEntryFocused()) return;
 
       if (key === "g" || key === "G") {
         if (!busy) generate();
@@ -746,7 +747,7 @@ export default function App() {
                         checked={includeStems}
                         onChange={(e) => setIncludeStems(e.target.checked)}
                       />
-                      Include stems (extract / lego / complete takes)
+                      Include stems (extract / lego takes)
                     </label>
                     <a
                       className="export-link"

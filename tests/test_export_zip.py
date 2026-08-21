@@ -191,12 +191,14 @@ def test_export_excludes_complete_takes_from_stems(client: TestClient) -> None:
     assert "mix.wav" in names or "mix.mp3" in names
 
 
-def test_export_does_not_duplicate_active_take_that_is_also_a_stem(client: TestClient) -> None:
+def test_export_always_includes_active_mix_even_when_it_is_also_a_stem(client: TestClient) -> None:
     """extract/lego promote their output to the active take (like every other
-    job), so the common export-right-after-extract case must not write that
-    take's audio twice -- once as "mix<ext>" and again under its stem arcname
-    (reviewer-flagged: silently doubles that file's bytes in the archive)."""
-    project = client.post("/api/projects", json={"title": "No Duplicate Active Stem"}).json()
+    job), so the common export-right-after-extract case still must write
+    "mix<ext>" -- consumers need one predictable, unconditional place to find
+    the active take, regardless of whether it also qualifies as a stem
+    (reviewer-flagged: omitting "mix<ext>" here breaks that contract, even
+    though the stem entry happens to hold identical bytes)."""
+    project = client.post("/api/projects", json={"title": "Active Mix Also A Stem"}).json()
     project_id = project["id"]
     client.put(
         f"/api/projects/{project_id}/plan",
@@ -233,8 +235,9 @@ def test_export_does_not_duplicate_active_take_that_is_also_a_stem(client: TestC
 
     stem_name = f"{stem_take_id}-extract-vocals.wav"
     assert names.count(stem_name) == 1
-    # not duplicated a second time under the generic "mix" name either
-    assert "mix.wav" not in names and "mix.mp3" not in names
+    # the active mix entry must still be present, even though it's the same
+    # audio as the stem entry above
+    assert "mix.wav" in names or "mix.mp3" in names
 
 
 def test_export_sanitizes_path_traversing_track_name(client: TestClient) -> None:
