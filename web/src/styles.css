@@ -360,6 +360,32 @@ button:disabled {
   min-width: 90px;
 }
 
+.compare-panel {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.compare-slot {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  min-width: 200px;
+}
+
+.compare-label {
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.compare-slot audio {
+  width: 100%;
+}
+
 .export-panel {
   display: flex;
   align-items: center;
