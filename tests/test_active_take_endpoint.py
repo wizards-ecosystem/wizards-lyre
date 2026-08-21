@@ -125,3 +125,42 @@ def test_set_active_take_rejects_error_take(client: TestClient) -> None:
         json={"take_id": "broken-take"},
     )
     assert resp.status_code == 400
+
+
+def test_set_active_take_404_when_audio_missing(client: TestClient) -> None:
+    # meta.json with no `error` but no mix.wav/mix.mp3 on disk -- e.g. a
+    # partially written take -- must not be activatable (reviewer-flagged:
+    # a clean-looking meta isn't enough, the audio file must actually exist).
+    project = client.post("/api/projects", json={"title": "Active Take No Audio"}).json()
+    project_id = project["id"]
+
+    storage.write_take_meta(
+        project_id,
+        "no-audio-take",
+        {
+            "id": "no-audio-take",
+            "parent_take_id": None,
+            "task_type": "text2music",
+            "dit_profile": "iterate",
+            "seed": 1,
+            "duration_sec": 10.0,
+            "caption": "test",
+            "lyrics": "",
+            "bpm": 120,
+            "keyscale": "C Major",
+            "created_at": "2026-01-01T00:00:00Z",
+            "score": None,
+            "error": None,
+            "repaint": None,
+            "track_name": None,
+        },
+    )
+
+    resp = client.post(
+        f"/api/projects/{project_id}/active_take",
+        json={"take_id": "no-audio-take"},
+    )
+    assert resp.status_code == 404
+
+    detail = client.get(f"/api/projects/{project_id}").json()
+    assert detail["project"]["active_take_id"] is None

@@ -144,6 +144,11 @@ def set_active_take(project_id: str, body: ActiveTakeBody) -> dict:
     take = storage.get_take(project_id, body.take_id)
     if take.get("error") is not None:
         raise ValueError(f"take {body.take_id} has an error and cannot be made active")
+    # A take can have no `error` yet still be missing its audio file (e.g. a
+    # partially written take) -- take_audio_path raises storage.TakeNotFound
+    # (-> 404) unless mix.wav/mix.mp3 actually exists on disk, so activation
+    # always requires a real playable artifact, not just clean metadata.
+    storage.take_audio_path(project_id, body.take_id)
     return storage.set_active_take(project_id, body.take_id)
 
 
