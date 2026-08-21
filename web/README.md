@@ -32,6 +32,19 @@ npm run build
 Type-checks with `tsc -b` and produces a production bundle in `web/dist/`,
 which FastAPI serves directly in prod (SPEC.md §5).
 
+## Keyboard shortcuts
+
+Active whenever a project is open and focus isn't in a text field (typing in
+the query/caption/lyrics/track-name inputs disables them so ordinary
+characters still work). There's no command palette or help screen, so this
+list — and the `title` tooltip on the Generate button — is the only place
+they're documented:
+
+- `g` — Generate
+- `Space` — play/pause the selected take
+- `↑` / `↓` — select the previous/next take (list is newest-first)
+- `Ctrl+S` / `Cmd+S` — save the plan immediately instead of waiting out the debounce
+
 ## Notes
 
 - `dev.mjs` / `build.mjs` load the Vite config as inline JS instead of a

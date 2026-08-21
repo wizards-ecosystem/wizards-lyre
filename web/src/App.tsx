@@ -91,6 +91,12 @@ export default function App() {
   const wavesurferRef = useRef<WaveSurfer | null>(null);
   const regionsPluginRef = useRef<RegionsPlugin | null>(null);
 
+  // Keyed by take id rather than a single ref, since every take in the list
+  // renders its own <audio> (and a future compare panel could show two at
+  // once) -- looking one up via document.querySelector would be ambiguous
+  // and non-React-idiomatic.
+  const audioRefs = useRef<Record<string, HTMLAudioElement | null>>({});
+
   useEffect(() => {
     return () => {
       if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
@@ -489,6 +495,72 @@ export default function App() {
   // "<verb>ing… (status)" text once the worker reports studio_ops loaded.
   const studioOpsLoading = busy && health?.dit_loaded !== "studio_ops";
 
+  // Keyboard shortcuts (SPEC.md sec 12 Phase 5). Gated on no project being
+  // open (there's nothing to act on) and on focus *not* being in a text
+  // field -- otherwise typing "g" in the caption/lyrics/query/track-name
+  // inputs (or hitting Space in one) would hijack the keystroke instead of
+  // entering it. There's no command palette / help screen elsewhere in the
+  // app, so the bindings are only discoverable via the title on the
+  // Generate button and the README.
+  useEffect(() => {
+    function isTextEntryFocused(): boolean {
+      const tag = document.activeElement?.tagName;
+      return tag === "INPUT" || tag === "TEXTAREA";
+    }
+
+    function onKeyDown(event: KeyboardEvent) {
+      if (!activeId || !detail) return;
+      if (isTextEntryFocused()) return;
+
+      const key = event.key;
+
+      if ((key === "s" || key === "S") && (event.ctrlKey || event.metaKey)) {
+        event.preventDefault();
+        flushPendingPlanSave().catch((err) => setErrorMsg(String(err)));
+        return;
+      }
+
+      if (key === "g" || key === "G") {
+        if (!busy) generate();
+        return;
+      }
+
+      if (key === " " || event.code === "Space") {
+        event.preventDefault();
+        const take = detail.takes.find((t) => t.id === selectedTakeId);
+        if (!take || take.error) return;
+        const audio = audioRefs.current[take.id];
+        if (!audio) return;
+        if (audio.paused) audio.play();
+        else audio.pause();
+        return;
+      }
+
+      if (key === "ArrowDown" || key === "ArrowUp") {
+        if (detail.takes.length === 0) return;
+        const currentIndex = detail.takes.findIndex((t) => t.id === selectedTakeId);
+        // Newest-first order (server already sorts it that way) -- Down
+        // moves toward older takes, Up toward newer ones. Clamp at the ends
+        // rather than wrap so repeated presses can't silently loop back
+        // around onto a take the user already stepped past.
+        let nextIndex: number;
+        if (currentIndex === -1) {
+          nextIndex = 0;
+        } else if (key === "ArrowDown") {
+          nextIndex = Math.min(currentIndex + 1, detail.takes.length - 1);
+        } else {
+          nextIndex = Math.max(currentIndex - 1, 0);
+        }
+        event.preventDefault();
+        setSelectedTakeId(detail.takes[nextIndex].id);
+        return;
+      }
+    }
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [activeId, detail, selectedTakeId, busy]);
+
   return (
     <div className="app">
       <header className="topbar">
@@ -641,7 +713,13 @@ export default function App() {
                           <span className="take-error">failed: {take.error}</span>
                         ) : (
                           <>
-                            <audio controls src={api.takeAudioUrl(detail.project.id, take.id)} />
+                            <audio
+                              controls
+                              src={api.takeAudioUrl(detail.project.id, take.id)}
+                              ref={(el) => {
+                                audioRefs.current[take.id] = el;
+                              }}
+                            />
                             <a
                               href={api.takeAudioUrl(detail.project.id, take.id)}
                               download={`${take.id}.wav`}
@@ -699,7 +777,11 @@ export default function App() {
                     </div>
                   )}
                   <div className="waveform-actions">
-                    <button onClick={generate} disabled={busy}>
+                    <button
+                      onClick={generate}
+                      disabled={busy}
+                      title="Shortcuts: g generate · space play/pause · ↑/↓ prev/next take · ctrl/cmd+s save plan"
+                    >
                       {busy ? `Generating… (${busyStatus ?? "queued"})` : "Generate"}
                     </button>
                     <label className="cover-strength">
