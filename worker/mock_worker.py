@@ -114,12 +114,15 @@ def run_job(
     take_id: str,
     take_dir: Path,
     on_dit_loaded: Callable[[str], None] | None = None,
-) -> tuple[dict, dict | None]:
-    """Run one mocked job. Returns `(take_meta, plan_patch)`; `plan_patch` is
-    a delta of the fields to persist when this job filled the plan in
-    (simple mode), else None. `server.jobs` merges it onto the plan that's
-    current on disk when the job finishes, not the stale snapshot passed
-    in as `plan`.
+) -> tuple[dict, dict | None, str | None]:
+    """Run one mocked job. Returns `(take_meta, plan_patch, lrc_text)`;
+    `plan_patch` is a delta of the fields to persist when this job filled the
+    plan in (simple mode), else None. `server.jobs` merges it onto the plan
+    that's current on disk when the job finishes, not the stale snapshot
+    passed in as `plan`. `lrc_text` is always None here -- this mock never
+    calls real ACE-Step, so it has no lyric-timestamp capability to fake
+    (SPEC.md sec 12 Phase 4 coverage against the real adapter lives in
+    tests/test_acestep_worker_adapter.py).
 
     `take_dir` must already be inside the projects/ path jail; this function
     only ever writes files inside it.
@@ -167,8 +170,9 @@ def run_job(
         "keyscale": effective_plan.get("keyscale"),
         "created_at": datetime.now(timezone.utc).isoformat(),
         "score": None,
+        "has_lrc": False,
         "error": None,
         "repaint": _repaint_meta(job),
         "track_name": job.get("track_name"),
     }
-    return meta, plan_patch
+    return meta, plan_patch, None

@@ -103,6 +103,20 @@ def _read_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _write_text(path: Path, text: str) -> None:
+    """Same atomic temp-file-then-`os.replace` approach as `_write_json`,
+    for plain-text files (SPEC.md sec 7: `lyrics.lrc` is plain text, not
+    JSON, so `json.dumps` doesn't apply). Writes raw utf-8 bytes rather than
+    `Path.write_text` so `\\n` in `text` (e.g. ACE-Step's own `lrc_text`
+    line breaks) round-trips exactly -- `write_text`'s default text mode
+    translates `\\n` to `os.linesep` on write, silently turning every LRC
+    line into CRLF on Windows."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
+    tmp_path.write_bytes(text.encode("utf-8"))
+    os.replace(tmp_path, path)
+
+
 # project.json and plan.json are both read-modify-written by the HTTP
 # server (save_plan, patch_project) and by the worker process (merging a
 # simple-mode plan_patch, and set_active_take, after a generation
@@ -353,6 +367,17 @@ def take_audio_path(project_id: str, take_id: str) -> Path:
     raise TakeNotFound(take_id)
 
 
+def take_lrc_path(project_id: str, take_id: str) -> Path:
+    """SPEC.md sec 7: `lyrics.lrc` is optional (phase 4, conditional on
+    ACE-Step providing timestamps) -- raises `TakeNotFound` the same way
+    `take_audio_path` does when there's nothing to serve, so the HTTP layer
+    can 404 instead of the UI having to guess from a missing file."""
+    candidate = take_dir(project_id, take_id) / "lyrics.lrc"
+    if candidate.exists():
+        return _jail(config.projects_dir(), candidate)
+    raise TakeNotFound(take_id)
+
+
 def resolve_upload_path(project_id: str, upload_path: str) -> Path:
     """Resolve a job's `upload_path` relative to its project dir, enforcing
     the same jail as every other write (SPEC.md sec 8.1 / sec 11)."""
@@ -373,3 +398,11 @@ def allocate_take_dir(project_id: str) -> tuple[str, Path]:
 def write_take_meta(project_id: str, take_id: str, meta: dict) -> None:
     path = take_dir(project_id, take_id) / "meta.json"
     _write_json(path, meta)
+
+
+def write_take_lrc(project_id: str, take_id: str, lrc_text: str) -> None:
+    """SPEC.md sec 7 `lyrics.lrc`; `worker.acestep_worker.run_job` only
+    returns `lrc_text` (see its docstring) -- this is what actually persists
+    it, same division of labor as `write_take_meta` above."""
+    path = take_dir(project_id, take_id) / "lyrics.lrc"
+    _write_text(path, lrc_text)

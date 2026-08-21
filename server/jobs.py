@@ -545,6 +545,7 @@ def _error_take_meta(
         "keyscale": None,
         "created_at": _now(),
         "score": None,
+        "has_lrc": False,
         "error": error,
         "repaint": None,
         "track_name": payload.get("track_name"),
@@ -615,13 +616,21 @@ def run_claimed_job(job: dict[str, Any]) -> None:
         plan = storage.load_plan(project_id)
         src_audio = _resolve_source_audio(project_id, action, payload)
         take_id, tdir = storage.allocate_take_dir(project_id)
-        meta, plan_patch = worker_fn(
+        meta, plan_patch, lrc_text = worker_fn(
             job={**payload, "action": action, "dit_profile": dit_profile, "src_audio": src_audio},
             plan=plan,
             take_id=take_id,
             take_dir=tdir,
             on_dit_loaded=_publish_dit_loaded,
         )
+        # Written before meta.json so a client polling right after the job
+        # flips to "done" never sees meta["has_lrc"] True while
+        # lyrics.lrc itself doesn't exist yet (SPEC.md sec 7 / sec 12
+        # Phase 4). If this raises, the except block below writes an error
+        # take_meta instead -- same as a merge_plan_patch failure further
+        # down.
+        if lrc_text is not None:
+            storage.write_take_lrc(project_id, take_id, lrc_text)
         storage.write_take_meta(project_id, take_id, meta)
         if plan_patch is not None:
             # `plan` above was loaded before this (possibly long-running)

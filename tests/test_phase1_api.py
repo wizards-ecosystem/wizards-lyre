@@ -696,7 +696,7 @@ def test_smoke_gpu_script_writes_under_output_dir(
     def _fake_run_job(job, plan, take_id, take_dir):
         take_dir.mkdir(parents=True, exist_ok=True)
         (take_dir / "mix.wav").write_bytes(b"RIFF____WAVEfake")
-        return {"seed": 42, "duration_sec": 10.0}, None
+        return {"seed": 42, "duration_sec": 10.0}, None, None
 
     monkeypatch.setattr(module, "run_job", _fake_run_job)
 

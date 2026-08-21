@@ -52,6 +52,10 @@ export interface Take {
   keyscale: string | null;
   created_at: string;
   score: number | null;
+  // True only when ACE-Step actually produced lyric timestamps for this
+  // take and the server wrote lyrics.lrc (SPEC.md sec 7 / sec 12 Phase 4) --
+  // the UI must not guess from a 404 whether one exists.
+  has_lrc: boolean;
   error: string | null;
   track_name: string | null;
 }
@@ -172,4 +176,6 @@ export const api = {
   getJob: (jobId: string) => request<Job>(`/api/jobs/${jobId}`),
   takeAudioUrl: (projectId: string, takeId: string) =>
     `/api/projects/${projectId}/takes/${takeId}/audio`,
+  takeLrcUrl: (projectId: string, takeId: string) =>
+    `/api/projects/${projectId}/takes/${takeId}/lrc`,
 };
