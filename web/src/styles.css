@@ -464,6 +464,29 @@ button:disabled {
   color: #ffb4bc;
 }
 
+.take-audio-player {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.loudness-meter {
+  display: inline-block;
+  width: 48px;
+  height: 8px;
+  border-radius: 3px;
+  background: #1b1c28;
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.loudness-meter-fill {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, #3ecf8e, #f5c451 75%, #ff6b6b 92%);
+  transition: width 60ms linear;
+}
+
 .hint {
   color: var(--muted);
 }
