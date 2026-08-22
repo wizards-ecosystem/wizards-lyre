@@ -60,6 +60,8 @@ export interface Take {
   has_lrc: boolean;
   error: string | null;
   track_name: string | null;
+  favorite: boolean;
+  notes: string;
 }
 
 export interface ProjectDetail {
@@ -122,6 +124,20 @@ export const api = {
     request<Project>(`/api/projects/${id}`, {
       method: "PATCH",
       body: JSON.stringify(patch),
+    }),
+  // `keepalive` lets a caller fire this from a `pagehide`/`beforeunload`
+  // handler and have the browser complete the request even as the page is
+  // being torn down -- a plain fetch gets aborted mid-flight in that window.
+  patchTake: (
+    projectId: string,
+    takeId: string,
+    patch: { favorite?: boolean; notes?: string },
+    opts?: { keepalive?: boolean },
+  ) =>
+    request<Take>(`/api/projects/${projectId}/takes/${takeId}`, {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+      ...(opts?.keepalive ? { keepalive: true } : {}),
     }),
   savePlan: (id: string, plan: Plan) =>
     request<Plan>(`/api/projects/${id}/plan`, {

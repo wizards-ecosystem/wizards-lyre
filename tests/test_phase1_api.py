@@ -326,6 +326,10 @@ def test_generate_job_creates_playable_take(client: TestClient) -> None:
     assert isinstance(take["seed"], int)
     assert take["seed"] != -1
     assert take["caption"] == "synthwave, driving bass"
+    # SPEC.md sec 12 Phase 6: every newly-created take starts un-favorited
+    # with empty notes, ready for PATCH /takes/{id} to annotate.
+    assert take["favorite"] is False
+    assert take["notes"] == ""
 
     # audio is a real, playable (tiny) WAV file written under projects/
     resp = client.get(f"/api/projects/{project_id}/takes/{take_id}/audio")

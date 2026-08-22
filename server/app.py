@@ -95,6 +95,11 @@ class ActiveTakeBody(BaseModel):
     take_id: str
 
 
+class TakeAnnotationBody(BaseModel):
+    favorite: Optional[bool] = None
+    notes: Optional[str] = None
+
+
 class JobBody(BaseModel):
     action: str
     dit_profile: Optional[str] = None
@@ -206,6 +211,16 @@ def set_active_take(project_id: str, body: ActiveTakeBody) -> dict:
     if take.get("error") is not None:
         raise ValueError(f"take has an error, cannot set active: {body.take_id}")
     return storage.set_active_take(project_id, body.take_id)
+
+
+@app.patch("/api/projects/{project_id}/takes/{take_id}")
+def patch_take(project_id: str, take_id: str, body: TakeAnnotationBody) -> dict:
+    # Take-level counterpart to patch_project's favorite field (SPEC.md sec
+    # 12 Phase 6). storage.update_take_annotations only touches the field(s)
+    # actually provided, never the take's immutable generation data.
+    return storage.update_take_annotations(
+        project_id, take_id, favorite=body.favorite, notes=body.notes
+    )
 
 
 @app.get("/api/projects/{project_id}/takes/{take_id}/audio")

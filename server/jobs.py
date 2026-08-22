@@ -622,6 +622,8 @@ def _error_take_meta(
         "error": error,
         "repaint": None,
         "track_name": payload.get("track_name"),
+        "favorite": False,
+        "notes": "",
     }
 
 

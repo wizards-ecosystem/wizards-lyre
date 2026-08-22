@@ -174,6 +174,8 @@ def run_job(
         "error": None,
         "repaint": _repaint_meta(job),
         "track_name": job.get("track_name"),
+        "favorite": False,
+        "notes": "",
     }
     return meta, plan_patch, None
 

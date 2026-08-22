@@ -385,6 +385,11 @@ def test_run_job_matches_installed_api_contract(
     assert meta["has_lrc"] is False
     assert lrc_text is None
     assert not any(e[0] == "handler.get_lyric_timestamp" for e in log)
+    # SPEC.md sec 12 Phase 6: every newly-created take gets these fields so
+    # older takes (written before this migration) are the only ones a
+    # reader ever needs `.get("favorite", False)` / `.get("notes", "")` for.
+    assert meta["favorite"] is False
+    assert meta["notes"] == ""
 
     handler_init = next(e for e in log if e[0] == "handler.initialize_service")
     kwargs = handler_init[1]
