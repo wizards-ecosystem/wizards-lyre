@@ -116,6 +116,29 @@ export call needed for a first cut). `dit_handler` is the same `AceStepHandler`
 instance `_ensure_loaded` already produces for generation -- LoRA training
 reuses whichever DiT is currently loaded rather than a second handler.
 
+LoRA loading (SPEC.md sec 4.4/12 "LoRA train / load" -- this is the "load"
+half; `train_lora` above is "train"): the tutorials in docs/en/*.md only
+cover the upstream web UI's "Use LoRA" checkbox, not a Python call, so this
+too was read directly from ace-step/ACE-Step-1.5's source on GitHub --
+specifically `LoraManagerMixin`
+(`acestep/core/generation/handler/lora_manager.py`), which `AceStepHandler`
+mixes in, and its `acestep/core/generation/handler/lora/lifecycle.py` +
+`.../lora/controls.py` implementations. `add_lora(lora_path, adapter_name)`
+injects a PEFT adapter directory (the same `<...>/adapter/final/` layout
+`train_lora` above writes, containing `adapter_config.json`) into the
+decoder, wrapping it in a PEFT `PeftModel` the first time it's called
+without disturbing the base weights; `set_active_lora_adapter(adapter_name)`
+selects which loaded adapter subsequent inference calls actually use, and
+`set_use_lora(bool)` is LoRA's master on/off switch. `unload_lora()` removes
+every currently loaded adapter and restores the plain base decoder -- used
+by `_ensure_lora_adapter` below to swap cleanly (unload, then load the new
+one) instead of stacking a second adapter on top of the first when a later
+job asks for a different lora_id, or leaving a stale adapter active when a
+later job asks for none at all. All of these are plain handler methods (no
+`(status_message, success)` tuple like `initialize_service`/`initialize`
+above), so they go through `_api_method_call` alone, not
+`_check_init_result`.
+
 Two things worth flagging about what `train_lora` deliberately does *not*
 replicate from the real pipeline: (1) `DatasetBuilder.scan_directory` only
 marks a sample `AudioSample.labeled = True` -- and therefore eligible for
@@ -148,7 +171,18 @@ from typing import Any, Callable
 
 # One GPU occupant: one loaded DiT + one LM, jobs serialize (SPEC.md sec 4.3).
 _LOCK = threading.Lock()
-_STATE: dict[str, Any] = {"dit_profile": None, "handler": None, "lm": None}
+# lora_id/lora_adapter_path track what's currently loaded onto `handler` via
+# _ensure_lora_adapter (SPEC.md sec 4.4 "LoRA train / load") -- both reset to
+# None whenever `handler` itself is swapped/recreated in _ensure_loaded,
+# since a freshly constructed handler has no adapters loaded regardless of
+# what the previous one had.
+_STATE: dict[str, Any] = {
+    "dit_profile": None,
+    "handler": None,
+    "lm": None,
+    "lora_id": None,
+    "lora_adapter_path": None,
+}
 
 DIT_CHECKPOINTS = {
     "iterate": "acestep-v15-turbo",
@@ -447,6 +481,12 @@ def _ensure_loaded(dit_profile: str) -> tuple[Any, Any, Any]:
         # Unload the previous DiT before loading the next; never hold two
         # DiTs at once on a 16 GB card (SPEC.md sec 4.3).
         _STATE["handler"] = None
+        # A freshly constructed handler starts with no LoRA adapters loaded
+        # -- forget whatever _ensure_lora_adapter previously recorded onto
+        # the *old* handler object, or a later job could wrongly believe the
+        # new handler already has an adapter loaded and skip loading it.
+        _STATE["lora_id"] = None
+        _STATE["lora_adapter_path"] = None
         checkpoint = DIT_CHECKPOINTS[dit_profile]
         cpu_offload = dit_profile in CPU_OFFLOAD_PROFILES
         if cpu_offload:
@@ -497,6 +537,55 @@ def _ensure_loaded(dit_profile: str) -> tuple[Any, Any, Any]:
         _STATE["lm"] = lm
 
     return _STATE["handler"], _STATE["lm"], _STATE["dit_profile"]
+
+
+def _ensure_lora_adapter(handler: Any, lora_id: str | None, lora_adapter_path: str | None) -> None:
+    """Load, swap, or unload the requested LoRA adapter onto `handler`
+    (SPEC.md sec 4.4 "LoRA train / load" -- this is the "load" half;
+    `train_lora` below is "train"). Caller holds _LOCK and has already
+    called `_ensure_loaded`, same ordering as everything else in `run_job`.
+
+    See the module docstring's LoRA-loading section for the real API this
+    wraps (`AceStepHandler.add_lora`/`set_active_lora_adapter`/
+    `set_use_lora`/`unload_lora`, via `LoraManagerMixin`).
+    `server.jobs._resolve_dit_profile` only ever lets a non-None
+    `lora_adapter_path` through on a job whose resolved dit_profile is
+    `LORA_BASE_DIT_PROFILE` (studio_ops) -- see its docstring -- since a
+    LoRA's weight deltas are only valid against that exact base checkpoint;
+    `run_job` below re-asserts that invariant rather than trusting the
+    caller blindly.
+
+    A no-op if `lora_id` already matches what's currently loaded (including
+    both None -- nothing requested, nothing loaded). Otherwise unloads
+    whatever is currently loaded first: a later job requesting a *different*
+    lora_id (or none at all) must not silently stack a second adapter on top
+    of the first, or leave a stale adapter active once nothing needs it.
+    """
+    if lora_id == _STATE["lora_id"]:
+        return
+    if _STATE["lora_id"] is not None:
+        _api_method_call("AceStepHandler.unload_lora", handler, "unload_lora")
+        _STATE["lora_id"] = None
+        _STATE["lora_adapter_path"] = None
+    if lora_id is not None:
+        _api_method_call(
+            "AceStepHandler.add_lora",
+            handler,
+            "add_lora",
+            lora_path=lora_adapter_path,
+            adapter_name=lora_id,
+        )
+        _api_method_call(
+            "AceStepHandler.set_active_lora_adapter",
+            handler,
+            "set_active_lora_adapter",
+            adapter_name=lora_id,
+        )
+        _api_method_call(
+            "AceStepHandler.set_use_lora", handler, "set_use_lora", use_lora=True
+        )
+        _STATE["lora_id"] = lora_id
+        _STATE["lora_adapter_path"] = lora_adapter_path
 
 
 def _repaint_meta(job: dict[str, Any]) -> dict | None:
@@ -740,6 +829,13 @@ def run_job(
     4.3: a client polling worker status should see "loading" only for the
     swap itself, not for the inference that follows it).
 
+    `job["lora_id"]`/`job["lora_adapter_path"]`, if set, request a trained
+    style-pack LoRA be applied for this generation (SPEC.md sec 4.4 "LoRA
+    train / load") -- see `_ensure_lora_adapter` for the real API this
+    wraps. `server.jobs` resolves and validates `lora_id` and the jailed
+    `lora_adapter_path` before the job ever reaches this worker, same
+    division of labor as `job["src_audio"]` above.
+
     Raises `WorkerUnavailable` if acestep/CUDA isn't usable or its API no
     longer matches this adapter; `server.jobs` catches that and marks the
     job `error` without crashing the HTTP process.
@@ -753,6 +849,22 @@ def run_job(
         handler, lm, dit_profile = _ensure_loaded(job["dit_profile"])
         if on_dit_loaded is not None:
             on_dit_loaded(dit_profile)
+
+        lora_id = job.get("lora_id")
+        lora_adapter_path = job.get("lora_adapter_path")
+        if lora_adapter_path is not None and dit_profile != LORA_BASE_DIT_PROFILE:
+            # Belt and suspenders: server.jobs._resolve_dit_profile should
+            # already have coerced/rejected this at enqueue time (SPEC.md
+            # sec 4.4), but a LoRA's weight deltas are only valid against
+            # the exact base checkpoint it was trained on -- refuse to apply
+            # one against any other profile rather than silently loading it
+            # onto the wrong base model.
+            raise WorkerUnavailable(
+                f"job requested lora_id '{lora_id}' but resolved dit_profile is "
+                f"'{dit_profile}', not '{LORA_BASE_DIT_PROFILE}' -- a LoRA's weights are "
+                "only valid against the base checkpoint it was trained on (SPEC.md sec 4.4)"
+            )
+        _ensure_lora_adapter(handler, lora_id, lora_adapter_path)
 
         effective_plan = _plan_from_query(create_sample, lm, plan) if simple_mode else plan
         # Null/omitted bpm, key, or duration: let ACE-Step's CoT fill them in
@@ -965,6 +1077,11 @@ def run_job(
         "error": None,
         "repaint": _repaint_meta(job),
         "track_name": job.get("track_name"),
+        # SPEC.md sec 4.4 "LoRA train / load": which style-pack lora (if
+        # any) was applied to this take, for the same reason track_name is
+        # recorded here -- an auditable record on the take itself, not just
+        # in the job row.
+        "lora_id": job.get("lora_id"),
         "favorite": False,
         "notes": "",
     }
