@@ -6,6 +6,7 @@ mocked (worker.mock_worker) -- nothing here exercises real ACE-Step.
 
 from __future__ import annotations
 
+import json
 import threading
 import time
 from pathlib import Path
@@ -13,6 +14,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from server import storage
 from server.app import app
 from worker.run_worker import run_loop
 
@@ -125,3 +127,90 @@ def test_patch_unknown_take_404s(client: TestClient) -> None:
         json={"favorite": True},
     )
     assert resp.status_code == 404
+
+
+def test_concurrent_favorite_and_notes_patches_do_not_lose_updates(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Reviewer-flagged: update_take_annotations used to do an unlocked
+    read-modify-write, so a favorite PATCH and a notes PATCH racing each
+    other could both read the same on-disk meta and then overwrite one
+    another's write. Widen the race window artificially (sleep between the
+    read and the write) so this fails reliably without the fix (storage's
+    `_project_lock`) and passes reliably with it."""
+    project_id, take_id = _make_take(client)
+
+    original_get_take = storage.get_take
+
+    def slow_get_take(pid: str, tid: str) -> dict:
+        meta = original_get_take(pid, tid)
+        time.sleep(0.05)
+        return meta
+
+    monkeypatch.setattr(storage, "get_take", slow_get_take)
+
+    responses: list = []
+
+    def patch_favorite() -> None:
+        responses.append(
+            client.patch(f"/api/projects/{project_id}/takes/{take_id}", json={"favorite": True})
+        )
+
+    def patch_notes() -> None:
+        responses.append(
+            client.patch(
+                f"/api/projects/{project_id}/takes/{take_id}",
+                json={"notes": "concurrent note"},
+            )
+        )
+
+    t1 = threading.Thread(target=patch_favorite)
+    t2 = threading.Thread(target=patch_notes)
+    t1.start()
+    time.sleep(0.01)  # t1 must be inside its read before t2 starts, to force the race
+    t2.start()
+    t1.join(timeout=5)
+    t2.join(timeout=5)
+
+    assert len(responses) == 2
+    assert all(r.status_code == 200 for r in responses)
+
+    detail = client.get(f"/api/projects/{project_id}").json()
+    take = next(t for t in detail["takes"] if t["id"] == take_id)
+    assert take["favorite"] is True
+    assert take["notes"] == "concurrent note"
+
+
+def test_legacy_take_missing_favorite_and_notes_gets_defaults(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """A take written before this migration has neither key on disk (SPEC.md
+    sec 12 Phase 6). Both list_takes and get_take must backfill defaults
+    rather than the frontend receiving `undefined`/missing fields."""
+    project_id, take_id = _make_take(client)
+
+    meta_path = tmp_path / "projects" / project_id / "takes" / take_id / "meta.json"
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    del meta["favorite"]
+    del meta["notes"]
+    meta_path.write_text(json.dumps(meta), encoding="utf-8")
+
+    listed = client.get(f"/api/projects/{project_id}/takes").json()
+    legacy = next(t for t in listed if t["id"] == take_id)
+    assert legacy["favorite"] is False
+    assert legacy["notes"] == ""
+
+    detail = client.get(f"/api/projects/{project_id}").json()
+    legacy_detail = next(t for t in detail["takes"] if t["id"] == take_id)
+    assert legacy_detail["favorite"] is False
+    assert legacy_detail["notes"] == ""
+
+    # Patching just one field on a legacy take must not surface the other as
+    # missing -- it should come back as its normalized default.
+    resp = client.patch(
+        f"/api/projects/{project_id}/takes/{take_id}", json={"favorite": True}
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["favorite"] is True
+    assert body["notes"] == ""

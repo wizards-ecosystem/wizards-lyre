@@ -369,6 +369,18 @@ def set_active_take(project_id: str, take_id: str) -> dict:
     return _update_project(project_id, mutate)
 
 
+def _normalize_take_meta(meta: dict) -> dict:
+    """Fill in fields added after some takes were already written to disk
+    (SPEC.md sec 12 Phase 6: favorite/notes). New takes always get these from
+    worker.mock_worker/acestep_worker, but a take created before that change
+    has neither key -- every read site funnels through here instead of each
+    caller (and the frontend's Take type / textarea, which assume both
+    always exist) having to special-case missing keys."""
+    meta.setdefault("favorite", False)
+    meta.setdefault("notes", "")
+    return meta
+
+
 def list_takes(project_id: str) -> list[dict]:
     load_project(project_id)
     tdir = takes_dir(project_id)
@@ -377,7 +389,7 @@ def list_takes(project_id: str) -> list[dict]:
         for entry in sorted(tdir.iterdir()):
             meta_path = entry / "meta.json"
             if meta_path.exists():
-                out.append(_read_json(meta_path))
+                out.append(_normalize_take_meta(_read_json(meta_path)))
     out.sort(key=lambda t: t.get("created_at") or "", reverse=True)
     return out
 
@@ -399,7 +411,7 @@ def get_take(project_id: str, take_id: str) -> dict:
     path = take_dir(project_id, take_id) / "meta.json"
     if not path.exists():
         raise TakeNotFound(take_id)
-    return _read_json(path)
+    return _normalize_take_meta(_read_json(path))
 
 
 def take_audio_path(project_id: str, take_id: str) -> Path:
@@ -506,14 +518,22 @@ def update_take_annotations(
     write site, which persists a *complete*, freshly-generated meta dict via
     `write_take_meta`, this only ever touches the field(s) actually passed
     in, so it can never clobber the take's immutable generation data
-    (SPEC.md sec 7.3) with a stale copy."""
-    meta = get_take(project_id, take_id)
-    if favorite is not None:
-        meta["favorite"] = favorite
-    if notes is not None:
-        meta["notes"] = notes
-    write_take_meta(project_id, take_id, meta)
-    return meta
+    (SPEC.md sec 7.3) with a stale copy.
+
+    Runs the read-modify-write under the project's cross-process lock
+    (reviewer-flagged: an unlocked read-modify-write here lets a favorite
+    PATCH and a notes PATCH racing each other both read the same on-disk
+    meta and then overwrite one another's write, silently losing whichever
+    landed second) -- the same lock `_update_project`/`_update_plan` already
+    use for every other metadata mutation under this project."""
+    with _project_lock(project_id):
+        meta = get_take(project_id, take_id)
+        if favorite is not None:
+            meta["favorite"] = favorite
+        if notes is not None:
+            meta["notes"] = notes
+        write_take_meta(project_id, take_id, meta)
+        return meta
 
 
 def allocate_lora_dir(project_id: str) -> tuple[str, Path]:
