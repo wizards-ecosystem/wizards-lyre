@@ -497,6 +497,25 @@ def write_take_meta(project_id: str, take_id: str, meta: dict) -> None:
     _write_json(path, meta)
 
 
+def update_take_annotations(
+    project_id: str, take_id: str, favorite: bool | None = None, notes: str | None = None
+) -> dict:
+    """Patch the user-annotation fields on a take's meta.json (SPEC.md sec
+    12 Phase 6: 'free-text take notes'). `favorite`/`notes` are annotations
+    layered on top of a take, not generation state -- unlike every other
+    write site, which persists a *complete*, freshly-generated meta dict via
+    `write_take_meta`, this only ever touches the field(s) actually passed
+    in, so it can never clobber the take's immutable generation data
+    (SPEC.md sec 7.3) with a stale copy."""
+    meta = get_take(project_id, take_id)
+    if favorite is not None:
+        meta["favorite"] = favorite
+    if notes is not None:
+        meta["notes"] = notes
+    write_take_meta(project_id, take_id, meta)
+    return meta
+
+
 def allocate_lora_dir(project_id: str) -> tuple[str, Path]:
     load_project(project_id)
     lora_id = new_id()

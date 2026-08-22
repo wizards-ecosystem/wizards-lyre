@@ -366,6 +366,19 @@ button:disabled {
   gap: 4px;
 }
 
+.take-notes {
+  flex: 1 1 140px;
+  min-width: 100px;
+  min-height: 32px;
+  resize: vertical;
+  font-size: 12px;
+  background: var(--bg, #1b1c28);
+  color: inherit;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 6px;
+}
+
 .parent-take-link {
   background: none;
   border: none;

@@ -60,6 +60,8 @@ export interface Take {
   has_lrc: boolean;
   error: string | null;
   track_name: string | null;
+  favorite: boolean;
+  notes: string;
 }
 
 export interface ProjectDetail {
@@ -120,6 +122,11 @@ export const api = {
   getProject: (id: string) => request<ProjectDetail>(`/api/projects/${id}`),
   patchProject: (id: string, patch: Partial<Pick<Project, "title" | "dit_profile" | "favorite">>) =>
     request<Project>(`/api/projects/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+    }),
+  patchTake: (projectId: string, takeId: string, patch: { favorite?: boolean; notes?: string }) =>
+    request<Take>(`/api/projects/${projectId}/takes/${takeId}`, {
       method: "PATCH",
       body: JSON.stringify(patch),
     }),

@@ -86,6 +86,12 @@ export default function App() {
   const saveChainRef = useRef<Promise<void>>(Promise.resolve());
   const lastSaveOutcomeRef = useRef<Promise<void>>(Promise.resolve());
 
+  // Take notes debounce, analogous to the plan save mechanism above but
+  // keyed by take id (several takes' notes fields can each have their own
+  // edit in flight/pending at once, unlike the single shared plan slot).
+  const takeSaveTimeoutsRef = useRef<Record<string, ReturnType<typeof setTimeout> | null>>({});
+  const pendingTakeNotesRef = useRef<Record<string, string>>({});
+
   // Mirrors activeId, but updated synchronously (the instant a switch is
   // committed, not after the next render) so refreshDetail can tell whether
   // its response is still for the project actually on screen. Selecting A
@@ -109,6 +115,9 @@ export default function App() {
   useEffect(() => {
     return () => {
       if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+      Object.values(takeSaveTimeoutsRef.current).forEach((t) => {
+        if (t) clearTimeout(t);
+      });
     };
   }, []);
 
@@ -185,6 +194,44 @@ export default function App() {
     } catch (err) {
       setErrorMsg(String(err));
     }
+  }
+
+  function updateTakeLocal(takeId: string, patch: { favorite?: boolean; notes?: string }): void {
+    setDetail((prev) =>
+      prev
+        ? { ...prev, takes: prev.takes.map((t) => (t.id === takeId ? { ...t, ...patch } : t)) }
+        : prev,
+    );
+  }
+
+  async function toggleTakeFavorite(take: { id: string; favorite: boolean }): Promise<void> {
+    if (!activeId) return;
+    const favorite = !take.favorite;
+    updateTakeLocal(take.id, { favorite });
+    try {
+      await api.patchTake(activeId, take.id, { favorite });
+    } catch (err) {
+      updateTakeLocal(take.id, { favorite: take.favorite });
+      setErrorMsg(String(err));
+    }
+  }
+
+  function saveTakeNotes(takeId: string, notes: string): void {
+    if (!activeId) return;
+    const projectId = activeId;
+    updateTakeLocal(takeId, { notes });
+
+    pendingTakeNotesRef.current[takeId] = notes;
+    const existing = takeSaveTimeoutsRef.current[takeId];
+    if (existing) clearTimeout(existing);
+    takeSaveTimeoutsRef.current[takeId] = setTimeout(() => {
+      takeSaveTimeoutsRef.current[takeId] = null;
+      const pendingNotes = pendingTakeNotesRef.current[takeId];
+      delete pendingTakeNotesRef.current[takeId];
+      api
+        .patchTake(projectId, takeId, { notes: pendingNotes })
+        .catch((err) => setErrorMsg(String(err)));
+    }, PLAN_SAVE_DEBOUNCE_MS);
   }
 
   async function setActiveTake(takeId: string): Promise<void> {
@@ -843,7 +890,25 @@ export default function App() {
                           {take.id === detail.project.active_take_id && (
                             <span className="active-take-badge">active</span>
                           )}
+                          <button
+                            type="button"
+                            className={`favorite-btn ${take.favorite ? "favorited" : ""}`}
+                            title={take.favorite ? "Unfavorite" : "Favorite"}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              toggleTakeFavorite(take);
+                            }}
+                          >
+                            {take.favorite ? "★" : "☆"}
+                          </button>
                         </div>
+                        <textarea
+                          className="take-notes"
+                          placeholder="Notes..."
+                          value={take.notes}
+                          onClick={(e) => e.stopPropagation()}
+                          onChange={(e) => saveTakeNotes(take.id, e.target.value)}
+                        />
                         <div className="take-actions">
                           <button
                             type="button"
