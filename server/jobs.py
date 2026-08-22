@@ -568,6 +568,19 @@ def enqueue_job(project_id: str, body: dict[str, Any]) -> dict:
     dit_profile = _resolve_dit_profile(
         action, body.get("dit_profile"), project["dit_profile"], lora_requested=lora_id is not None
     )
+    if lora_id is not None:
+        # worker/run_worker.py publishes whether the active backend actually
+        # implements applying a lora at inference time (see
+        # worker.acestep_worker.supports_lora_load / LORA_LOAD_UNSUPPORTED_
+        # REASON) -- reject here instead of accepting a request that every
+        # production job would unconditionally fail deep inside the worker
+        # (cross-vendor-review-flagged: exposing/accepting a lora_id request
+        # the real backend can never fulfil misrepresents the feature as
+        # implemented). Same fail-open semantics as _check_worker_capability
+        # elsewhere: unknown/stale capability still allows the job to queue
+        # -- worker/acestep_worker.py's run_job still raises WorkerUnavailable
+        # as the runtime fallback for that case.
+        _check_worker_capability("lora_load")
     # SPEC.md sec 4.1/8.1 only calls for early rejection of 'quality' (XL
     # needs CPU offload on a 16 GB card) -- every other profile always
     # reports supported=True from the real supports_dit_profile() and only

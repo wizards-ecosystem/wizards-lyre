@@ -157,6 +157,7 @@ def _publish_capabilities(ready: bool, message: str) -> None:
         else:
             jobs.publish_worker_capability(dit_profile, True, None)
     _publish_train_lora_capability(module, ready, message)
+    _publish_lora_load_capability(module, ready, message)
 
 
 def _publish_train_lora_capability(module, ready: bool, message: str) -> None:
@@ -179,6 +180,30 @@ def _publish_train_lora_capability(module, ready: bool, message: str) -> None:
         )
     )
     jobs.publish_worker_capability("train_lora", supported, reason)
+
+
+def _publish_lora_load_capability(module, ready: bool, message: str) -> None:
+    """`lora_load` (SPEC.md sec 4.4/12 'LoRA load': attaching a trained
+    lora_id to a generate/cover/repaint job) isn't a `dit_profile` either --
+    published under its own key, same as `train_lora` above, read by
+    `server.jobs.enqueue_job`'s `_check_worker_capability("lora_load")`.
+    Unlike `train_lora`, this isn't a plain `hasattr` check: both backends
+    define `run_job`, so presence alone can't distinguish "applies the
+    requested lora" from "doesn't yet" -- each backend instead exposes a
+    `supports_lora_load() -> (bool, reason)` function, same shape as
+    `supports_dit_profile`, that `worker.acestep_worker` currently reports
+    False for (real adapter loading isn't implemented yet) and
+    `worker.mock_worker` reports True for (so the mocked end-to-end path
+    stays testable)."""
+    if not ready:
+        jobs.publish_worker_capability("lora_load", False, message)
+        return
+    check = getattr(module, "supports_lora_load", None)
+    if check is None:
+        jobs.publish_worker_capability("lora_load", True, None)
+        return
+    supported, reason = check()
+    jobs.publish_worker_capability("lora_load", supported, reason)
 
 
 def _refresh_published_state(startup_ready: bool, startup_message: str) -> None:

@@ -214,6 +214,29 @@ MIN_LORA_SOURCES = 8
 # training loop against (see the module docstring's LoRA section).
 LORA_BASE_DIT_PROFILE = "studio_ops"
 
+# SPEC.md sec 4.4/12 'LoRA load': applying a trained adapter at inference
+# time requires researching ACE-Step's real inference-time LoRA-loading API
+# -- deliberately out of scope for the request-shape/validation/gating
+# scaffolding `server.jobs` implements (a prior job that tried to bundle
+# that research with gating/wiring in one PR was skipped for exactly this
+# reason). Until a follow-up job implements it, this worker must not accept
+# a lora_id request as if it were supported (cross-vendor-review-flagged:
+# exposing/accepting the request while every production job unconditionally
+# fails it misrepresents the feature as implemented) -- `supports_lora_load`
+# lets `worker/run_worker.py` publish that honestly, and `server.jobs`
+# rejects a lora_id request at enqueue time via the published capability
+# (mirroring how `quality`'s CPU-offload capability and `train_lora`'s own
+# capability are checked), before a job row is ever created. `run_job`
+# below still raises `WorkerUnavailable` if a lora_id request somehow
+# reaches it anyway (e.g. capability not yet published), as defense in
+# depth -- same belt-and-suspenders shape as `_run_train_lora_job`'s
+# `hasattr` fallback check.
+LORA_LOAD_UNSUPPORTED_REASON = (
+    "this worker does not yet implement LoRA adapter loading at inference "
+    "time (SPEC.md sec 4.4/12 'LoRA load' -- request-side scaffolding only "
+    "so far)"
+)
+
 # Mirrors the upstream training route's own request defaults
 # (`StartTrainingRequest` in acestep/api/train_api_models.py) -- the numbers
 # a user leaves untouched when starting training in the stock UI, and
@@ -437,6 +460,17 @@ def supports_dit_profile(dit_profile: str) -> tuple[bool, str | None]:
             "'polish' instead."
         )
     return True, None
+
+
+def supports_lora_load() -> tuple[bool, str | None]:
+    """Whether this worker can currently apply a trained lora's adapter
+    during generation (SPEC.md sec 4.4/12 'LoRA load'). Always unsupported
+    for now -- see `LORA_LOAD_UNSUPPORTED_REASON`. Same call shape as
+    `supports_dit_profile` so `worker/run_worker.py` can publish it the same
+    way; only ever called from this worker process (directly, or via
+    `worker/run_worker.py` publishing the result to SQLite for
+    `server.jobs` to read)."""
+    return False, LORA_LOAD_UNSUPPORTED_REASON
 
 
 def _ensure_loaded(dit_profile: str) -> tuple[Any, Any, Any]:
@@ -744,25 +778,17 @@ def run_job(
     longer matches this adapter; `server.jobs` catches that and marks the
     job `error` without crashing the HTTP process.
 
-    Raises `WorkerUnavailable` unconditionally if `job['lora_id']` is set:
-    `server.jobs` already validates and gates the request end to end (a
-    lora_id only reaches here attached to a real, successfully-trained lora,
-    with dit_profile forced to `studio_ops`), but this worker does not yet
-    load or apply the adapter itself -- that requires researching ACE-Step's
-    real inference-time LoRA-loading API, deliberately out of scope for the
-    request-shape/validation/gating scaffolding this module's `train_lora`
-    sibling and `server.jobs` implement (a prior job that tried to bundle
-    that research with gating/wiring in one PR was skipped for exactly this
-    reason). Failing loudly here beats silently generating from the base
-    checkpoint and reporting success as if the requested style pack had
-    actually been applied.
+    Raises `WorkerUnavailable` unconditionally if `job['lora_id']` is set
+    (see `LORA_LOAD_UNSUPPORTED_REASON`/`supports_lora_load`): `server.jobs`
+    already rejects a lora_id request at enqueue time once this worker has
+    published that capability as unsupported, so this only fires as defense
+    in depth for a request that somehow still reached here (e.g. the
+    capability hadn't been published yet). Failing loudly here beats
+    silently generating from the base checkpoint and reporting success as
+    if the requested style pack had actually been applied.
     """
     if job.get("lora_id"):
-        raise WorkerUnavailable(
-            f"lora_id '{job['lora_id']}' was requested but this worker does not yet "
-            "implement LoRA adapter loading at inference time (SPEC.md sec 4.4/12 "
-            "'LoRA load' -- request-side scaffolding only so far)"
-        )
+        raise WorkerUnavailable(f"lora_id '{job['lora_id']}' was requested but {LORA_LOAD_UNSUPPORTED_REASON}")
 
     _, GenerationParams, GenerationConfig, _, generate_music, create_sample = _import_acestep()
     take_dir.mkdir(parents=True, exist_ok=True)

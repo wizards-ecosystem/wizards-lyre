@@ -4,13 +4,24 @@ it *requires* (not merely permits) the `studio_ops` checkpoint that lora's
 weights were trained against (worker/acestep_worker.py's
 `LORA_BASE_DIT_PROFILE`) -- an omitted dit_profile is coerced to studio_ops
 and any explicit non-studio_ops profile is rejected, the same shape
-STUDIO_OPS_ACTIONS already enforces for extract/lego/complete. The real
-adapter-loading call itself is still not implemented (worker/acestep_worker.py
-fails loudly with `WorkerUnavailable` if `lora_id` reaches `run_job`, see
-tests/test_acestep_worker_adapter.py::test_run_job_rejects_lora_id_until_real_loading_exists)
--- researching and wiring ACE-Step's real inference-time LoRA API is a
-follow-up job's concern. This module covers the request shape, validation,
-and forced-studio_ops gating end to end against the mocked worker.
+STUDIO_OPS_ACTIONS already enforces for extract/lego/complete.
+
+The real adapter-loading call itself is still not implemented -- that
+requires researching ACE-Step's real inference-time LoRA API, a follow-up
+job's concern. Until then, a lora_id request must not be *accepted* as if it
+were implemented: `worker.acestep_worker.supports_lora_load()` reports
+unsupported, `worker/run_worker.py` publishes that (see
+test_publish_lora_load_capability_reads_backend_support below), and
+`server.jobs.enqueue_job` rejects a lora_id request at enqueue time via that
+published capability -- the exact same shape as the pre-existing `quality`
+CPU-offload gate (tests/test_phase1_api.py::
+test_quality_profile_rejected_without_cpu_offload_support). If a lora_id
+request somehow still reaches the real worker anyway (capability not yet
+published), `run_job` raises `WorkerUnavailable` as defense in depth (see
+tests/test_acestep_worker_adapter.py::test_run_job_rejects_lora_id_until_real_loading_exists).
+This module covers the request shape, validation, forced-studio_ops gating,
+and capability gating end to end against the mocked worker (which reports
+lora_load as trivially supported, same as its other capability checks).
 
 See tests/test_train_lora_flow.py for the training side this builds on, and
 tests/test_extract_requires_studio_ops.py for the pre-existing studio_ops
@@ -317,3 +328,97 @@ def test_resolve_requested_lora_returns_none_when_absent() -> None:
     body is not an error, just "no lora requested"."""
     assert jobs_module._resolve_requested_lora("some-project", {}) is None
     assert jobs_module._resolve_requested_lora("some-project", {"lora_id": None}) is None
+
+
+def test_lora_load_rejected_when_worker_reports_unsupported(client: TestClient) -> None:
+    """Cross-vendor-review-flagged: exposing/accepting a lora_id request
+    that every production job would unconditionally fail deep inside the
+    worker misrepresents 'LoRA load' as implemented. Once the active worker
+    backend publishes lora_load as unsupported (as worker.acestep_worker
+    does, via supports_lora_load), enqueue_job must reject the request up
+    front instead of queuing it -- same shape as the pre-existing `quality`
+    CPU-offload gate."""
+    project = client.post("/api/projects", json={"title": "LoRA Capability Gate"}).json()
+    project_id = project["id"]
+    client.put(
+        f"/api/projects/{project_id}/plan",
+        json={**storage.default_plan(), "caption": "reference take"},
+    )
+
+    lora_id = _train_lora(client, project_id)
+
+    # The `client` fixture's background worker thread also publishes
+    # capabilities (including lora_load, trivially True from the mock) once
+    # at its own startup; wait for that one-time publish to land before
+    # overriding it below, or it can race and clobber our override right
+    # back to "supported" (same precaution as test_phase1_api.py's quality
+    # capability test).
+    deadline = time.time() + 5.0
+    while jobs_module.get_worker_capability("lora_load") is None and time.time() < deadline:
+        time.sleep(0.01)
+
+    # simulate what worker/run_worker.py publishes for the real backend
+    reason = "this worker does not yet implement LoRA adapter loading at inference time"
+    jobs_module.publish_worker_capability("lora_load", False, reason)
+
+    jobs_before = len(client.get("/api/jobs").json())
+    resp = client.post(
+        f"/api/projects/{project_id}/jobs",
+        json={"action": "generate", "dit_profile": "studio_ops", "lora_id": lora_id},
+    )
+    assert resp.status_code == 400
+    assert "lora" in resp.json()["detail"].lower()
+    assert len(client.get("/api/jobs").json()) == jobs_before  # no job row left behind
+
+    # once the worker reports it can apply loras after all, it's accepted
+    jobs_module.publish_worker_capability("lora_load", True, None)
+    resp = client.post(
+        f"/api/projects/{project_id}/jobs",
+        json={"action": "generate", "dit_profile": "studio_ops", "lora_id": lora_id},
+    )
+    assert resp.status_code == 200
+
+
+def test_supports_lora_load_reports_unsupported_for_real_worker_supported_for_mock() -> None:
+    """Direct unit coverage: the real backend must not claim lora_load
+    support until a follow-up job actually implements it; the mock reports
+    it trivially supported so the mocked end-to-end path stays testable."""
+    from worker import acestep_worker, mock_worker
+
+    supported, reason = acestep_worker.supports_lora_load()
+    assert supported is False
+    assert reason
+
+    assert mock_worker.supports_lora_load() == (True, None)
+
+
+def test_publish_lora_load_capability_reads_backend_support(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Direct unit coverage for worker.run_worker._publish_lora_load_capability:
+    reads each backend's own supports_lora_load(), falls back to
+    True/unsupported-only-when-not-ready for a hypothetical backend defining
+    no such function, and reports unsupported outright when the worker
+    itself isn't ready (mirrors _publish_train_lora_capability's shape)."""
+    monkeypatch.setenv("BARD_DB_PATH", str(tmp_path / "bard.db"))
+    jobs_module.init_db()
+
+    from worker import acestep_worker, mock_worker
+    from worker import run_worker as run_worker_module
+
+    run_worker_module._publish_lora_load_capability(mock_worker, True, "ready")
+    assert jobs_module.get_worker_capability("lora_load") == (True, None)
+
+    run_worker_module._publish_lora_load_capability(acestep_worker, True, "ready")
+    supported, reason = jobs_module.get_worker_capability("lora_load")
+    assert supported is False
+    assert reason
+
+    class NoCapabilityModule:
+        pass
+
+    run_worker_module._publish_lora_load_capability(NoCapabilityModule, True, "ready")
+    assert jobs_module.get_worker_capability("lora_load") == (True, None)
+
+    run_worker_module._publish_lora_load_capability(mock_worker, False, "worker down")
+    assert jobs_module.get_worker_capability("lora_load") == (False, "worker down")

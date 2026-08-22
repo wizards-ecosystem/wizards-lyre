@@ -57,6 +57,15 @@ def supports_dit_profile(dit_profile: str) -> tuple[bool, str | None]:
     return True, None
 
 
+def supports_lora_load() -> tuple[bool, str | None]:
+    """The mock never loads a real model or adapter -- LoRA "load" gating
+    (SPEC.md sec 4.4/12) is exercised for real against
+    `worker.acestep_worker.supports_lora_load`, which reports unsupported
+    until a follow-up job implements real adapter loading. Trivially
+    "supported" here so tests can exercise the mocked end-to-end path."""
+    return True, None
+
+
 DEFAULT_SIMULATED_DIT_PROFILE = "iterate"
 
 # Tracks a simple simulated "loaded" flag, mirroring worker.acestep_worker's
