@@ -743,7 +743,27 @@ def run_job(
     Raises `WorkerUnavailable` if acestep/CUDA isn't usable or its API no
     longer matches this adapter; `server.jobs` catches that and marks the
     job `error` without crashing the HTTP process.
+
+    Raises `WorkerUnavailable` unconditionally if `job['lora_id']` is set:
+    `server.jobs` already validates and gates the request end to end (a
+    lora_id only reaches here attached to a real, successfully-trained lora,
+    with dit_profile forced to `studio_ops`), but this worker does not yet
+    load or apply the adapter itself -- that requires researching ACE-Step's
+    real inference-time LoRA-loading API, deliberately out of scope for the
+    request-shape/validation/gating scaffolding this module's `train_lora`
+    sibling and `server.jobs` implement (a prior job that tried to bundle
+    that research with gating/wiring in one PR was skipped for exactly this
+    reason). Failing loudly here beats silently generating from the base
+    checkpoint and reporting success as if the requested style pack had
+    actually been applied.
     """
+    if job.get("lora_id"):
+        raise WorkerUnavailable(
+            f"lora_id '{job['lora_id']}' was requested but this worker does not yet "
+            "implement LoRA adapter loading at inference time (SPEC.md sec 4.4/12 "
+            "'LoRA load' -- request-side scaffolding only so far)"
+        )
+
     _, GenerationParams, GenerationConfig, _, generate_music, create_sample = _import_acestep()
     take_dir.mkdir(parents=True, exist_ok=True)
 

@@ -1,10 +1,16 @@
 """Phase 4 'LoRA load' request scaffolding (SPEC.md sec 4.4/12): attach an
 existing, successfully-trained `lora_id` to a generate/cover/repaint job so
-it's allowed to load the `studio_ops` checkpoint that lora's weights were
-trained against (worker/acestep_worker.py's `LORA_BASE_DIT_PROFILE`) --
-without any real adapter-loading call, which is a follow-up job's concern
-(worker/acestep_worker.py is untouched by this one). Covers the request
-shape, validation, and gating end to end against the mocked worker.
+it *requires* (not merely permits) the `studio_ops` checkpoint that lora's
+weights were trained against (worker/acestep_worker.py's
+`LORA_BASE_DIT_PROFILE`) -- an omitted dit_profile is coerced to studio_ops
+and any explicit non-studio_ops profile is rejected, the same shape
+STUDIO_OPS_ACTIONS already enforces for extract/lego/complete. The real
+adapter-loading call itself is still not implemented (worker/acestep_worker.py
+fails loudly with `WorkerUnavailable` if `lora_id` reaches `run_job`, see
+tests/test_acestep_worker_adapter.py::test_run_job_rejects_lora_id_until_real_loading_exists)
+-- researching and wiring ACE-Step's real inference-time LoRA API is a
+follow-up job's concern. This module covers the request shape, validation,
+and forced-studio_ops gating end to end against the mocked worker.
 
 See tests/test_train_lora_flow.py for the training side this builds on, and
 tests/test_extract_requires_studio_ops.py for the pre-existing studio_ops
@@ -133,6 +139,57 @@ def test_generate_with_studio_ops_and_valid_lora_is_accepted(client: TestClient)
     assert take["lora_id"] == lora_id
 
 
+def test_generate_with_lora_and_omitted_dit_profile_forces_studio_ops(client: TestClient) -> None:
+    """A lora_id must *require* studio_ops, not just permit it alongside
+    whatever profile happens to be in play -- an omitted dit_profile must
+    not silently fall back to the project default (iterate)."""
+    project = client.post("/api/projects", json={"title": "LoRA Forces Studio Ops"}).json()
+    project_id = project["id"]
+    assert client.get(f"/api/projects/{project_id}").json()["project"]["dit_profile"] == "iterate"
+    client.put(
+        f"/api/projects/{project_id}/plan",
+        json={**storage.default_plan(), "caption": "reference take"},
+    )
+
+    lora_id = _train_lora(client, project_id)
+
+    resp = client.post(
+        f"/api/projects/{project_id}/jobs",
+        json={"action": "generate", "lora_id": lora_id},
+    )
+    assert resp.status_code == 200
+    job = _wait_for_job(client, resp.json()["id"])
+    assert job["status"] == "done", job.get("error")
+    assert job["dit_profile"] == "studio_ops"
+
+
+def test_generate_with_lora_and_incompatible_dit_profile_is_rejected(client: TestClient) -> None:
+    """A lora is only valid applied back onto studio_ops -- an explicit
+    incompatible profile alongside lora_id must 400, not silently ignore the
+    lora or apply it to the wrong checkpoint."""
+    project = client.post("/api/projects", json={"title": "LoRA Incompatible Profile"}).json()
+    project_id = project["id"]
+    client.put(
+        f"/api/projects/{project_id}/plan",
+        json={**storage.default_plan(), "caption": "reference take"},
+    )
+
+    lora_id = _train_lora(client, project_id)
+    jobs_before = len(client.get("/api/jobs").json())
+
+    for dit_profile in ("iterate", "polish", "quality"):
+        resp = client.post(
+            f"/api/projects/{project_id}/jobs",
+            json={"action": "generate", "dit_profile": dit_profile, "lora_id": lora_id},
+        )
+        assert resp.status_code == 400, dit_profile
+        assert "studio_ops" in resp.json()["detail"]
+
+    # none of the rejected requests left a job row behind (the training's own
+    # source-take generate jobs above are the only ones that exist).
+    assert len(client.get("/api/jobs").json()) == jobs_before
+
+
 def test_cover_and_repaint_also_accept_studio_ops_with_a_lora(client: TestClient) -> None:
     """LORA_STYLE_ACTIONS covers generate, cover, and repaint alike -- the
     gating extension isn't generate-only."""
@@ -207,7 +264,9 @@ def test_lora_id_pointing_at_failed_training_is_rejected(client: TestClient) -> 
 
 
 def test_resolve_dit_profile_gates_studio_ops_on_lora_requested() -> None:
-    """Direct unit coverage for _resolve_dit_profile's lora_requested param."""
+    """Direct unit coverage for _resolve_dit_profile's lora_requested param:
+    it must *force* studio_ops for generate/cover/repaint, not just permit
+    it alongside an explicit or default profile."""
     with pytest.raises(jobs_module.JobError):
         jobs_module._resolve_dit_profile("generate", "studio_ops", "iterate")
     assert (
@@ -215,8 +274,26 @@ def test_resolve_dit_profile_gates_studio_ops_on_lora_requested() -> None:
         == "studio_ops"
     )
 
+    # an omitted dit_profile is coerced to studio_ops when lora_requested,
+    # not left to fall back to the project default.
+    assert (
+        jobs_module._resolve_dit_profile("generate", None, "iterate", lora_requested=True)
+        == "studio_ops"
+    )
+    for action in ("generate", "cover", "repaint"):
+        assert (
+            jobs_module._resolve_dit_profile(action, None, "polish", lora_requested=True)
+            == "studio_ops"
+        )
+        # an explicit incompatible profile is rejected, not silently ignored.
+        for incompatible in ("iterate", "polish", "quality"):
+            with pytest.raises(jobs_module.JobError):
+                jobs_module._resolve_dit_profile(
+                    action, incompatible, "iterate", lora_requested=True
+                )
+
     # extract/lego/complete are unaffected by lora_requested either way --
-    # they were already allowed (and coerced) onto studio_ops before this job.
+    # they were already required (and coerced) onto studio_ops before this job.
     assert jobs_module._resolve_dit_profile("extract", None, "iterate") == "studio_ops"
     assert (
         jobs_module._resolve_dit_profile("extract", None, "iterate", lora_requested=True)
@@ -224,11 +301,15 @@ def test_resolve_dit_profile_gates_studio_ops_on_lora_requested() -> None:
     )
 
     # train_lora isn't in LORA_STYLE_ACTIONS -- lora_requested doesn't open
-    # studio_ops for it.
+    # (or force) studio_ops for it.
     with pytest.raises(jobs_module.JobError):
         jobs_module._resolve_dit_profile(
             "train_lora", "studio_ops", "iterate", lora_requested=True
         )
+    assert (
+        jobs_module._resolve_dit_profile("train_lora", None, "iterate", lora_requested=True)
+        == "iterate"
+    )
 
 
 def test_resolve_requested_lora_returns_none_when_absent() -> None:

@@ -397,12 +397,30 @@ def _resolve_dit_profile(
 
     `lora_requested` is True when the job carries a `lora_id` for a valid,
     successfully-trained lora (see `_resolve_requested_lora`) -- every
-    trained lora's weights are only valid applied back onto studio_ops, so a
-    generate/cover/repaint that's actually applying one must be allowed to
-    load studio_ops too (SPEC.md sec 4.4/12 'LoRA load'), unlike an ordinary
-    generate/cover/repaint with no lora attached."""
+    trained lora's weights are only valid applied back onto studio_ops
+    (worker/acestep_worker.py's `LORA_BASE_DIT_PROFILE`; training only ever
+    fine-tunes against that checkpoint), so a generate/cover/repaint that's
+    actually applying one must *require* studio_ops (SPEC.md sec 4.4/12
+    'LoRA load'), the same way STUDIO_OPS_ACTIONS below requires it for
+    extract/lego/complete -- not merely permit it alongside whatever profile
+    the request or project default happened to carry (cross-vendor-review-
+    flagged: a lora_id could otherwise ride along on an unrelated
+    'iterate'/'polish'/'quality' job and silently apply to the wrong
+    checkpoint, or not at all)."""
     if dit_profile is not None and dit_profile not in storage.VALID_DIT_PROFILES:
         raise JobError(f"invalid dit_profile: {dit_profile}")
+    if lora_requested and action in LORA_STYLE_ACTIONS:
+        # A lora_id attached to generate/cover/repaint forces studio_ops,
+        # exactly like STUDIO_OPS_ACTIONS' own coerce-or-reject shape below:
+        # an unset profile is coerced, an explicit mismatch is rejected.
+        if dit_profile is None:
+            return "studio_ops"
+        if dit_profile != "studio_ops":
+            raise JobError(
+                f"action '{action}' with a lora_id attached requires "
+                f"dit_profile='studio_ops' (got '{dit_profile}')"
+            )
+        return "studio_ops"
     if action in STUDIO_OPS_ACTIONS:
         # SPEC.md sec 8.1: reject extract/lego/complete unless dit_profile is
         # studio_ops. An unset profile is coerced; an explicit mismatch is rejected.
@@ -414,12 +432,12 @@ def _resolve_dit_profile(
             )
         return "studio_ops"
     # studio_ops is reserved for extract/lego/complete (SPEC.md sec 8.1), or
-    # for generate/cover/repaint with a lora_id actually attached -- reject
-    # it here otherwise instead of loading the base model for ordinary
-    # generation, whether it came from an explicit override or
+    # for generate/cover/repaint with a lora_id actually attached (handled
+    # above) -- reject it here otherwise instead of loading the base model
+    # for ordinary generation, whether it came from an explicit override or
     # (reviewer-flagged) a project's persisted default.
     resolved = dit_profile or project_dit_profile
-    if resolved == "studio_ops" and not (lora_requested and action in LORA_STYLE_ACTIONS):
+    if resolved == "studio_ops":
         raise JobError(
             f"action '{action}' cannot use dit_profile='studio_ops' -- that profile is "
             "reserved for extract/lego/complete, or for generate/cover/repaint with a "

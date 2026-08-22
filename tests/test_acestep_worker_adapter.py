@@ -903,6 +903,39 @@ def test_api_mismatch_raises_worker_unavailable_not_a_crash(
         acestep_worker.run_job(job=job, plan=plan, take_id="t4", take_dir=tmp_path / "take4")
 
 
+def test_run_job_rejects_lora_id_until_real_loading_exists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SPEC.md sec 4.4/12 'LoRA load': server.jobs already validates and
+    gates a lora_id request end to end (see tests/test_lora_load_request.py),
+    but this worker does not yet load or apply the adapter at inference time
+    -- that's a follow-up job's ACE-Step-API-research concern. A job that
+    reaches here with `lora_id` set must fail loudly (`WorkerUnavailable` ->
+    job `error`) instead of silently generating from the base checkpoint and
+    reporting success as if the requested style pack had been applied
+    (cross-vendor-review-flagged). No fake acestep install needed: the
+    rejection happens before `_import_acestep()` is ever called."""
+    plan = {
+        "query": "",
+        "caption": "x",
+        "lyrics": "[Instrumental]",
+        "instrumental": True,
+        "bpm": 90,
+        "keyscale": "D Minor",
+        "duration_sec": 20,
+    }
+    job = {
+        "action": "generate",
+        "dit_profile": "studio_ops",
+        "seed": -1,
+        "src_audio": None,
+        "lora_id": "some-lora-id",
+    }
+
+    with pytest.raises(acestep_worker.WorkerUnavailable, match="some-lora-id"):
+        acestep_worker.run_job(job=job, plan=plan, take_id="t-lora", take_dir=tmp_path / "take-lora")
+
+
 def test_initialize_worker_preloads_default_iterate_dit_and_lm(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
