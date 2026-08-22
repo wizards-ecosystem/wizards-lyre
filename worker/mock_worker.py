@@ -174,6 +174,13 @@ def run_job(
         "error": None,
         "repaint": _repaint_meta(job),
         "track_name": job.get("track_name"),
+        # SPEC.md sec 4.4 "LoRA train / load": no real GPU/adapter loading
+        # here (see the module docstring) -- just record what was requested
+        # so tests can assert lora_id actually flows from the job body
+        # through server.jobs to the take, without needing the real
+        # acestep.core.generation.handler.lora.* API worker.acestep_worker
+        # wraps.
+        "lora_id": job.get("lora_id"),
         "favorite": False,
         "notes": "",
     }
@@ -199,5 +206,13 @@ def train_lora(
         "created_at": datetime.now(timezone.utc).isoformat(),
         "source_take_count": len(source_paths),
         "base_checkpoint": "studio_ops",
+        "dit_profile": "studio_ops",
+        # A truthy, present `status` plus a null `error` is what
+        # server.jobs._resolve_lora treats as "finished training
+        # successfully" (worker.acestep_worker.train_lora's real `status`
+        # is a free-form progress string from ACE-Step's own trainer, e.g.
+        # "epoch 2/10" -- this mock has no real trainer to report from, so
+        # it reports a fixed, always-truthy string instead).
+        "status": "done",
         "error": None,
     }

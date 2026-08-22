@@ -115,6 +115,53 @@ being iterated, and it writes the final adapter weights to
 export call needed for a first cut). `dit_handler` is the same `AceStepHandler`
 instance `_ensure_loaded` already produces for generation -- LoRA training
 reuses whichever DiT is currently loaded rather than a second handler.
+Reusing it has a consequence `_STATE`'s own lora bookkeeping (`lora_id`/
+`lora_adapter_path`, tracked for `_ensure_lora_adapter` below) never
+observes: `LoRATrainer` injects the in-training PEFT adapter directly into
+`dit_handler`'s decoder as a side effect of training, entirely outside
+`add_lora`/`set_active_lora_adapter`/`set_use_lora`. `train_lora` below
+therefore invalidates the whole cached handler once training finishes
+(success or failure) rather than leaving it cached with `_STATE["lora_id"]`
+still `None` -- otherwise a later plain generation would see that `None`,
+believe nothing is loaded, no-op, and silently run through the
+just-trained adapter anyway; a later explicit lora load would call
+`add_lora` against a decoder that's already PEFT-wrapped from training.
+
+LoRA loading (SPEC.md sec 4.4/12 "LoRA train / load" -- this is the "load"
+half; `train_lora` above is "train"): the tutorials in docs/en/*.md only
+cover the upstream web UI's "Use LoRA" checkbox, not a Python call, so this
+too was read directly from ace-step/ACE-Step-1.5's source on GitHub --
+specifically `LoraManagerMixin`
+(`acestep/core/generation/handler/lora_manager.py`), which `AceStepHandler`
+mixes in, and its `acestep/core/generation/handler/lora/lifecycle.py` +
+`.../lora/controls.py` implementations. `add_lora(lora_path, adapter_name)`
+injects a PEFT adapter directory (the same `<...>/adapter/final/` layout
+`train_lora` above writes, containing `adapter_config.json`) into the
+decoder, wrapping it in a PEFT `PeftModel` the first time it's called
+without disturbing the base weights; `set_active_lora_adapter(adapter_name)`
+selects which loaded adapter subsequent inference calls actually use, and
+`set_use_lora(bool)` is LoRA's master on/off switch. `unload_lora()` removes
+every currently loaded adapter and restores the plain base decoder -- used
+by `_ensure_lora_adapter` below to swap cleanly (unload, then load the new
+one) instead of stacking a second adapter on top of the first when a later
+job asks for a different lora_id, or leaving a stale adapter active when a
+later job asks for none at all. None of these four return a
+`(status_message, success)` tuple like `initialize_service`/`initialize`
+above -- but they are *not* silent either: ACE-Step reports an ordinary
+operational failure (a missing/corrupt adapter path, the base-decoder
+backup being unavailable to restore on unload, ...) as a returned status
+string starting with "❌" rather than raising. `_check_lora_status`
+below checks for that marker after every `_api_method_call`, so a failure
+reported this way still raises `WorkerUnavailable` instead of being
+recorded as a successful load/unload (treating any return as success was
+reviewer-flagged: a take could be marked with a `lora_id` that was never
+actually applied, or a stale adapter believed unloaded while still active).
+A failure partway through the load/unload/swap sequence leaves the
+handler's *actual* adapter state unknown (e.g. `unload_lora` succeeded but
+the following `add_lora` failed) -- `_ensure_lora_adapter` responds by
+invalidating the whole cached handler (not just the lora bookkeeping), so
+`_ensure_loaded` constructs a fresh one for the next job instead of any
+later job silently inheriting an indeterminate adapter state.
 
 Two things worth flagging about what `train_lora` deliberately does *not*
 replicate from the real pipeline: (1) `DatasetBuilder.scan_directory` only
@@ -148,7 +195,18 @@ from typing import Any, Callable
 
 # One GPU occupant: one loaded DiT + one LM, jobs serialize (SPEC.md sec 4.3).
 _LOCK = threading.Lock()
-_STATE: dict[str, Any] = {"dit_profile": None, "handler": None, "lm": None}
+# lora_id/lora_adapter_path track what's currently loaded onto `handler` via
+# _ensure_lora_adapter (SPEC.md sec 4.4 "LoRA train / load") -- both reset to
+# None whenever `handler` itself is swapped/recreated in _ensure_loaded,
+# since a freshly constructed handler has no adapters loaded regardless of
+# what the previous one had.
+_STATE: dict[str, Any] = {
+    "dit_profile": None,
+    "handler": None,
+    "lm": None,
+    "lora_id": None,
+    "lora_adapter_path": None,
+}
 
 DIT_CHECKPOINTS = {
     "iterate": "acestep-v15-turbo",
@@ -321,6 +379,23 @@ def _check_init_result(step: str, result: Any) -> None:
         raise WorkerUnavailable(f"{step} reported failure: {status_message}")
 
 
+def _check_lora_status(step: str, result: Any) -> None:
+    """`AceStepHandler.add_lora`/`set_active_lora_adapter`/`set_use_lora`/
+    `unload_lora` (see the module docstring's LoRA-loading section) don't
+    return a `(status_message, success)` tuple like `initialize_service`/
+    `initialize` -- but a falsy/exception-free return does not mean
+    success either: ACE-Step reports an ordinary operational failure (a
+    missing/corrupt adapter path, the base-decoder backup being
+    unavailable to restore on unload, ...) as a returned status string
+    starting with "❌" instead of raising. Treating any return as success
+    (what this adapter previously did) let a failed load/unload get
+    recorded in `_STATE` as if it had actually happened -- a take could be
+    marked with a `lora_id` that was never really applied, or a stale
+    adapter believed unloaded while still active on the decoder."""
+    if isinstance(result, str) and result.strip().startswith("❌"):
+        raise WorkerUnavailable(f"{step} reported failure: {result}")
+
+
 def _checkpoints_project_root() -> Path:
     """The `project_root` to pass to `AceStepHandler.initialize_service`
     (SPEC.md sec 6 / module docstring): upstream resolves each DiT checkpoint
@@ -447,6 +522,12 @@ def _ensure_loaded(dit_profile: str) -> tuple[Any, Any, Any]:
         # Unload the previous DiT before loading the next; never hold two
         # DiTs at once on a 16 GB card (SPEC.md sec 4.3).
         _STATE["handler"] = None
+        # A freshly constructed handler starts with no LoRA adapters loaded
+        # -- forget whatever _ensure_lora_adapter previously recorded onto
+        # the *old* handler object, or a later job could wrongly believe the
+        # new handler already has an adapter loaded and skip loading it.
+        _STATE["lora_id"] = None
+        _STATE["lora_adapter_path"] = None
         checkpoint = DIT_CHECKPOINTS[dit_profile]
         cpu_offload = dit_profile in CPU_OFFLOAD_PROFILES
         if cpu_offload:
@@ -497,6 +578,76 @@ def _ensure_loaded(dit_profile: str) -> tuple[Any, Any, Any]:
         _STATE["lm"] = lm
 
     return _STATE["handler"], _STATE["lm"], _STATE["dit_profile"]
+
+
+def _ensure_lora_adapter(handler: Any, lora_id: str | None, lora_adapter_path: str | None) -> None:
+    """Load, swap, or unload the requested LoRA adapter onto `handler`
+    (SPEC.md sec 4.4 "LoRA train / load" -- this is the "load" half;
+    `train_lora` below is "train"). Caller holds _LOCK and has already
+    called `_ensure_loaded`, same ordering as everything else in `run_job`.
+
+    See the module docstring's LoRA-loading section for the real API this
+    wraps (`AceStepHandler.add_lora`/`set_active_lora_adapter`/
+    `set_use_lora`/`unload_lora`, via `LoraManagerMixin`).
+    `server.jobs._resolve_dit_profile` only ever lets a non-None
+    `lora_adapter_path` through on a job whose resolved dit_profile is
+    `LORA_BASE_DIT_PROFILE` (studio_ops) -- see its docstring -- since a
+    LoRA's weight deltas are only valid against that exact base checkpoint;
+    `run_job` below re-asserts that invariant rather than trusting the
+    caller blindly.
+
+    A no-op if `lora_id` already matches what's currently loaded (including
+    both None -- nothing requested, nothing loaded). Otherwise unloads
+    whatever is currently loaded first: a later job requesting a *different*
+    lora_id (or none at all) must not silently stack a second adapter on top
+    of the first, or leave a stale adapter active once nothing needs it.
+
+    Every call is checked with `_check_lora_status` (see its docstring: a
+    failure here is reported as a "❌"-prefixed status string, not an
+    exception). If any step of the transition fails, the handler's actual
+    adapter state is left unknown -- e.g. `unload_lora` may have succeeded
+    while the following `add_lora` failed, or vice versa -- so this
+    invalidates the *entire* cached handler (not just the lora bookkeeping)
+    before re-raising, forcing `_ensure_loaded` to construct a fresh handler
+    for the next job rather than any later job inheriting an indeterminate
+    adapter state.
+    """
+    if lora_id == _STATE["lora_id"]:
+        return
+    try:
+        if _STATE["lora_id"] is not None:
+            result = _api_method_call("AceStepHandler.unload_lora", handler, "unload_lora")
+            _check_lora_status("AceStepHandler.unload_lora", result)
+            _STATE["lora_id"] = None
+            _STATE["lora_adapter_path"] = None
+        if lora_id is not None:
+            result = _api_method_call(
+                "AceStepHandler.add_lora",
+                handler,
+                "add_lora",
+                lora_path=lora_adapter_path,
+                adapter_name=lora_id,
+            )
+            _check_lora_status("AceStepHandler.add_lora", result)
+            result = _api_method_call(
+                "AceStepHandler.set_active_lora_adapter",
+                handler,
+                "set_active_lora_adapter",
+                adapter_name=lora_id,
+            )
+            _check_lora_status("AceStepHandler.set_active_lora_adapter", result)
+            result = _api_method_call(
+                "AceStepHandler.set_use_lora", handler, "set_use_lora", use_lora=True
+            )
+            _check_lora_status("AceStepHandler.set_use_lora", result)
+            _STATE["lora_id"] = lora_id
+            _STATE["lora_adapter_path"] = lora_adapter_path
+    except WorkerUnavailable:
+        _STATE["handler"] = None
+        _STATE["dit_profile"] = None
+        _STATE["lora_id"] = None
+        _STATE["lora_adapter_path"] = None
+        raise
 
 
 def _repaint_meta(job: dict[str, Any]) -> dict | None:
@@ -740,6 +891,13 @@ def run_job(
     4.3: a client polling worker status should see "loading" only for the
     swap itself, not for the inference that follows it).
 
+    `job["lora_id"]`/`job["lora_adapter_path"]`, if set, request a trained
+    style-pack LoRA be applied for this generation (SPEC.md sec 4.4 "LoRA
+    train / load") -- see `_ensure_lora_adapter` for the real API this
+    wraps. `server.jobs` resolves and validates `lora_id` and the jailed
+    `lora_adapter_path` before the job ever reaches this worker, same
+    division of labor as `job["src_audio"]` above.
+
     Raises `WorkerUnavailable` if acestep/CUDA isn't usable or its API no
     longer matches this adapter; `server.jobs` catches that and marks the
     job `error` without crashing the HTTP process.
@@ -753,6 +911,22 @@ def run_job(
         handler, lm, dit_profile = _ensure_loaded(job["dit_profile"])
         if on_dit_loaded is not None:
             on_dit_loaded(dit_profile)
+
+        lora_id = job.get("lora_id")
+        lora_adapter_path = job.get("lora_adapter_path")
+        if lora_adapter_path is not None and dit_profile != LORA_BASE_DIT_PROFILE:
+            # Belt and suspenders: server.jobs._resolve_dit_profile should
+            # already have coerced/rejected this at enqueue time (SPEC.md
+            # sec 4.4), but a LoRA's weight deltas are only valid against
+            # the exact base checkpoint it was trained on -- refuse to apply
+            # one against any other profile rather than silently loading it
+            # onto the wrong base model.
+            raise WorkerUnavailable(
+                f"job requested lora_id '{lora_id}' but resolved dit_profile is "
+                f"'{dit_profile}', not '{LORA_BASE_DIT_PROFILE}' -- a LoRA's weights are "
+                "only valid against the base checkpoint it was trained on (SPEC.md sec 4.4)"
+            )
+        _ensure_lora_adapter(handler, lora_id, lora_adapter_path)
 
         effective_plan = _plan_from_query(create_sample, lm, plan) if simple_mode else plan
         # Null/omitted bpm, key, or duration: let ACE-Step's CoT fill them in
@@ -965,6 +1139,11 @@ def run_job(
         "error": None,
         "repaint": _repaint_meta(job),
         "track_name": job.get("track_name"),
+        # SPEC.md sec 4.4 "LoRA train / load": which style-pack lora (if
+        # any) was applied to this take, for the same reason track_name is
+        # recorded here -- an auditable record on the take itself, not just
+        # in the job row.
+        "lora_id": job.get("lora_id"),
         "favorite": False,
         "notes": "",
     }
@@ -1041,85 +1220,103 @@ def train_lora(
     with _LOCK:
         handler, _lm, dit_profile = _ensure_loaded(LORA_BASE_DIT_PROFILE)
 
-        builder = _api_call("DatasetBuilder", DatasetBuilder)
         try:
-            builder.metadata.name = name
-            # No per-song lyrics/instrumental info reaches this adapter (see
-            # above) -- treat every staged source as instrumental, the same
-            # conservative default DatasetMetadata itself ships with.
-            builder.metadata.all_instrumental = True
-        except AttributeError as exc:
-            # Same reasoning as _api_method_call: a plain attribute access
-            # would otherwise raise AttributeError straight from this frame
-            # instead of the clean WorkerUnavailable every other API-mismatch
-            # path in this module promises.
-            raise WorkerUnavailable(
-                f"acestep API mismatch in DatasetBuilder.metadata: {exc}. Update "
-                "worker/acestep_worker.py to match the installed acestep version, or set "
-                "BARD_WORKER=mock."
-            ) from exc
+            builder = _api_call("DatasetBuilder", DatasetBuilder)
+            try:
+                builder.metadata.name = name
+                # No per-song lyrics/instrumental info reaches this adapter (see
+                # above) -- treat every staged source as instrumental, the same
+                # conservative default DatasetMetadata itself ships with.
+                builder.metadata.all_instrumental = True
+            except AttributeError as exc:
+                # Same reasoning as _api_method_call: a plain attribute access
+                # would otherwise raise AttributeError straight from this frame
+                # instead of the clean WorkerUnavailable every other API-mismatch
+                # path in this module promises.
+                raise WorkerUnavailable(
+                    f"acestep API mismatch in DatasetBuilder.metadata: {exc}. Update "
+                    "worker/acestep_worker.py to match the installed acestep version, or set "
+                    "BARD_WORKER=mock."
+                ) from exc
 
-        samples, scan_status = _api_method_call(
-            "DatasetBuilder.scan_directory", builder, "scan_directory", str(dataset_dir)
-        )
-        if not samples:
-            raise RuntimeError(f"ACE-Step found no audio files to train on: {scan_status}")
-        labeled_count = _api_method_call(
-            "DatasetBuilder.get_labeled_count", builder, "get_labeled_count"
-        )
-        if labeled_count < MIN_LORA_SOURCES:
-            raise RuntimeError(
-                f"ACE-Step only labeled {labeled_count}/{len(samples)} staged source files "
-                f"(needs >= {MIN_LORA_SOURCES}): {scan_status}"
+            samples, scan_status = _api_method_call(
+                "DatasetBuilder.scan_directory", builder, "scan_directory", str(dataset_dir)
+            )
+            if not samples:
+                raise RuntimeError(f"ACE-Step found no audio files to train on: {scan_status}")
+            labeled_count = _api_method_call(
+                "DatasetBuilder.get_labeled_count", builder, "get_labeled_count"
+            )
+            if labeled_count < MIN_LORA_SOURCES:
+                raise RuntimeError(
+                    f"ACE-Step only labeled {labeled_count}/{len(samples)} staged source files "
+                    f"(needs >= {MIN_LORA_SOURCES}): {scan_status}"
+                )
+
+            output_paths, preprocess_status = _api_method_call(
+                "DatasetBuilder.preprocess_to_tensors",
+                builder,
+                "preprocess_to_tensors",
+                dit_handler=handler,
+                output_dir=str(tensor_dir),
+                skip_existing=False,
+                progress_callback=None,
+            )
+            if not output_paths:
+                raise RuntimeError(
+                    f"ACE-Step preprocessing produced no training tensors: {preprocess_status}"
+                )
+
+            lora_config = _api_call(
+                "LoRAConfig", LoRAConfig, r=LORA_RANK, alpha=LORA_ALPHA, dropout=LORA_DROPOUT
+            )
+            training_config = _api_call(
+                "TrainingConfig",
+                TrainingConfig,
+                learning_rate=LORA_LEARNING_RATE,
+                max_epochs=LORA_TRAIN_EPOCHS,
+                save_every_n_epochs=LORA_SAVE_EVERY_N_EPOCHS,
+                gradient_accumulation_steps=LORA_GRADIENT_ACCUMULATION_STEPS,
+                seed=42,
+                output_dir=str(adapter_dir),
+            )
+            trainer = _api_call(
+                "LoRATrainer",
+                LoRATrainer,
+                dit_handler=handler,
+                lora_config=lora_config,
+                training_config=training_config,
             )
 
-        output_paths, preprocess_status = _api_method_call(
-            "DatasetBuilder.preprocess_to_tensors",
-            builder,
-            "preprocess_to_tensors",
-            dit_handler=handler,
-            output_dir=str(tensor_dir),
-            skip_existing=False,
-            progress_callback=None,
-        )
-        if not output_paths:
-            raise RuntimeError(
-                f"ACE-Step preprocessing produced no training tensors: {preprocess_status}"
+            train_iter = _api_method_call(
+                "LoRATrainer.train_from_preprocessed",
+                trainer,
+                "train_from_preprocessed",
+                str(tensor_dir),
             )
-
-        lora_config = _api_call(
-            "LoRAConfig", LoRAConfig, r=LORA_RANK, alpha=LORA_ALPHA, dropout=LORA_DROPOUT
-        )
-        training_config = _api_call(
-            "TrainingConfig",
-            TrainingConfig,
-            learning_rate=LORA_LEARNING_RATE,
-            max_epochs=LORA_TRAIN_EPOCHS,
-            save_every_n_epochs=LORA_SAVE_EVERY_N_EPOCHS,
-            gradient_accumulation_steps=LORA_GRADIENT_ACCUMULATION_STEPS,
-            seed=42,
-            output_dir=str(adapter_dir),
-        )
-        trainer = _api_call(
-            "LoRATrainer",
-            LoRATrainer,
-            dit_handler=handler,
-            lora_config=lora_config,
-            training_config=training_config,
-        )
-
-        train_iter = _api_method_call(
-            "LoRATrainer.train_from_preprocessed",
-            trainer,
-            "train_from_preprocessed",
-            str(tensor_dir),
-        )
-        # train_from_preprocessed is a generator -- the training loop itself
-        # only runs while this is iterated; it writes the final adapter to
-        # <adapter_dir>/final/ once exhausted (see the module docstring).
-        last_step, last_loss, last_status = 0, None, "not started"
-        for step, loss, status in train_iter:
-            last_step, last_loss, last_status = step, loss, status
+            # train_from_preprocessed is a generator -- the training loop itself
+            # only runs while this is iterated; it writes the final adapter to
+            # <adapter_dir>/final/ once exhausted (see the module docstring).
+            last_step, last_loss, last_status = 0, None, "not started"
+            for step, loss, status in train_iter:
+                last_step, last_loss, last_status = step, loss, status
+        finally:
+            # LoRATrainer injects the in-training PEFT adapter directly into
+            # `handler`'s decoder as a side effect of training (see the
+            # module docstring's LoRA-training section) -- entirely outside
+            # add_lora/set_active_lora_adapter/set_use_lora, so _STATE's own
+            # lora bookkeeping never observes it and would otherwise still
+            # read `lora_id: None` afterward. Invalidate the whole cached
+            # handler unconditionally -- whether training above succeeded or
+            # raised -- so _ensure_loaded constructs a fresh one next time,
+            # instead of a later plain generation no-op'ing past a "nothing
+            # loaded" lora_id straight into the just-trained adapter, or a
+            # later explicit lora load calling add_lora against a decoder
+            # that's already PEFT-wrapped from training.
+            _STATE["handler"] = None
+            _STATE["dit_profile"] = None
+            _STATE["lora_id"] = None
+            _STATE["lora_adapter_path"] = None
 
     final_dir = adapter_dir / "final"
     if not final_dir.exists() or not any(final_dir.iterdir()):

@@ -47,6 +47,10 @@ class TakeNotFound(LookupError):
     pass
 
 
+class LoraNotFound(LookupError):
+    pass
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -378,6 +382,10 @@ def _normalize_take_meta(meta: dict) -> dict:
     always exist) having to special-case missing keys."""
     meta.setdefault("favorite", False)
     meta.setdefault("notes", "")
+    # SPEC.md sec 4.4 "LoRA train / load": added after some takes were
+    # already written -- a take created before this exists has no key at
+    # all, same reasoning as favorite/notes above.
+    meta.setdefault("lora_id", None)
     return meta
 
 
@@ -412,6 +420,18 @@ def get_take(project_id: str, take_id: str) -> dict:
     if not path.exists():
         raise TakeNotFound(take_id)
     return _normalize_take_meta(_read_json(path))
+
+
+def get_lora(project_id: str, lora_id: str) -> dict:
+    """Mirrors `get_take` above -- `train_lora`'s meta.json is only ever
+    written once training actually finished (successfully or not, see
+    `server.jobs._run_train_lora_job`/`_error_lora_meta`), so a missing file
+    here means either an unknown lora_id or one still mid-training (its
+    directory exists via `allocate_lora_dir` but no meta.json yet)."""
+    path = lora_dir(project_id, lora_id) / "meta.json"
+    if not path.exists():
+        raise LoraNotFound(lora_id)
+    return _read_json(path)
 
 
 def take_audio_path(project_id: str, take_id: str) -> Path:

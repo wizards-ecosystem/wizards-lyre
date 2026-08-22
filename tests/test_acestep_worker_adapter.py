@@ -45,11 +45,20 @@ import pytest
 from worker import acestep_worker
 
 
+_RESET_STATE = {
+    "dit_profile": None,
+    "handler": None,
+    "lm": None,
+    "lora_id": None,
+    "lora_adapter_path": None,
+}
+
+
 @pytest.fixture(autouse=True)
 def _reset_worker_state():
-    acestep_worker._STATE.update({"dit_profile": None, "handler": None, "lm": None})
+    acestep_worker._STATE.update(_RESET_STATE)
     yield
-    acestep_worker._STATE.update({"dit_profile": None, "handler": None, "lm": None})
+    acestep_worker._STATE.update(_RESET_STATE)
 
 
 def _write_tiny_wav(path: Path) -> None:
@@ -156,6 +165,7 @@ def _install_fake_acestep(
     lyric_score_tensors: dict[str, Any] | None = None,
     lyric_score_result: dict[str, Any] | None = None,
     lyric_timestamp_result: dict[str, Any] | None = None,
+    lora_status_overrides: dict[str, str] | None = None,
 ) -> None:
     """Register fake `acestep.*` modules so `worker.acestep_worker`'s lazy
     `from acestep... import ...` statements resolve to them instead of the
@@ -184,12 +194,49 @@ def _install_fake_acestep(
     `LyricTimestampMixin.get_lyric_timestamp` consumes the exact same five
     decoder-attention tensors as `LyricScoreMixin.get_lyric_score`);
     defaults to a canned success payload with `[mm:ss.xx]`-formatted
-    `lrc_text`."""
+    `lrc_text`. `lora_status_overrides` overrides the fake handler's
+    add_lora/set_active_lora_adapter/set_use_lora/unload_lora return
+    values (keyed by method name) -- real ACE-Step reports an ordinary
+    operational failure from any of these as a returned status string
+    starting with "❌" rather than raising (see worker/acestep_worker.py's
+    `_check_lora_status`); the default canned strings below simulate
+    success, and passing e.g. `{"add_lora": "❌ adapter path not found"}`
+    simulates a failure. Since this dict is looked up fresh on every call
+    (not baked in once), a test can also mutate it in place *between* two
+    `run_job` calls against the same cached handler to make only the
+    second one fail."""
+    lora_status_overrides = lora_status_overrides if lora_status_overrides is not None else {}
 
     class DefaultFakeAceStepHandler:
         def __init__(self) -> None:
             self.config_path: str | None = None
             self.offload_to_cpu = False
+
+        def add_lora(self, *, lora_path: str, adapter_name: str) -> str:
+            # Real signature: LoraManagerMixin.add_lora(lora_path, adapter_name)
+            # -- injects a PEFT adapter directory into the decoder (see
+            # worker/acestep_worker.py's module docstring LoRA-loading
+            # section). Used by _ensure_lora_adapter. Returns a plain status
+            # string, not a (message, success) tuple -- a "❌"-prefixed
+            # string is ACE-Step's real way of reporting a failure here.
+            log.append(
+                ("handler.add_lora", {"lora_path": lora_path, "adapter_name": adapter_name})
+            )
+            return lora_status_overrides.get("add_lora", f"✅ added lora adapter {adapter_name}")
+
+        def set_active_lora_adapter(self, *, adapter_name: str) -> str:
+            log.append(("handler.set_active_lora_adapter", {"adapter_name": adapter_name}))
+            return lora_status_overrides.get(
+                "set_active_lora_adapter", f"✅ active adapter set to {adapter_name}"
+            )
+
+        def set_use_lora(self, *, use_lora: bool) -> str:
+            log.append(("handler.set_use_lora", {"use_lora": use_lora}))
+            return lora_status_overrides.get("set_use_lora", "✅ use_lora updated")
+
+        def unload_lora(self) -> str:
+            log.append(("handler.unload_lora", {}))
+            return lora_status_overrides.get("unload_lora", "✅ lora unloaded")
 
         def get_lyric_score(self, **kwargs: Any) -> dict[str, Any]:
             # Real signature: pred_latent, encoder_hidden_states,
@@ -870,6 +917,393 @@ def test_track_name_maps_to_instruction_for_studio_ops(
         generate_call = next(e for e in log if e[0] == "generate_music")
         params = generate_call[3]
         assert params.instruction == "vocals", action
+
+
+def _lora_job(lora_id: str | None, lora_adapter_path: str | None, dit_profile: str = "studio_ops") -> dict:
+    return {
+        "action": "generate",
+        "dit_profile": dit_profile,
+        "seed": -1,
+        "src_audio": None,
+        "lora_id": lora_id,
+        "lora_adapter_path": lora_adapter_path,
+    }
+
+
+_LORA_PLAN = {
+    "query": "",
+    "caption": "dreamy synthwave",
+    "lyrics": "[Instrumental]",
+    "instrumental": True,
+    "bpm": 90,
+    "keyscale": "D Minor",
+    "duration_sec": 20,
+}
+
+
+def test_run_job_loads_lora_adapter_when_requested(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SPEC.md sec 4.4 "LoRA train / load" -- the load half. A
+    generate/cover/repaint job carrying a resolved `lora_id` +
+    `lora_adapter_path` (server.jobs already validated both and coerced
+    dit_profile to studio_ops) must apply the adapter via the real
+    `add_lora` -> `set_active_lora_adapter` -> `set_use_lora` sequence
+    `_ensure_lora_adapter` wraps, before generation runs."""
+    log: list[tuple] = []
+    _install_fake_acestep(monkeypatch, log)
+
+    meta, _, _ = acestep_worker.run_job(
+        job=_lora_job("lora1", "/checkpoints/loras/lora1/adapter/final"),
+        plan=_LORA_PLAN,
+        take_id="t-lora1",
+        take_dir=tmp_path / "take-lora1",
+    )
+
+    assert meta["dit_profile"] == "studio_ops"
+    assert meta["lora_id"] == "lora1"
+
+    add_call = next(e for e in log if e[0] == "handler.add_lora")
+    assert add_call[1] == {
+        "lora_path": "/checkpoints/loras/lora1/adapter/final",
+        "adapter_name": "lora1",
+    }
+    active_call = next(e for e in log if e[0] == "handler.set_active_lora_adapter")
+    assert active_call[1] == {"adapter_name": "lora1"}
+    use_call = next(e for e in log if e[0] == "handler.set_use_lora")
+    assert use_call[1] == {"use_lora": True}
+    # nothing was loaded before this job -- unload_lora must not fire
+    assert not any(e[0] == "handler.unload_lora" for e in log)
+
+    # generation itself must still run against the now-adapted handler
+    assert any(e[0] == "generate_music" for e in log)
+    assert acestep_worker._STATE["lora_id"] == "lora1"
+
+
+def test_run_job_swaps_lora_adapter_for_a_different_lora_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A later job requesting a *different* lora_id must unload the
+    previous adapter before loading the new one -- not stack a second
+    adapter on top of the first (SPEC.md sec 4.4)."""
+    log: list[tuple] = []
+    _install_fake_acestep(monkeypatch, log)
+
+    acestep_worker.run_job(
+        job=_lora_job("lora1", "/checkpoints/loras/lora1/adapter/final"),
+        plan=_LORA_PLAN,
+        take_id="t-lora-a",
+        take_dir=tmp_path / "take-lora-a",
+    )
+    assert acestep_worker._STATE["lora_id"] == "lora1"
+
+    log.clear()
+    acestep_worker.run_job(
+        job=_lora_job("lora2", "/checkpoints/loras/lora2/adapter/final"),
+        plan=_LORA_PLAN,
+        take_id="t-lora-b",
+        take_dir=tmp_path / "take-lora-b",
+    )
+
+    # unload the stale adapter before loading the new one -- order matters.
+    unload_index = next(i for i, e in enumerate(log) if e[0] == "handler.unload_lora")
+    add_index = next(i for i, e in enumerate(log) if e[0] == "handler.add_lora")
+    assert unload_index < add_index
+    add_call = log[add_index]
+    assert add_call[1]["adapter_name"] == "lora2"
+    assert acestep_worker._STATE["lora_id"] == "lora2"
+
+
+def test_run_job_unloads_lora_when_a_later_job_requests_none(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A later job with no lora_id at all must not leave a stale adapter
+    active (SPEC.md sec 4.4) -- unload, and don't re-add anything."""
+    log: list[tuple] = []
+    _install_fake_acestep(monkeypatch, log)
+
+    acestep_worker.run_job(
+        job=_lora_job("lora1", "/checkpoints/loras/lora1/adapter/final"),
+        plan=_LORA_PLAN,
+        take_id="t-lora-c",
+        take_dir=tmp_path / "take-lora-c",
+    )
+
+    log.clear()
+    acestep_worker.run_job(
+        job=_lora_job(None, None),
+        plan=_LORA_PLAN,
+        take_id="t-lora-d",
+        take_dir=tmp_path / "take-lora-d",
+    )
+
+    assert any(e[0] == "handler.unload_lora" for e in log)
+    assert not any(e[0] == "handler.add_lora" for e in log)
+    assert acestep_worker._STATE["lora_id"] is None
+
+
+def test_run_job_is_a_noop_when_the_same_lora_is_already_loaded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Requesting the same lora_id a job already has loaded must not
+    unload-and-reload it on every single job -- _ensure_lora_adapter's
+    no-op path."""
+    log: list[tuple] = []
+    _install_fake_acestep(monkeypatch, log)
+
+    acestep_worker.run_job(
+        job=_lora_job("lora1", "/checkpoints/loras/lora1/adapter/final"),
+        plan=_LORA_PLAN,
+        take_id="t-lora-e",
+        take_dir=tmp_path / "take-lora-e",
+    )
+
+    log.clear()
+    acestep_worker.run_job(
+        job=_lora_job("lora1", "/checkpoints/loras/lora1/adapter/final"),
+        plan=_LORA_PLAN,
+        take_id="t-lora-f",
+        take_dir=tmp_path / "take-lora-f",
+    )
+
+    assert not any(e[0] == "handler.add_lora" for e in log)
+    assert not any(e[0] == "handler.unload_lora" for e in log)
+    assert not any(e[0] == "handler.set_active_lora_adapter" for e in log)
+    assert not any(e[0] == "handler.set_use_lora" for e in log)
+
+
+def test_run_job_rejects_lora_against_a_non_studio_ops_profile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Belt-and-suspenders: server.jobs._resolve_dit_profile should already
+    coerce/reject this at enqueue time, but run_job re-asserts the
+    invariant itself rather than trusting the caller blindly -- a LoRA's
+    weight deltas are only valid against the exact studio_ops base
+    checkpoint it was trained on (SPEC.md sec 4.4)."""
+    log: list[tuple] = []
+    _install_fake_acestep(monkeypatch, log)
+
+    with pytest.raises(acestep_worker.WorkerUnavailable, match="studio_ops"):
+        acestep_worker.run_job(
+            job=_lora_job(
+                "lora1", "/checkpoints/loras/lora1/adapter/final", dit_profile="iterate"
+            ),
+            plan=_LORA_PLAN,
+            take_id="t-lora-bad-profile",
+            take_dir=tmp_path / "take-lora-bad-profile",
+        )
+    assert not any(e[0] == "handler.add_lora" for e in log)
+
+
+def test_lora_api_mismatch_raises_worker_unavailable_not_a_crash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If acestep's real LoRA API drifts from this adapter, a job must fail
+    cleanly (WorkerUnavailable -> job `error`), not crash the worker
+    process -- same contract as every other acestep call in this module."""
+
+    class HandlerWithoutLoraSupport:
+        def __init__(self) -> None:
+            self.config_path: str | None = None
+            self.offload_to_cpu = False
+
+        def initialize_service(self, **kwargs: Any) -> tuple[str, bool]:
+            return "dit ready", True
+
+        # No add_lora/set_active_lora_adapter/set_use_lora/unload_lora --
+        # simulates an upstream API change.
+
+    log: list[tuple] = []
+    _install_fake_acestep(monkeypatch, log, handler_cls=HandlerWithoutLoraSupport)
+
+    with pytest.raises(acestep_worker.WorkerUnavailable):
+        acestep_worker.run_job(
+            job=_lora_job("lora1", "/checkpoints/loras/lora1/adapter/final"),
+            plan=_LORA_PLAN,
+            take_id="t-lora-mismatch",
+            take_dir=tmp_path / "take-lora-mismatch",
+        )
+
+
+def test_ensure_lora_adapter_raises_on_add_lora_failure_status(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ACE-Step's real `add_lora` reports an ordinary operational failure
+    (e.g. a missing/corrupt adapter path) as a returned "❌"-prefixed status
+    string, not by raising or via a `(message, success)` tuple. Treating any
+    return as success (the previous, reviewer-flagged behavior) would let
+    generation proceed against the plain base model while still recording
+    the requested lora_id as if it had actually been applied."""
+    log: list[tuple] = []
+    overrides = {"add_lora": "❌ adapter path not found: /checkpoints/loras/lora1/adapter/final"}
+    _install_fake_acestep(monkeypatch, log, lora_status_overrides=overrides)
+
+    with pytest.raises(acestep_worker.WorkerUnavailable, match="add_lora"):
+        acestep_worker.run_job(
+            job=_lora_job("lora1", "/checkpoints/loras/lora1/adapter/final"),
+            plan=_LORA_PLAN,
+            take_id="t-lora-add-fail",
+            take_dir=tmp_path / "take-lora-add-fail",
+        )
+
+    # A failure partway through the load sequence leaves the handler's real
+    # adapter state unknown (add_lora may or may not have partially mutated
+    # the decoder) -- the whole cached handler must be invalidated so the
+    # next job gets a fresh one instead of inheriting that unknown state.
+    assert acestep_worker._STATE["handler"] is None
+    assert acestep_worker._STATE["dit_profile"] is None
+    assert acestep_worker._STATE["lora_id"] is None
+    assert acestep_worker._STATE["lora_adapter_path"] is None
+    # set_active_lora_adapter/set_use_lora must never run once add_lora itself failed.
+    assert not any(e[0] == "handler.set_active_lora_adapter" for e in log)
+    assert not any(e[0] == "handler.set_use_lora" for e in log)
+
+
+def test_ensure_lora_adapter_raises_on_unload_failure_status(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Same contract for `unload_lora`: a "❌"-prefixed return means the
+    stale adapter is still active on the decoder, not actually unloaded --
+    recording it as unloaded anyway (the previous behavior) would let a
+    later job load a second adapter on top of it instead of swapping
+    cleanly."""
+    log: list[tuple] = []
+    overrides: dict[str, str] = {}
+    _install_fake_acestep(monkeypatch, log, lora_status_overrides=overrides)
+
+    acestep_worker.run_job(
+        job=_lora_job("lora1", "/checkpoints/loras/lora1/adapter/final"),
+        plan=_LORA_PLAN,
+        take_id="t-lora-unload-fail-setup",
+        take_dir=tmp_path / "take-lora-unload-fail-setup",
+    )
+    assert acestep_worker._STATE["lora_id"] == "lora1"
+
+    # Mutate the same overrides dict the already-cached handler's methods
+    # close over, so only this second call's unload_lora fails.
+    overrides["unload_lora"] = "❌ failed to restore base decoder backup"
+
+    with pytest.raises(acestep_worker.WorkerUnavailable, match="unload_lora"):
+        acestep_worker.run_job(
+            job=_lora_job("lora2", "/checkpoints/loras/lora2/adapter/final"),
+            plan=_LORA_PLAN,
+            take_id="t-lora-unload-fail",
+            take_dir=tmp_path / "take-lora-unload-fail",
+        )
+
+    assert acestep_worker._STATE["handler"] is None
+    assert acestep_worker._STATE["dit_profile"] is None
+    assert acestep_worker._STATE["lora_id"] is None
+    assert acestep_worker._STATE["lora_adapter_path"] is None
+    # add_lora for lora2 must never run once unload_lora itself failed.
+    assert not any(
+        e[0] == "handler.add_lora" and e[1]["adapter_name"] == "lora2" for e in log
+    )
+
+
+def test_train_lora_invalidates_shared_handler_for_next_job(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SPEC.md sec 4.4: `LoRATrainer` injects the in-training PEFT adapter
+    directly into the shared handler's decoder as a side effect of
+    training (see worker/acestep_worker.py's module docstring), entirely
+    outside add_lora/set_active_lora_adapter/set_use_lora -- so
+    `_STATE`'s own lora bookkeeping never observes it and would otherwise
+    still read `lora_id: None` afterward. `train_lora` must invalidate the
+    whole cached handler once training finishes, so a later plain
+    generation gets a brand-new handler instead of silently running
+    through the just-trained adapter, and a later explicit lora load
+    reuses that clean handler correctly rather than double-wrapping an
+    already-PEFT-wrapped decoder."""
+
+    class StatefulHandler:
+        instances: list["StatefulHandler"] = []
+
+        def __init__(self) -> None:
+            self.config_path: str | None = None
+            self.offload_to_cpu = False
+            self.active_adapter: str | None = None
+            StatefulHandler.instances.append(self)
+
+        def initialize_service(self, **kwargs: Any) -> tuple[str, bool]:
+            return "dit ready", True
+
+        def add_lora(self, *, lora_path: str, adapter_name: str) -> str:
+            self.active_adapter = adapter_name
+            return f"✅ added lora adapter {adapter_name}"
+
+        def set_active_lora_adapter(self, *, adapter_name: str) -> str:
+            self.active_adapter = adapter_name
+            return f"✅ active adapter set to {adapter_name}"
+
+        def set_use_lora(self, *, use_lora: bool) -> str:
+            return "✅ use_lora updated"
+
+        def unload_lora(self) -> str:
+            self.active_adapter = None
+            return "✅ lora unloaded"
+
+    StatefulHandler.instances = []
+    log: list[tuple] = []
+    _install_fake_acestep(monkeypatch, log, handler_cls=StatefulHandler)
+    _install_fake_lora_training(monkeypatch, log)
+
+    source_paths = _make_source_files(tmp_path, acestep_worker.MIN_LORA_SOURCES)
+    meta = _call_train_lora(
+        source_paths, "trained style", tmp_path / "loras" / "trained", lora_id="trained-lora"
+    )
+    assert meta["error"] is None
+    assert len(StatefulHandler.instances) == 1
+    trained_handler = StatefulHandler.instances[0]
+
+    # Training must invalidate the cached handler/profile/lora bookkeeping
+    # entirely, not just leave lora_id as None.
+    assert acestep_worker._STATE["handler"] is None
+    assert acestep_worker._STATE["dit_profile"] is None
+    assert acestep_worker._STATE["lora_id"] is None
+    assert acestep_worker._STATE["lora_adapter_path"] is None
+
+    # A later plain generation must construct and use a brand-new handler,
+    # not the training-tainted one.
+    plain_job = {
+        "action": "generate",
+        "dit_profile": "studio_ops",
+        "seed": -1,
+        "src_audio": None,
+        "lora_id": None,
+        "lora_adapter_path": None,
+    }
+    acestep_worker.run_job(
+        job=plain_job,
+        plan=_LORA_PLAN,
+        take_id="t-post-train-plain",
+        take_dir=tmp_path / "take-post-train-plain",
+    )
+    assert len(StatefulHandler.instances) == 2
+    fresh_handler = StatefulHandler.instances[-1]
+    assert fresh_handler is not trained_handler
+    generate_call = next(e for e in log if e[0] == "generate_music")
+    assert generate_call[1] is fresh_handler
+
+    # A later explicit lora load reuses that now-clean handler (no new
+    # instance) and applies the adapter correctly.
+    log.clear()
+    lora_job = {
+        "action": "generate",
+        "dit_profile": "studio_ops",
+        "seed": -1,
+        "src_audio": None,
+        "lora_id": "lora-after-training",
+        "lora_adapter_path": "/checkpoints/loras/lora-after-training/adapter/final",
+    }
+    acestep_worker.run_job(
+        job=lora_job,
+        plan=_LORA_PLAN,
+        take_id="t-post-train-lora",
+        take_dir=tmp_path / "take-post-train-lora",
+    )
+    assert len(StatefulHandler.instances) == 2  # reused fresh_handler, no new instance
+    assert fresh_handler.active_adapter == "lora-after-training"
 
 
 def test_api_mismatch_raises_worker_unavailable_not_a_crash(

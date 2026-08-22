@@ -52,6 +52,21 @@ PHASE_GATED_ACTIONS: set[str] = set()
 STUDIO_OPS_ACTIONS = {"extract", "lego", "complete"}
 SOURCE_REQUIRED_ACTIONS = {"cover", "repaint", "extract", "lego", "complete"}
 
+# SPEC.md sec 4.4 "LoRA train / load" -- the load half. A LoRA's weight
+# deltas are only valid against the exact base checkpoint it was trained
+# on, which worker/acestep_worker.py's LORA_BASE_DIT_PROFILE pins to
+# "studio_ops" (turbo/xl-turbo are distilled few-step checkpoints the real
+# trainer can't run a full diffusion training loop against -- see that
+# module's LoRA docstring section). extract/lego/complete already force
+# studio_ops for an unrelated reason (they're structural editing ops, not
+# style-pack generation) and always did -- generate/cover/repaint are the
+# actions a style-pack lora is actually for (SPEC.md's "Style pack" row),
+# so _resolve_dit_profile allows studio_ops on exactly these three,
+# specifically when a valid lora_id for the project is attached; an
+# ordinary generate/cover/repaint with no lora attached still rejects
+# studio_ops exactly as before.
+LORA_ELIGIBLE_ACTIONS = {"generate", "cover", "repaint"}
+
 # SPEC.md sec 4.4: "Style pack | LoRA train / load | 8+ songs".
 MIN_LORA_SOURCE_TAKES = 8
 
@@ -373,13 +388,28 @@ def _check_worker_capability(
         raise JobError(row["reason"] or f"worker cannot currently load dit_profile '{dit_profile}'")
 
 
-def _resolve_dit_profile(action: str, dit_profile: str | None, project_dit_profile: str) -> str:
+def _resolve_dit_profile(
+    action: str,
+    dit_profile: str | None,
+    project_dit_profile: str,
+    lora_attached: bool = False,
+) -> str:
     """`dit_profile` is the job body's explicit override, if any;
     `project_dit_profile` is project.json's persisted default (PATCH
     /api/projects/{id}) -- an omitted job-level profile must fall back to
     that, not silently to 'iterate', or a project switched to e.g. 'polish'
     keeps generating with 'iterate' the moment a client omits the field
-    (reviewer-flagged: the included frontend always omits it)."""
+    (reviewer-flagged: the included frontend always omits it).
+
+    `lora_attached` is True when the job body carries a validated `lora_id`
+    for this project (see `_resolve_lora`) -- SPEC.md sec 4.4 "LoRA train /
+    load". Loading a trained LoRA is only architecturally valid against the
+    exact studio_ops base checkpoint it was trained on (see
+    LORA_ELIGIBLE_ACTIONS above and worker/acestep_worker.py's
+    LORA_BASE_DIT_PROFILE), so a lora-attached generate/cover/repaint is
+    coerced to studio_ops the same way extract/lego/complete always are --
+    and, symmetrically, an explicit non-studio_ops profile on a lora-attached
+    job is rejected as a conflict instead of silently ignoring the lora."""
     if dit_profile is not None and dit_profile not in storage.VALID_DIT_PROFILES:
         raise JobError(f"invalid dit_profile: {dit_profile}")
     if action in STUDIO_OPS_ACTIONS:
@@ -392,15 +422,27 @@ def _resolve_dit_profile(action: str, dit_profile: str | None, project_dit_profi
                 f"action '{action}' requires dit_profile='studio_ops' (got '{dit_profile}')"
             )
         return "studio_ops"
-    # studio_ops is reserved for extract/lego/complete (SPEC.md sec 8.1) --
-    # reject it here for every other action instead of loading the base
-    # model for ordinary generation, whether it came from an explicit
-    # override or (reviewer-flagged) a project's persisted default.
+    if lora_attached and action in LORA_ELIGIBLE_ACTIONS:
+        if dit_profile is None:
+            return "studio_ops"
+        if dit_profile != "studio_ops":
+            raise JobError(
+                f"action '{action}' with a lora_id attached requires dit_profile='studio_ops' "
+                f"(got '{dit_profile}') -- a LoRA's weights are only valid against the "
+                "studio_ops base checkpoint it was trained on (SPEC.md sec 4.4)"
+            )
+        return "studio_ops"
+    # studio_ops is reserved for extract/lego/complete, or generate/cover/
+    # repaint with a valid lora_id attached (SPEC.md sec 8.1/4.4) -- reject
+    # it here for every other case instead of loading the base model for
+    # ordinary generation, whether it came from an explicit override or
+    # (reviewer-flagged) a project's persisted default.
     resolved = dit_profile or project_dit_profile
     if resolved == "studio_ops":
         raise JobError(
             f"action '{action}' cannot use dit_profile='studio_ops' -- that profile is "
-            "reserved for extract/lego/complete"
+            "reserved for extract/lego/complete, or generate/cover/repaint with a valid "
+            "lora_id attached"
         )
     return resolved
 
@@ -493,6 +535,38 @@ def _resolve_track_name(action: str, body: dict[str, Any]) -> str | None:
     return track_name.strip()
 
 
+def _resolve_lora(project_id: str, lora_id: str) -> dict:
+    """Resolve and validate `lora_id` (SPEC.md sec 4.4 "LoRA train / load"),
+    sibling to `_resolve_source_audio`/`_resolve_track_name` above. Called
+    both at enqueue time (fail fast) and again when the job runs
+    (payload_json only stores the client's lora_id, not the resolved
+    adapter path -- see `enqueue_job`'s `lora_adapter_path` payload field).
+
+    A lora's meta.json is only ever written once training actually finished
+    (`_run_train_lora_job` writes either the real success meta
+    `worker.acestep_worker.train_lora`/`worker.mock_worker.train_lora`
+    return, or `_error_lora_meta` on failure -- see `storage.get_lora`) --
+    so there is no "still training" state to special-case here: a lora_id
+    either doesn't exist yet (LoraNotFound), finished with an error (a
+    non-null `error`), or finished successfully (`error` is None and
+    `status` is a truthy value the training pipeline actually reported).
+    ACE-Step's own training generator reports free-form progress strings as
+    `status` (e.g. "epoch 2/10", see worker/acestep_worker.py's LoRA
+    docstring section) rather than a fixed "completed" sentinel, so
+    "successful" is checked structurally -- present and truthy, not equal to
+    a specific literal -- instead of guessing at upstream's exact wording.
+    """
+    try:
+        lora = storage.get_lora(project_id, lora_id)
+    except storage.LoraNotFound as exc:
+        raise JobError(f"lora_id not found: {lora_id}") from exc
+    if lora.get("error"):
+        raise JobError(f"lora_id '{lora_id}' failed training: {lora['error']}")
+    if not lora.get("status"):
+        raise JobError(f"lora_id '{lora_id}' has not finished training successfully")
+    return lora
+
+
 def enqueue_job(project_id: str, body: dict[str, Any]) -> dict:
     project = storage.load_project(project_id)
 
@@ -505,7 +579,31 @@ def enqueue_job(project_id: str, body: dict[str, Any]) -> dict:
     if action not in VALID_ACTIONS:
         raise JobError(f"invalid action: {action}")
 
-    dit_profile = _resolve_dit_profile(action, body.get("dit_profile"), project["dit_profile"])
+    lora_id = body.get("lora_id")
+    if lora_id and action not in LORA_ELIGIBLE_ACTIONS:
+        # SPEC.md sec 4.4: a style-pack lora only applies to
+        # generate/cover/repaint (LORA_ELIGIBLE_ACTIONS above). Without this,
+        # extract/lego/complete -- which already resolve to studio_ops for
+        # an unrelated reason (STUDIO_OPS_ACTIONS) -- would sail past
+        # _resolve_dit_profile's lora_attached branch (it only special-cases
+        # LORA_ELIGIBLE_ACTIONS) and still get the adapter path attached
+        # below, silently altering structural-editing output with a style
+        # pack it was never meant to use. train_lora is likewise unrelated
+        # to loading a lora -- reject up front instead of resolving a lora
+        # whose adapter path would otherwise never even be looked at
+        # (reviewer-flagged).
+        raise JobError(
+            f"action '{action}' cannot use lora_id -- a style-pack lora only applies to "
+            f"{sorted(LORA_ELIGIBLE_ACTIONS)} (SPEC.md sec 4.4)"
+        )
+    resolved_lora = _resolve_lora(project_id, lora_id) if lora_id else None
+
+    dit_profile = _resolve_dit_profile(
+        action,
+        body.get("dit_profile"),
+        project["dit_profile"],
+        lora_attached=resolved_lora is not None,
+    )
     # SPEC.md sec 4.1/8.1 only calls for early rejection of 'quality' (XL
     # needs CPU offload on a 16 GB card) -- every other profile always
     # reports supported=True from the real supports_dit_profile() and only
@@ -545,6 +643,17 @@ def enqueue_job(project_id: str, body: dict[str, Any]) -> dict:
     # into the GPU backend (0, negative, or huge batches -> invalid calls or
     # avoidable OOMs), and phase 1 only ever consumes the first audio anyway.
     payload["batch_size"] = 1
+    if resolved_lora is not None:
+        # worker/acestep_worker.py's train_lora already writes final adapter
+        # weights to <lora_dir>/adapter/final/ (see its module docstring) --
+        # this is the exact directory the worker loads at inference time
+        # (see worker/acestep_worker.py's _ensure_lora_adapter). Resolved
+        # here, not in the worker, so the worker never has to reach back
+        # into project storage itself (same division of labor as
+        # `_resolve_source_audio`'s src_audio).
+        payload["lora_adapter_path"] = str(
+            storage.lora_dir(project_id, lora_id) / "adapter" / "final"
+        )
 
     with closing(_connect()) as conn:
         conn.execute(
@@ -622,6 +731,7 @@ def _error_take_meta(
         "error": error,
         "repaint": None,
         "track_name": payload.get("track_name"),
+        "lora_id": payload.get("lora_id"),
         "favorite": False,
         "notes": "",
     }
