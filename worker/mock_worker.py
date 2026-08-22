@@ -176,6 +176,7 @@ def run_job(
         "track_name": job.get("track_name"),
         "favorite": False,
         "notes": "",
+        "lora_id": job.get("lora_id"),
     }
     return meta, plan_patch, None
 

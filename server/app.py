@@ -110,6 +110,7 @@ class JobBody(BaseModel):
     repainting_end: float = -1
     track_name: Optional[str] = None
     name: Optional[str] = None
+    lora_id: Optional[str] = None
     # SPEC.md sec 8.1: audio_cover_strength is a 0-1 mix ratio ACE-Step
     # expects; ge/le also reject NaN/+-inf (any comparison with NaN is
     # False, so it fails both bounds) instead of forwarding them to the
@@ -132,6 +133,11 @@ def _project_not_found_handler(request, exc: storage.ProjectNotFound):  # noqa: 
 @app.exception_handler(storage.TakeNotFound)
 def _take_not_found_handler(request, exc: storage.TakeNotFound):  # noqa: ANN001, ARG001
     return JSONResponse(status_code=404, content={"detail": f"take not found: {exc}"})
+
+
+@app.exception_handler(storage.LoraNotFound)
+def _lora_not_found_handler(request, exc: storage.LoraNotFound):  # noqa: ANN001, ARG001
+    return JSONResponse(status_code=404, content={"detail": f"lora not found: {exc}"})
 
 
 @app.exception_handler(jobs.JobNotFound)

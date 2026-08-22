@@ -47,6 +47,10 @@ class TakeNotFound(LookupError):
     pass
 
 
+class LoraNotFound(LookupError):
+    pass
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -412,6 +416,13 @@ def get_take(project_id: str, take_id: str) -> dict:
     if not path.exists():
         raise TakeNotFound(take_id)
     return _normalize_take_meta(_read_json(path))
+
+
+def get_lora(project_id: str, lora_id: str) -> dict:
+    path = lora_dir(project_id, lora_id) / "meta.json"
+    if not path.exists():
+        raise LoraNotFound(lora_id)
+    return _read_json(path)
 
 
 def take_audio_path(project_id: str, take_id: str) -> Path:

@@ -52,6 +52,15 @@ PHASE_GATED_ACTIONS: set[str] = set()
 STUDIO_OPS_ACTIONS = {"extract", "lego", "complete"}
 SOURCE_REQUIRED_ACTIONS = {"cover", "repaint", "extract", "lego", "complete"}
 
+# SPEC.md sec 4.4/12 'LoRA load': a trained lora's weights are only valid
+# applied back onto studio_ops (worker/acestep_worker.py's
+# LORA_BASE_DIT_PROFILE -- training only ever fine-tunes against that
+# checkpoint), but its actual *purpose* is a creative render in that style,
+# not a structural edit -- so unlike STUDIO_OPS_ACTIONS, studio_ops must be
+# reachable here too, gated on a lora_id actually being attached to the same
+# job (see _resolve_dit_profile's lora_requested parameter).
+LORA_STYLE_ACTIONS = {"generate", "cover", "repaint"}
+
 # SPEC.md sec 4.4: "Style pack | LoRA train / load | 8+ songs".
 MIN_LORA_SOURCE_TAKES = 8
 
@@ -373,13 +382,25 @@ def _check_worker_capability(
         raise JobError(row["reason"] or f"worker cannot currently load dit_profile '{dit_profile}'")
 
 
-def _resolve_dit_profile(action: str, dit_profile: str | None, project_dit_profile: str) -> str:
+def _resolve_dit_profile(
+    action: str,
+    dit_profile: str | None,
+    project_dit_profile: str,
+    lora_requested: bool = False,
+) -> str:
     """`dit_profile` is the job body's explicit override, if any;
     `project_dit_profile` is project.json's persisted default (PATCH
     /api/projects/{id}) -- an omitted job-level profile must fall back to
     that, not silently to 'iterate', or a project switched to e.g. 'polish'
     keeps generating with 'iterate' the moment a client omits the field
-    (reviewer-flagged: the included frontend always omits it)."""
+    (reviewer-flagged: the included frontend always omits it).
+
+    `lora_requested` is True when the job carries a `lora_id` for a valid,
+    successfully-trained lora (see `_resolve_requested_lora`) -- every
+    trained lora's weights are only valid applied back onto studio_ops, so a
+    generate/cover/repaint that's actually applying one must be allowed to
+    load studio_ops too (SPEC.md sec 4.4/12 'LoRA load'), unlike an ordinary
+    generate/cover/repaint with no lora attached."""
     if dit_profile is not None and dit_profile not in storage.VALID_DIT_PROFILES:
         raise JobError(f"invalid dit_profile: {dit_profile}")
     if action in STUDIO_OPS_ACTIONS:
@@ -392,15 +413,17 @@ def _resolve_dit_profile(action: str, dit_profile: str | None, project_dit_profi
                 f"action '{action}' requires dit_profile='studio_ops' (got '{dit_profile}')"
             )
         return "studio_ops"
-    # studio_ops is reserved for extract/lego/complete (SPEC.md sec 8.1) --
-    # reject it here for every other action instead of loading the base
-    # model for ordinary generation, whether it came from an explicit
-    # override or (reviewer-flagged) a project's persisted default.
+    # studio_ops is reserved for extract/lego/complete (SPEC.md sec 8.1), or
+    # for generate/cover/repaint with a lora_id actually attached -- reject
+    # it here otherwise instead of loading the base model for ordinary
+    # generation, whether it came from an explicit override or
+    # (reviewer-flagged) a project's persisted default.
     resolved = dit_profile or project_dit_profile
-    if resolved == "studio_ops":
+    if resolved == "studio_ops" and not (lora_requested and action in LORA_STYLE_ACTIONS):
         raise JobError(
             f"action '{action}' cannot use dit_profile='studio_ops' -- that profile is "
-            "reserved for extract/lego/complete"
+            "reserved for extract/lego/complete, or for generate/cover/repaint with a "
+            "lora_id attached"
         )
     return resolved
 
@@ -476,6 +499,24 @@ def _resolve_lora_sources(project_id: str, body: dict[str, Any]) -> list[str]:
     return paths
 
 
+def _resolve_requested_lora(project_id: str, body: dict[str, Any]) -> str | None:
+    """Resolve a job's optional `lora_id` (SPEC.md sec 4.4/12 'LoRA load') --
+    None if the body carries none. `storage.get_lora` raises `LoraNotFound`
+    for an unknown id, which `server.app`'s exception handler turns into a
+    404 before any job row is ever inserted, same as every other enqueue-time
+    validator here. A lora whose own training run failed (see
+    `_error_lora_meta`, which always writes a non-null `error`) must not be
+    silently treated as usable, mirroring how `server.app.set_active_take`
+    rejects a take with `take['error']` set."""
+    lora_id = body.get("lora_id")
+    if not lora_id:
+        return None
+    lora = storage.get_lora(project_id, lora_id)
+    if lora.get("error") is not None:
+        raise JobError(f"lora_id '{lora_id}' failed training and cannot be used: {lora['error']}")
+    return lora_id
+
+
 def _resolve_track_name(action: str, body: dict[str, Any]) -> str | None:
     """extract/lego/complete route their target track through `track_name`,
     which the worker forwards onto ACE-Step's task-specific `instruction`
@@ -505,7 +546,10 @@ def enqueue_job(project_id: str, body: dict[str, Any]) -> dict:
     if action not in VALID_ACTIONS:
         raise JobError(f"invalid action: {action}")
 
-    dit_profile = _resolve_dit_profile(action, body.get("dit_profile"), project["dit_profile"])
+    lora_id = _resolve_requested_lora(project_id, body)
+    dit_profile = _resolve_dit_profile(
+        action, body.get("dit_profile"), project["dit_profile"], lora_requested=lora_id is not None
+    )
     # SPEC.md sec 4.1/8.1 only calls for early rejection of 'quality' (XL
     # needs CPU offload on a 16 GB card) -- every other profile always
     # reports supported=True from the real supports_dit_profile() and only
