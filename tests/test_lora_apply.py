@@ -150,6 +150,53 @@ def test_generate_rejects_studio_ops_without_a_lora_attached(client: TestClient)
     assert "studio_ops" in resp.json()["detail"]
 
 
+def test_extract_lego_complete_reject_lora_id(client: TestClient) -> None:
+    """SPEC.md sec 4.4: a style-pack lora only applies to
+    generate/cover/repaint (LORA_ELIGIBLE_ACTIONS) -- extract/lego/complete
+    are structural editing ops that already force studio_ops for an
+    unrelated reason (STUDIO_OPS_ACTIONS), so without an explicit rejection
+    a lora_id attached to one of them would sail past _resolve_dit_profile's
+    lora_attached branch (it only special-cases the eligible three) and
+    still get its adapter path loaded, silently altering structural-editing
+    output (reviewer-flagged). Rejected before source_take_id/track_name are
+    even validated, so this request is otherwise minimal/invalid on purpose."""
+    project_id = _new_project(client, "Style Pack Structural Ops")
+    lora_id = _train_lora(client, project_id)
+
+    for action in ("extract", "lego", "complete"):
+        resp = client.post(
+            f"/api/projects/{project_id}/jobs",
+            json={"action": action, "lora_id": lora_id},
+        )
+        assert resp.status_code == 400, action
+        assert "lora_id" in resp.json()["detail"], action
+
+    # no job rows were left behind for any of the rejected requests
+    jobs = client.get("/api/jobs").json()
+    assert all(j["action"] not in ("extract", "lego", "complete") for j in jobs)
+
+
+def test_train_lora_rejects_lora_id(client: TestClient) -> None:
+    """train_lora ignores any adapter it would resolve -- it trains a new
+    lora, it doesn't apply one -- so an attached lora_id must be rejected
+    up front rather than silently ignored (reviewer-flagged)."""
+    project_id = _new_project(client, "Style Pack Train Rejects Lora")
+    lora_id = _train_lora(client, project_id)
+    source_take_ids = _make_takes(client, project_id, MIN_LORA_SOURCE_TAKES)
+
+    resp = client.post(
+        f"/api/projects/{project_id}/jobs",
+        json={
+            "action": "train_lora",
+            "name": "second pack",
+            "source_take_ids": source_take_ids,
+            "lora_id": lora_id,
+        },
+    )
+    assert resp.status_code == 400
+    assert "lora_id" in resp.json()["detail"]
+
+
 def test_cover_and_repaint_are_also_lora_eligible() -> None:
     """Direct unit coverage for _resolve_dit_profile's lora_attached gating
     across all three lora-eligible actions (mirrors

@@ -580,6 +580,22 @@ def enqueue_job(project_id: str, body: dict[str, Any]) -> dict:
         raise JobError(f"invalid action: {action}")
 
     lora_id = body.get("lora_id")
+    if lora_id and action not in LORA_ELIGIBLE_ACTIONS:
+        # SPEC.md sec 4.4: a style-pack lora only applies to
+        # generate/cover/repaint (LORA_ELIGIBLE_ACTIONS above). Without this,
+        # extract/lego/complete -- which already resolve to studio_ops for
+        # an unrelated reason (STUDIO_OPS_ACTIONS) -- would sail past
+        # _resolve_dit_profile's lora_attached branch (it only special-cases
+        # LORA_ELIGIBLE_ACTIONS) and still get the adapter path attached
+        # below, silently altering structural-editing output with a style
+        # pack it was never meant to use. train_lora is likewise unrelated
+        # to loading a lora -- reject up front instead of resolving a lora
+        # whose adapter path would otherwise never even be looked at
+        # (reviewer-flagged).
+        raise JobError(
+            f"action '{action}' cannot use lora_id -- a style-pack lora only applies to "
+            f"{sorted(LORA_ELIGIBLE_ACTIONS)} (SPEC.md sec 4.4)"
+        )
     resolved_lora = _resolve_lora(project_id, lora_id) if lora_id else None
 
     dit_profile = _resolve_dit_profile(
