@@ -115,6 +115,17 @@ being iterated, and it writes the final adapter weights to
 export call needed for a first cut). `dit_handler` is the same `AceStepHandler`
 instance `_ensure_loaded` already produces for generation -- LoRA training
 reuses whichever DiT is currently loaded rather than a second handler.
+Reusing it has a consequence `_STATE`'s own lora bookkeeping (`lora_id`/
+`lora_adapter_path`, tracked for `_ensure_lora_adapter` below) never
+observes: `LoRATrainer` injects the in-training PEFT adapter directly into
+`dit_handler`'s decoder as a side effect of training, entirely outside
+`add_lora`/`set_active_lora_adapter`/`set_use_lora`. `train_lora` below
+therefore invalidates the whole cached handler once training finishes
+(success or failure) rather than leaving it cached with `_STATE["lora_id"]`
+still `None` -- otherwise a later plain generation would see that `None`,
+believe nothing is loaded, no-op, and silently run through the
+just-trained adapter anyway; a later explicit lora load would call
+`add_lora` against a decoder that's already PEFT-wrapped from training.
 
 LoRA loading (SPEC.md sec 4.4/12 "LoRA train / load" -- this is the "load"
 half; `train_lora` above is "train"): the tutorials in docs/en/*.md only
@@ -134,10 +145,23 @@ every currently loaded adapter and restores the plain base decoder -- used
 by `_ensure_lora_adapter` below to swap cleanly (unload, then load the new
 one) instead of stacking a second adapter on top of the first when a later
 job asks for a different lora_id, or leaving a stale adapter active when a
-later job asks for none at all. All of these are plain handler methods (no
+later job asks for none at all. None of these four return a
 `(status_message, success)` tuple like `initialize_service`/`initialize`
-above), so they go through `_api_method_call` alone, not
-`_check_init_result`.
+above -- but they are *not* silent either: ACE-Step reports an ordinary
+operational failure (a missing/corrupt adapter path, the base-decoder
+backup being unavailable to restore on unload, ...) as a returned status
+string starting with "❌" rather than raising. `_check_lora_status`
+below checks for that marker after every `_api_method_call`, so a failure
+reported this way still raises `WorkerUnavailable` instead of being
+recorded as a successful load/unload (treating any return as success was
+reviewer-flagged: a take could be marked with a `lora_id` that was never
+actually applied, or a stale adapter believed unloaded while still active).
+A failure partway through the load/unload/swap sequence leaves the
+handler's *actual* adapter state unknown (e.g. `unload_lora` succeeded but
+the following `add_lora` failed) -- `_ensure_lora_adapter` responds by
+invalidating the whole cached handler (not just the lora bookkeeping), so
+`_ensure_loaded` constructs a fresh one for the next job instead of any
+later job silently inheriting an indeterminate adapter state.
 
 Two things worth flagging about what `train_lora` deliberately does *not*
 replicate from the real pipeline: (1) `DatasetBuilder.scan_directory` only
@@ -355,6 +379,23 @@ def _check_init_result(step: str, result: Any) -> None:
         raise WorkerUnavailable(f"{step} reported failure: {status_message}")
 
 
+def _check_lora_status(step: str, result: Any) -> None:
+    """`AceStepHandler.add_lora`/`set_active_lora_adapter`/`set_use_lora`/
+    `unload_lora` (see the module docstring's LoRA-loading section) don't
+    return a `(status_message, success)` tuple like `initialize_service`/
+    `initialize` -- but a falsy/exception-free return does not mean
+    success either: ACE-Step reports an ordinary operational failure (a
+    missing/corrupt adapter path, the base-decoder backup being
+    unavailable to restore on unload, ...) as a returned status string
+    starting with "❌" instead of raising. Treating any return as success
+    (what this adapter previously did) let a failed load/unload get
+    recorded in `_STATE` as if it had actually happened -- a take could be
+    marked with a `lora_id` that was never really applied, or a stale
+    adapter believed unloaded while still active on the decoder."""
+    if isinstance(result, str) and result.strip().startswith("❌"):
+        raise WorkerUnavailable(f"{step} reported failure: {result}")
+
+
 def _checkpoints_project_root() -> Path:
     """The `project_root` to pass to `AceStepHandler.initialize_service`
     (SPEC.md sec 6 / module docstring): upstream resolves each DiT checkpoint
@@ -560,32 +601,53 @@ def _ensure_lora_adapter(handler: Any, lora_id: str | None, lora_adapter_path: s
     whatever is currently loaded first: a later job requesting a *different*
     lora_id (or none at all) must not silently stack a second adapter on top
     of the first, or leave a stale adapter active once nothing needs it.
+
+    Every call is checked with `_check_lora_status` (see its docstring: a
+    failure here is reported as a "❌"-prefixed status string, not an
+    exception). If any step of the transition fails, the handler's actual
+    adapter state is left unknown -- e.g. `unload_lora` may have succeeded
+    while the following `add_lora` failed, or vice versa -- so this
+    invalidates the *entire* cached handler (not just the lora bookkeeping)
+    before re-raising, forcing `_ensure_loaded` to construct a fresh handler
+    for the next job rather than any later job inheriting an indeterminate
+    adapter state.
     """
     if lora_id == _STATE["lora_id"]:
         return
-    if _STATE["lora_id"] is not None:
-        _api_method_call("AceStepHandler.unload_lora", handler, "unload_lora")
+    try:
+        if _STATE["lora_id"] is not None:
+            result = _api_method_call("AceStepHandler.unload_lora", handler, "unload_lora")
+            _check_lora_status("AceStepHandler.unload_lora", result)
+            _STATE["lora_id"] = None
+            _STATE["lora_adapter_path"] = None
+        if lora_id is not None:
+            result = _api_method_call(
+                "AceStepHandler.add_lora",
+                handler,
+                "add_lora",
+                lora_path=lora_adapter_path,
+                adapter_name=lora_id,
+            )
+            _check_lora_status("AceStepHandler.add_lora", result)
+            result = _api_method_call(
+                "AceStepHandler.set_active_lora_adapter",
+                handler,
+                "set_active_lora_adapter",
+                adapter_name=lora_id,
+            )
+            _check_lora_status("AceStepHandler.set_active_lora_adapter", result)
+            result = _api_method_call(
+                "AceStepHandler.set_use_lora", handler, "set_use_lora", use_lora=True
+            )
+            _check_lora_status("AceStepHandler.set_use_lora", result)
+            _STATE["lora_id"] = lora_id
+            _STATE["lora_adapter_path"] = lora_adapter_path
+    except WorkerUnavailable:
+        _STATE["handler"] = None
+        _STATE["dit_profile"] = None
         _STATE["lora_id"] = None
         _STATE["lora_adapter_path"] = None
-    if lora_id is not None:
-        _api_method_call(
-            "AceStepHandler.add_lora",
-            handler,
-            "add_lora",
-            lora_path=lora_adapter_path,
-            adapter_name=lora_id,
-        )
-        _api_method_call(
-            "AceStepHandler.set_active_lora_adapter",
-            handler,
-            "set_active_lora_adapter",
-            adapter_name=lora_id,
-        )
-        _api_method_call(
-            "AceStepHandler.set_use_lora", handler, "set_use_lora", use_lora=True
-        )
-        _STATE["lora_id"] = lora_id
-        _STATE["lora_adapter_path"] = lora_adapter_path
+        raise
 
 
 def _repaint_meta(job: dict[str, Any]) -> dict | None:
@@ -1158,85 +1220,103 @@ def train_lora(
     with _LOCK:
         handler, _lm, dit_profile = _ensure_loaded(LORA_BASE_DIT_PROFILE)
 
-        builder = _api_call("DatasetBuilder", DatasetBuilder)
         try:
-            builder.metadata.name = name
-            # No per-song lyrics/instrumental info reaches this adapter (see
-            # above) -- treat every staged source as instrumental, the same
-            # conservative default DatasetMetadata itself ships with.
-            builder.metadata.all_instrumental = True
-        except AttributeError as exc:
-            # Same reasoning as _api_method_call: a plain attribute access
-            # would otherwise raise AttributeError straight from this frame
-            # instead of the clean WorkerUnavailable every other API-mismatch
-            # path in this module promises.
-            raise WorkerUnavailable(
-                f"acestep API mismatch in DatasetBuilder.metadata: {exc}. Update "
-                "worker/acestep_worker.py to match the installed acestep version, or set "
-                "BARD_WORKER=mock."
-            ) from exc
+            builder = _api_call("DatasetBuilder", DatasetBuilder)
+            try:
+                builder.metadata.name = name
+                # No per-song lyrics/instrumental info reaches this adapter (see
+                # above) -- treat every staged source as instrumental, the same
+                # conservative default DatasetMetadata itself ships with.
+                builder.metadata.all_instrumental = True
+            except AttributeError as exc:
+                # Same reasoning as _api_method_call: a plain attribute access
+                # would otherwise raise AttributeError straight from this frame
+                # instead of the clean WorkerUnavailable every other API-mismatch
+                # path in this module promises.
+                raise WorkerUnavailable(
+                    f"acestep API mismatch in DatasetBuilder.metadata: {exc}. Update "
+                    "worker/acestep_worker.py to match the installed acestep version, or set "
+                    "BARD_WORKER=mock."
+                ) from exc
 
-        samples, scan_status = _api_method_call(
-            "DatasetBuilder.scan_directory", builder, "scan_directory", str(dataset_dir)
-        )
-        if not samples:
-            raise RuntimeError(f"ACE-Step found no audio files to train on: {scan_status}")
-        labeled_count = _api_method_call(
-            "DatasetBuilder.get_labeled_count", builder, "get_labeled_count"
-        )
-        if labeled_count < MIN_LORA_SOURCES:
-            raise RuntimeError(
-                f"ACE-Step only labeled {labeled_count}/{len(samples)} staged source files "
-                f"(needs >= {MIN_LORA_SOURCES}): {scan_status}"
+            samples, scan_status = _api_method_call(
+                "DatasetBuilder.scan_directory", builder, "scan_directory", str(dataset_dir)
+            )
+            if not samples:
+                raise RuntimeError(f"ACE-Step found no audio files to train on: {scan_status}")
+            labeled_count = _api_method_call(
+                "DatasetBuilder.get_labeled_count", builder, "get_labeled_count"
+            )
+            if labeled_count < MIN_LORA_SOURCES:
+                raise RuntimeError(
+                    f"ACE-Step only labeled {labeled_count}/{len(samples)} staged source files "
+                    f"(needs >= {MIN_LORA_SOURCES}): {scan_status}"
+                )
+
+            output_paths, preprocess_status = _api_method_call(
+                "DatasetBuilder.preprocess_to_tensors",
+                builder,
+                "preprocess_to_tensors",
+                dit_handler=handler,
+                output_dir=str(tensor_dir),
+                skip_existing=False,
+                progress_callback=None,
+            )
+            if not output_paths:
+                raise RuntimeError(
+                    f"ACE-Step preprocessing produced no training tensors: {preprocess_status}"
+                )
+
+            lora_config = _api_call(
+                "LoRAConfig", LoRAConfig, r=LORA_RANK, alpha=LORA_ALPHA, dropout=LORA_DROPOUT
+            )
+            training_config = _api_call(
+                "TrainingConfig",
+                TrainingConfig,
+                learning_rate=LORA_LEARNING_RATE,
+                max_epochs=LORA_TRAIN_EPOCHS,
+                save_every_n_epochs=LORA_SAVE_EVERY_N_EPOCHS,
+                gradient_accumulation_steps=LORA_GRADIENT_ACCUMULATION_STEPS,
+                seed=42,
+                output_dir=str(adapter_dir),
+            )
+            trainer = _api_call(
+                "LoRATrainer",
+                LoRATrainer,
+                dit_handler=handler,
+                lora_config=lora_config,
+                training_config=training_config,
             )
 
-        output_paths, preprocess_status = _api_method_call(
-            "DatasetBuilder.preprocess_to_tensors",
-            builder,
-            "preprocess_to_tensors",
-            dit_handler=handler,
-            output_dir=str(tensor_dir),
-            skip_existing=False,
-            progress_callback=None,
-        )
-        if not output_paths:
-            raise RuntimeError(
-                f"ACE-Step preprocessing produced no training tensors: {preprocess_status}"
+            train_iter = _api_method_call(
+                "LoRATrainer.train_from_preprocessed",
+                trainer,
+                "train_from_preprocessed",
+                str(tensor_dir),
             )
-
-        lora_config = _api_call(
-            "LoRAConfig", LoRAConfig, r=LORA_RANK, alpha=LORA_ALPHA, dropout=LORA_DROPOUT
-        )
-        training_config = _api_call(
-            "TrainingConfig",
-            TrainingConfig,
-            learning_rate=LORA_LEARNING_RATE,
-            max_epochs=LORA_TRAIN_EPOCHS,
-            save_every_n_epochs=LORA_SAVE_EVERY_N_EPOCHS,
-            gradient_accumulation_steps=LORA_GRADIENT_ACCUMULATION_STEPS,
-            seed=42,
-            output_dir=str(adapter_dir),
-        )
-        trainer = _api_call(
-            "LoRATrainer",
-            LoRATrainer,
-            dit_handler=handler,
-            lora_config=lora_config,
-            training_config=training_config,
-        )
-
-        train_iter = _api_method_call(
-            "LoRATrainer.train_from_preprocessed",
-            trainer,
-            "train_from_preprocessed",
-            str(tensor_dir),
-        )
-        # train_from_preprocessed is a generator -- the training loop itself
-        # only runs while this is iterated; it writes the final adapter to
-        # <adapter_dir>/final/ once exhausted (see the module docstring).
-        last_step, last_loss, last_status = 0, None, "not started"
-        for step, loss, status in train_iter:
-            last_step, last_loss, last_status = step, loss, status
+            # train_from_preprocessed is a generator -- the training loop itself
+            # only runs while this is iterated; it writes the final adapter to
+            # <adapter_dir>/final/ once exhausted (see the module docstring).
+            last_step, last_loss, last_status = 0, None, "not started"
+            for step, loss, status in train_iter:
+                last_step, last_loss, last_status = step, loss, status
+        finally:
+            # LoRATrainer injects the in-training PEFT adapter directly into
+            # `handler`'s decoder as a side effect of training (see the
+            # module docstring's LoRA-training section) -- entirely outside
+            # add_lora/set_active_lora_adapter/set_use_lora, so _STATE's own
+            # lora bookkeeping never observes it and would otherwise still
+            # read `lora_id: None` afterward. Invalidate the whole cached
+            # handler unconditionally -- whether training above succeeded or
+            # raised -- so _ensure_loaded constructs a fresh one next time,
+            # instead of a later plain generation no-op'ing past a "nothing
+            # loaded" lora_id straight into the just-trained adapter, or a
+            # later explicit lora load calling add_lora against a decoder
+            # that's already PEFT-wrapped from training.
+            _STATE["handler"] = None
+            _STATE["dit_profile"] = None
+            _STATE["lora_id"] = None
+            _STATE["lora_adapter_path"] = None
 
     final_dir = adapter_dir / "final"
     if not final_dir.exists() or not any(final_dir.iterdir()):
