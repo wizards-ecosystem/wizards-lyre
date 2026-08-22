@@ -112,12 +112,25 @@ export default function App() {
   // and non-React-idiomatic.
   const audioRefs = useRef<Record<string, HTMLAudioElement | null>>({});
 
+  // Reviewer-flagged: canceling a pending take-notes debounce timer (on
+  // unmount, or on the page actually closing/reloading) used to just drop
+  // the buffered edit on the floor. `pagehide` (fires reliably on
+  // close/reload/navigate, including into bfcache -- unlike `beforeunload`,
+  // which some browsers skip) and `beforeunload` (kept as a belt-and-braces
+  // fallback for engines that don't fire `pagehide` in every case) both
+  // flush with `keepalive: true` so the browser completes the request even
+  // as the page is torn down instead of aborting it mid-flight.
   useEffect(() => {
+    function flushTakeNotesOnUnload() {
+      flushAllPendingTakeNotes({ keepalive: true }).catch(() => {});
+    }
+    window.addEventListener("pagehide", flushTakeNotesOnUnload);
+    window.addEventListener("beforeunload", flushTakeNotesOnUnload);
     return () => {
+      window.removeEventListener("pagehide", flushTakeNotesOnUnload);
+      window.removeEventListener("beforeunload", flushTakeNotesOnUnload);
       if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
-      Object.values(takeSaveTimeoutsRef.current).forEach((t) => {
-        if (t) clearTimeout(t);
-      });
+      flushTakeNotesOnUnload();
     };
   }, []);
 
@@ -171,10 +184,14 @@ export default function App() {
   // that flush fails, the switch must not proceed: activeId must stay put
   // so the failed edit is still visible/retryable instead of being swapped
   // out from under the user or silently discarded when the next project's
-  // edits reuse the same pending-save slot.
+  // edits reuse the same pending-save slot. Take notes are keyed by take id
+  // rather than project id, but the same reasoning applies -- a pending
+  // note for a take in the project being left must not be silently dropped
+  // (reviewer-flagged) just because the debounce window hasn't elapsed yet.
   async function switchActiveProject(id: string): Promise<void> {
     try {
       await flushPendingPlanSave();
+      await flushAllPendingTakeNotes();
     } catch (err) {
       setErrorMsg(String(err));
       return;
@@ -216,21 +233,54 @@ export default function App() {
     }
   }
 
+  // Sends whatever note edit is pending for `takeId` right now, canceling
+  // its debounce timer first -- the single path every take-notes save
+  // actually goes through, whether triggered by the debounce firing, a
+  // blur, a project switch, or the page unloading. Re-queues the edit on
+  // failure (mirroring enqueueSave's failure handling above) so a later
+  // flush can retry it, but only if nothing newer has already claimed the
+  // slot. `opts.keepalive` is passed straight through to `api.patchTake`
+  // for the pagehide/beforeunload case, where a plain fetch would otherwise
+  // be aborted mid-flight by the navigation.
+  async function flushTakeNotes(takeId: string, opts?: { keepalive?: boolean }): Promise<void> {
+    const timeout = takeSaveTimeoutsRef.current[takeId];
+    if (timeout) {
+      clearTimeout(timeout);
+      takeSaveTimeoutsRef.current[takeId] = null;
+    }
+    if (!(takeId in pendingTakeNotesRef.current)) return;
+    const projectId = activeIdRef.current;
+    const notes = pendingTakeNotesRef.current[takeId];
+    delete pendingTakeNotesRef.current[takeId];
+    if (!projectId) return;
+    try {
+      await api.patchTake(projectId, takeId, { notes }, opts);
+    } catch (err) {
+      if (!(takeId in pendingTakeNotesRef.current)) {
+        pendingTakeNotesRef.current[takeId] = notes;
+      }
+      throw err;
+    }
+  }
+
+  // Flushes every take's pending note edit (not just one) -- used before a
+  // project switch, and from the pagehide/beforeunload handler below, since
+  // either can happen while more than one take's textarea has an unsaved
+  // edit in flight.
+  async function flushAllPendingTakeNotes(opts?: { keepalive?: boolean }): Promise<void> {
+    const takeIds = Object.keys(pendingTakeNotesRef.current);
+    await Promise.all(takeIds.map((takeId) => flushTakeNotes(takeId, opts)));
+  }
+
   function saveTakeNotes(takeId: string, notes: string): void {
     if (!activeId) return;
-    const projectId = activeId;
     updateTakeLocal(takeId, { notes });
 
     pendingTakeNotesRef.current[takeId] = notes;
     const existing = takeSaveTimeoutsRef.current[takeId];
     if (existing) clearTimeout(existing);
     takeSaveTimeoutsRef.current[takeId] = setTimeout(() => {
-      takeSaveTimeoutsRef.current[takeId] = null;
-      const pendingNotes = pendingTakeNotesRef.current[takeId];
-      delete pendingTakeNotesRef.current[takeId];
-      api
-        .patchTake(projectId, takeId, { notes: pendingNotes })
-        .catch((err) => setErrorMsg(String(err)));
+      flushTakeNotes(takeId).catch((err) => setErrorMsg(String(err)));
     }, PLAN_SAVE_DEBOUNCE_MS);
   }
 
@@ -908,6 +958,7 @@ export default function App() {
                           value={take.notes}
                           onClick={(e) => e.stopPropagation()}
                           onChange={(e) => saveTakeNotes(take.id, e.target.value)}
+                          onBlur={() => flushTakeNotes(take.id).catch((err) => setErrorMsg(String(err)))}
                         />
                         <div className="take-actions">
                           <button

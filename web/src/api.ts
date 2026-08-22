@@ -125,10 +125,19 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify(patch),
     }),
-  patchTake: (projectId: string, takeId: string, patch: { favorite?: boolean; notes?: string }) =>
+  // `keepalive` lets a caller fire this from a `pagehide`/`beforeunload`
+  // handler and have the browser complete the request even as the page is
+  // being torn down -- a plain fetch gets aborted mid-flight in that window.
+  patchTake: (
+    projectId: string,
+    takeId: string,
+    patch: { favorite?: boolean; notes?: string },
+    opts?: { keepalive?: boolean },
+  ) =>
     request<Take>(`/api/projects/${projectId}/takes/${takeId}`, {
       method: "PATCH",
       body: JSON.stringify(patch),
+      ...(opts?.keepalive ? { keepalive: true } : {}),
     }),
   savePlan: (id: string, plan: Plan) =>
     request<Plan>(`/api/projects/${id}/plan`, {
