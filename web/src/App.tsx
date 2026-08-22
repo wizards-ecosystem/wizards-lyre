@@ -674,6 +674,19 @@ export default function App() {
 
   async function generate() {
     if (!activeId) return;
+    // Same base-model-swap gate as extract()/lego()/complete() (SPEC.md sec
+    // 4.3) -- a lora's weights only load against the studio_ops base
+    // checkpoint, so selecting one forces the same swap those already gate
+    // behind confirmation. Only shown when a lora is actually selected; a
+    // plain generate never prompts.
+    if (
+      selectedLoraId &&
+      !window.confirm(
+        "Generate swaps the loaded model to the studio_ops base model to use this style pack (slower, SPEC sec 4.3). Continue?"
+      )
+    ) {
+      return;
+    }
     setBusy(true);
     setBusyStatus("queued");
     setErrorMsg(null);
@@ -699,6 +712,15 @@ export default function App() {
 
   async function cover() {
     if (!activeId || (!selectedTakeId && !uploadedSourcePath)) return;
+    // Same base-model-swap gate as generate() above.
+    if (
+      selectedLoraId &&
+      !window.confirm(
+        "Cover swaps the loaded model to the studio_ops base model to use this style pack (slower, SPEC sec 4.3). Continue?"
+      )
+    ) {
+      return;
+    }
     setBusy(true);
     setBusyStatus("queued");
     setErrorMsg(null);
@@ -734,6 +756,15 @@ export default function App() {
     if (selectedTakeId) {
       if (!region) return;
     } else if (!uploadedSourcePath) {
+      return;
+    }
+    // Same base-model-swap gate as generate() above.
+    if (
+      selectedLoraId &&
+      !window.confirm(
+        "Repaint swaps the loaded model to the studio_ops base model to use this style pack (slower, SPEC sec 4.3). Continue?"
+      )
+    ) {
       return;
     }
     setBusy(true);
