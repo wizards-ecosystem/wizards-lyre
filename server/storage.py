@@ -263,11 +263,23 @@ def _update_project(project_id: str, mutate: Callable[[dict], None]) -> dict:
         return project
 
 
+def _normalize_plan(plan: dict) -> dict:
+    """Fill in plan fields added after some plan.json files were already
+    written to disk (SPEC.md sec 9.2 `caption_rewrite`), same pattern as
+    `_normalize_take_meta` for takes: a plan.json saved before this field
+    existed has no key at all, and must keep behaving exactly like it did
+    then -- worker.acestep_worker.run_job (and the frontend's Plan type /
+    checkbox) would otherwise have to special-case a missing key at every
+    read site instead of once here."""
+    plan.setdefault("caption_rewrite", False)
+    return plan
+
+
 def _read_plan_or_default(project_id: str) -> dict:
     path = plan_json_path(project_id)
     if not path.exists():
         return default_plan()
-    return _read_json(path)
+    return _normalize_plan(_read_json(path))
 
 
 def _update_plan(project_id: str, mutate: Callable[[dict], dict]) -> dict:
@@ -301,6 +313,12 @@ def default_plan() -> dict:
         "timesignature": "4/4",
         "duration_sec": 120,
         "sections": [],
+        # SPEC.md sec 9.2/7.2: Custom-mode checkbox controlling whether
+        # ACE-Step's LM ("thinking") is allowed to rewrite the user's caption.
+        # New plans allow rewriting until the user disables it, as required
+        # by SPEC.md sec 7.2. _normalize_plan separately keeps legacy plans
+        # without this field on their historical False behavior.
+        "caption_rewrite": True,
     }
 
 

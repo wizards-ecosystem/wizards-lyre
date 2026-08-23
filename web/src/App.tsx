@@ -1174,6 +1174,14 @@ export default function App() {
                     />
                     Instrumental
                   </label>
+                  <label className="checkbox">
+                    <input
+                      type="checkbox"
+                      checked={detail.plan.caption_rewrite}
+                      onChange={(e) => savePlanField("caption_rewrite", e.target.checked)}
+                    />
+                    Allow caption rewrite (Custom mode LM thinking)
+                  </label>
                   <div className="plan-grid">
                     <label>
                       BPM

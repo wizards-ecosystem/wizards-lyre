@@ -480,6 +480,10 @@ def test_run_job_matches_installed_api_contract(
     # reach the renderer, not be dropped.
     assert params.vocal_language == "fr"
     assert params.timesignature == "3/4"
+    # SPEC.md sec 9.2/7.2: Custom mode (no `caption_rewrite` key at all --
+    # backward compatible with a plan.json saved before this field existed)
+    # must not let the LM rewrite the caption.
+    assert params.thinking is False
     # GenerationParams has no negative_tags/track_name field; plan.json's
     # "negative" is not forwarded (no confirmed upstream field), and
     # "generate" doesn't send an instruction (that's extract/lego/complete
@@ -810,6 +814,115 @@ def test_simple_mode_uses_module_level_create_sample_and_persists_full_plan(
     # "vocal_language" (Bard's own plan.json field name) -- confirms
     # _plan_from_query maps it correctly before generation even runs.
     assert params.vocal_language == "ja"
+
+
+def test_custom_mode_caption_rewrite_enabled_sets_thinking_true(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SPEC.md sec 9.2/7.2: "Custom mode: ... thinking may still rewrite
+    caption unless the user disables caption rewrite" -- checking the
+    Custom-plan caption-rewrite checkbox (`plan["caption_rewrite"] = True`)
+    must flip GenerationParams.thinking on for a Custom-mode generate, even
+    though it's not simple mode (query is empty, caption/lyrics are
+    human-written)."""
+    log: list[tuple] = []
+    _install_fake_acestep(monkeypatch, log)
+
+    plan = {
+        "query": "",
+        "caption": "anthemic pop chorus",
+        "lyrics": "[Verse]\nWe were born to run",
+        "instrumental": False,
+        "bpm": 120,
+        "keyscale": "C Major",
+        "duration_sec": 30,
+        "vocal_language": "en",
+        "timesignature": "4/4",
+        "caption_rewrite": True,
+    }
+    job = {"action": "generate", "dit_profile": "iterate", "seed": -1, "src_audio": None}
+
+    meta, plan_patch, _ = acestep_worker.run_job(
+        job=job, plan=plan, take_id="t-rewrite-on", take_dir=tmp_path / "take-rewrite-on"
+    )
+
+    assert plan_patch is None  # still not simple mode -- nothing to persist onto plan.json
+    assert meta["caption"] == plan["caption"]  # the fake echoes params.caption back unchanged
+
+    generate_call = next(e for e in log if e[0] == "generate_music")
+    params = generate_call[3]
+    assert params.thinking is True
+
+
+def test_custom_mode_caption_rewrite_disabled_sets_thinking_false(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The inverse of the above: an explicit `caption_rewrite: False` (as
+    well as the backward-compatible missing-key default, covered by
+    `test_run_job_matches_installed_api_contract`) must keep thinking off in
+    Custom mode."""
+    log: list[tuple] = []
+    _install_fake_acestep(monkeypatch, log)
+
+    plan = {
+        "query": "",
+        "caption": "anthemic pop chorus",
+        "lyrics": "[Verse]\nWe were born to run",
+        "instrumental": False,
+        "bpm": 120,
+        "keyscale": "C Major",
+        "duration_sec": 30,
+        "vocal_language": "en",
+        "timesignature": "4/4",
+        "caption_rewrite": False,
+    }
+    job = {"action": "generate", "dit_profile": "iterate", "seed": -1, "src_audio": None}
+
+    acestep_worker.run_job(
+        job=job, plan=plan, take_id="t-rewrite-off", take_dir=tmp_path / "take-rewrite-off"
+    )
+
+    generate_call = next(e for e in log if e[0] == "generate_music")
+    params = generate_call[3]
+    assert params.thinking is False
+
+
+def test_caption_rewrite_does_not_leak_into_cover_repaint_extract(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Cover/repaint/extract/lego/complete behavior must stay unchanged by
+    this field (SPEC.md sec 4.2: thinking=false is allowed for those actions,
+    upstream ignores the LM for them anyway) -- even when the plan on disk
+    has `caption_rewrite: True` left over from a Custom-mode generate."""
+    log: list[tuple] = []
+    _install_fake_acestep(monkeypatch, log)
+
+    plan = {
+        "query": "",
+        "caption": "orchestral",
+        "lyrics": "[Instrumental]",
+        "instrumental": True,
+        "bpm": 90,
+        "keyscale": "D Minor",
+        "duration_sec": 20,
+        "caption_rewrite": True,
+    }
+
+    for action in ("cover", "repaint", "extract", "lego", "complete"):
+        log.clear()
+        job = {
+            "action": action,
+            "dit_profile": "studio_ops",
+            "seed": -1,
+            "src_audio": "/some/source.wav",
+            "track_name": "vocals",
+        }
+        acestep_worker.run_job(
+            job=job, plan=plan, take_id=f"t-{action}-rw", take_dir=tmp_path / f"take-{action}-rw"
+        )
+        generate_call = next(e for e in log if e[0] == "generate_music")
+        params = generate_call[3]
+        assert params.thinking is False, action
 
 
 def test_create_sample_failure_fails_job_instead_of_generating(

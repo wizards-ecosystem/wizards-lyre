@@ -935,6 +935,23 @@ def run_job(
             effective_plan.get(k) is None for k in ("bpm", "keyscale", "duration_sec")
         )
 
+        # SPEC.md sec 7.2/9.2: Simple mode always runs with thinking=true (the
+        # LM fills the whole plan from `query`). Custom mode leaves thinking
+        # off by default -- unlike simple mode, the caption here is
+        # human-written, so ACE-Step's LM must not silently rewrite it unless
+        # the user opted in via the plan's `caption_rewrite` checkbox. Gated
+        # on `job["action"] == "generate"` (equivalently: whenever
+        # `simple_mode` could be true) rather than plan.get(...) alone, so a
+        # `caption_rewrite: true` left over from an earlier Custom generate
+        # can never leak into a cover/repaint/extract/lego/complete job on
+        # the same plan -- those actions' thinking must stay exactly as
+        # before this field existed (SPEC.md sec 4.2: "thinking=false is
+        # allowed for cover/repaint/extract... upstream ignores LM for those
+        # anyway").
+        thinking = simple_mode or (
+            job["action"] == "generate" and bool(plan.get("caption_rewrite", False))
+        )
+
         # SPEC.md sec 7.3: "-1 from the user means worker picks and records
         # it" -- any other value is a fixed seed the user expects to be able
         # to reproduce. Passing `seed` on GenerationParams is not enough by
@@ -962,7 +979,7 @@ def run_job(
             instrumental=effective_plan.get("instrumental", False),
             vocal_language=effective_plan.get("vocal_language"),
             timesignature=effective_plan.get("timesignature"),
-            thinking=simple_mode,
+            thinking=thinking,
             use_cot_metas=use_cot_metas,
             seed=seed,
             src_audio=job.get("src_audio"),
