@@ -160,6 +160,26 @@ body {
   color: #f5c518;
 }
 
+.preview-btn {
+  font-size: 11px;
+  line-height: 1;
+  padding: 3px 6px;
+  flex: 0 0 auto;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: var(--muted);
+}
+
+.preview-btn:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.preview-btn:not(:disabled):hover {
+  color: var(--accent);
+}
+
 .delete-btn {
   font-size: 12px;
   line-height: 1;
