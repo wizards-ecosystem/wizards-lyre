@@ -365,6 +365,18 @@ body {
   max-width: 160px;
 }
 
+/* Names the pack the next Generate/Cover/Repaint will use, right next to
+   those buttons -- the accent color signals an active choice. */
+.lora-active-badge {
+  color: var(--accent);
+  font-weight: 600;
+  font-size: 12px;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .cover-strength {
   display: flex;
   align-items: center;
@@ -499,6 +511,34 @@ button:disabled {
   min-width: 90px;
 }
 
+/* LoRA provenance chip on a take: which style pack generated it. As a
+   <button> (pack still loadable) it doubles as "select this pack again";
+   as a <span> it is plain attribution. Override the chunky default button
+   styling so it reads as a small badge, same size as the surrounding
+   take-meta text. */
+.take-lora-badge {
+  align-self: flex-start;
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  background: transparent;
+  font-weight: 600;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+button.take-lora-badge {
+  cursor: pointer;
+}
+
+button.take-lora-badge:hover {
+  background: rgba(124, 140, 255, 0.15);
+}
+
 .compare-panel {
   display: flex;
   align-items: center;
@@ -587,6 +627,17 @@ button:disabled {
 
 .lora-list li.lora-error {
   border-color: #6c2b33;
+}
+
+/* A train_lora job recovered from the job queue (still queued/running -- no
+   pack meta exists yet). Accent border marks it as in flight, distinct from
+   the red error border above. */
+.lora-list li.lora-training {
+  border-color: var(--accent);
+}
+
+.lora-list li.lora-training .lora-status {
+  color: var(--accent);
 }
 
 .lora-name {

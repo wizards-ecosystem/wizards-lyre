@@ -13,6 +13,11 @@ const JOB_POLL_TIMEOUT_MS = 10 * 60 * 1000;
 // lock and can take roughly an hour (SPEC.md sec 4.4) -- far longer than the
 // ceiling above that's tuned for ordinary generate/cover/repaint jobs.
 const LORA_TRAIN_POLL_TIMEOUT_MS = 90 * 60 * 1000;
+// Cadence for the recovery poll that watches a train_lora job discovered via
+// GET /api/jobs (i.e. one that outlived a page refresh, or is running in
+// another tab). Training itself is hour-scale, so this only needs to be
+// prompt enough that completion shows up shortly after it happens.
+const LORA_TRAIN_RECOVERY_POLL_MS = 3000;
 
 // SPEC.md sec 4.4 "Style pack | LoRA train / load | 8+ songs" -- mirrors
 // server.jobs.MIN_LORA_SOURCE_TAKES so the Train button can disable itself
@@ -225,6 +230,13 @@ export default function App() {
   // (SPEC.md sec 4.4 "LoRA train / load" -- the load half). Separate from
   // loraSourceIds above, which only feeds *training* a new pack.
   const [selectedLoraId, setSelectedLoraId] = useState<string | null>(null);
+  // This project's train_lora jobs that are still queued/running, recovered
+  // from GET /api/jobs on project load and kept current by a poll below.
+  // This is what makes a long training survive a page refresh: the busy
+  // state of the session that started it is gone, but the job row in the
+  // queue is not, so the Style Packs pane can keep showing its status and
+  // refresh the pack list the moment it finishes (no second reload needed).
+  const [trainingJobs, setTrainingJobs] = useState<Job[]>([]);
 
   // Plan saves are debounced and serialized: at most one PUT /plan in
   // flight at a time, always carrying the latest edit. Without this, one
@@ -520,6 +532,22 @@ export default function App() {
     setLoras(data);
   }
 
+  // Rediscovers this project's still-active (queued/running) train_lora job
+  // from the shared job queue (SPEC.md sec 8 GET /api/jobs) -- called on
+  // project load so a refresh mid-training restores visible progress, and
+  // again after a training finishes/fails so the pane matches the queue.
+  // active: true returns the project's complete queued/running worklist
+  // (no recency truncation server-side), so an older running training can
+  // never be pushed out of the result by newer jobs and lost to the
+  // recovery.
+  async function refreshTrainingJobs(id: string): Promise<void> {
+    const jobs = await api.listJobs({ projectId: id, action: "train_lora", active: true });
+    // Same stale-response guard as refreshDetail above. The client-side
+    // filter is belt-and-braces on top of the server's active filter.
+    if (activeIdRef.current !== id) return;
+    setTrainingJobs(jobs.filter((j) => j.status === "queued" || j.status === "running"));
+  }
+
   useEffect(() => {
     refreshProjects().catch((err) => setErrorMsg(String(err)));
   }, []);
@@ -559,14 +587,87 @@ export default function App() {
     setLoraSourceIds(new Set());
     setLoraName("");
     setSelectedLoraId(null);
+    setTrainingJobs([]);
     if (activeId) {
       refreshDetail(activeId).catch((err) => setErrorMsg(String(err)));
       refreshLoras(activeId).catch((err) => setErrorMsg(String(err)));
+      // Recover a style-pack training that is still queued/running for this
+      // project (started before a refresh, or in another tab) so the Style
+      // Packs pane keeps showing its status.
+      refreshTrainingJobs(activeId).catch((err) => setErrorMsg(String(err)));
     } else {
       setDetail(null);
       setLoras([]);
     }
   }, [activeId]);
+
+  // Recovery poll for the train_lora jobs above: while any are active,
+  // re-check the job queue and, the moment one completes or fails, refresh
+  // the pack list so the selector/pack entries update without another page
+  // reload. A failed training also surfaces its job error in the banner --
+  // a failure before the pack directory is allocated (e.g. the worker
+  // crashing on claim) never produces a pack entry, so this is the only
+  // place that error becomes visible. The session that started the training
+  // has its own pollJob running too; double-observing the same job is
+  // harmless (both just re-list an idempotent queue) and is exactly what
+  // makes this survive a refresh, which kills that original poller.
+  const trainingJobIds = trainingJobs.map((j) => j.id).join(",");
+  useEffect(() => {
+    if (!activeId || trainingJobIds === "") return;
+    const projectId = activeId;
+    const watchedIds = trainingJobIds.split(",");
+    let cancelled = false;
+
+    async function tick() {
+      let jobs: Job[];
+      try {
+        // active: true returns the complete queued/running worklist (no
+        // recency truncation server-side), so a watched training can never
+        // drop out of this list (and out of the pane/poll) just because
+        // newer jobs piled up behind it while it runs.
+        jobs = await api.listJobs({ projectId, action: "train_lora", active: true });
+      } catch {
+        return; // transient (server restarting...) -- retry on the next tick
+      }
+      if (cancelled || activeIdRef.current !== projectId) return;
+      const activeIds = new Set(jobs.map((j) => j.id));
+      // A watched id that fell out of the active set has finished (done or
+      // error). Fetch those by id -- the active-filtered list excludes them
+      // by definition, and a recency-limited unfiltered list can drop them
+      // too, which would silently lose the finish event and its error.
+      const finishedIds = watchedIds.filter((id) => !activeIds.has(id));
+      setTrainingJobs(jobs);
+      if (finishedIds.length === 0) return;
+      const finished: Job[] = [];
+      for (const id of finishedIds) {
+        try {
+          finished.push(await api.getJob(id));
+        } catch {
+          // No longer fetchable (e.g. the job row vanished with a project
+          // deletion) -- nothing left to surface for it.
+        }
+      }
+      if (finished.length === 0 || cancelled || activeIdRef.current !== projectId) return;
+      await refreshLoras(projectId);
+      // The await above can outlast a project switch -- never surface this
+      // project's training failure on top of another project's workspace.
+      if (cancelled || activeIdRef.current !== projectId) return;
+      for (const job of finished) {
+        if (job.status === "error") {
+          // The pack entry itself (refreshLoras above) shows up in the
+          // list whenever the worker allocated one before failing; this
+          // banner is the actionable message either way.
+          setErrorMsg(`style pack training failed: ${job.error ?? "unknown error"}`);
+        }
+      }
+    }
+
+    const interval = setInterval(tick, LORA_TRAIN_RECOVERY_POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [activeId, trainingJobIds]);
 
   // A newly selected take has no region yet -- drop whatever was drawn for
   // the previous one instead of showing a stale start/end that no longer
@@ -1046,6 +1147,11 @@ export default function App() {
     setErrorMsg(null);
     try {
       const queued = await api.trainLora(projectId, sourceIds, name);
+      // Show the new training in the Style Packs pane right away (same
+      // in-flight entry a refresh would recover) and arm the recovery poll
+      // for it, so the pane's view of training is identical whether or not
+      // the page is reloaded mid-training.
+      refreshTrainingJobs(projectId).catch(() => {});
       // Training runs the ACE-Step training loop under the worker's
       // GPU-exclusive lock and can take roughly an hour (SPEC.md sec 4.4) --
       // far past the default job-poll ceiling tuned for generate/cover/etc.
@@ -1070,6 +1176,11 @@ export default function App() {
     } finally {
       setBusy(false);
       setBusyStatus(null);
+      // Re-sync the recovered-training view with the queue. On success this
+      // just clears any entry; on a poll-timeout (the catch above) the job
+      // is still running server-side, and this is what hands it over to the
+      // recovery poll so it keeps being tracked after `busy` is released.
+      refreshTrainingJobs(projectId).catch(() => {});
     }
   }
 
@@ -1084,6 +1195,15 @@ export default function App() {
   // throughout the actual extraction too. Falls back to the normal
   // "<verb>ing… (status)" text once the worker reports studio_ops loaded.
   const studioOpsLoading = busy && health?.dit_loaded !== "studio_ops";
+
+  // The pack the load-half selection (SPEC.md sec 4.4) currently points at,
+  // resolved against the project's pack list so the indicator next to
+  // Generate/Cover/Repaint can show its name. Null when none is selected --
+  // or when the id no longer resolves (a pack dir removed out of band), in
+  // which case the <select> visually falls back to "None" too.
+  const selectedLora = selectedLoraId
+    ? loras.find((l) => l.id === selectedLoraId) ?? null
+    : null;
 
   // Keyboard shortcuts (SPEC.md sec 12 Phase 5). Gated on a project being
   // open (there's nothing to act on otherwise). Save is exempt from the
@@ -1408,6 +1528,44 @@ export default function App() {
                           {take.id === detail.project.active_take_id && (
                             <span className="active-take-badge">active</span>
                           )}
+                          {/* LoRA provenance (SPEC.md sec 4.4): which style
+                              pack this take was generated with, so a styled
+                              result can be reproduced -- resolved to the
+                              pack's name, falling back to the stable pack id
+                              when the meta no longer resolves. Clicking a
+                              still-loadable pack selects it for the next
+                              Generate/Cover/Repaint. */}
+                          {take.lora_id &&
+                            (() => {
+                              const pack = loras.find((l) => l.id === take.lora_id);
+                              if (pack && !pack.error) {
+                                return (
+                                  <button
+                                    type="button"
+                                    className="take-lora-badge"
+                                    title={`Generated with style pack "${pack.name}" — click to select it for the next Generate/Cover/Repaint`}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setSelectedLoraId(pack.id);
+                                    }}
+                                  >
+                                    style: {pack.name}
+                                  </button>
+                                );
+                              }
+                              return (
+                                <span
+                                  className="take-lora-badge"
+                                  title={
+                                    pack
+                                      ? `Generated with style pack "${pack.name}" (${take.lora_id}) — it failed training and cannot be loaded`
+                                      : `Generated with style pack ${take.lora_id} (not found in this project)`
+                                  }
+                                >
+                                  style: {pack ? pack.name : take.lora_id.slice(0, 8)}
+                                </span>
+                              );
+                            })()}
                           <button
                             type="button"
                             className={`favorite-btn ${take.favorite ? "favorited" : ""}`}
@@ -1524,8 +1682,25 @@ export default function App() {
 
                 <section className="pane style-packs">
                   <h3>Style packs</h3>
-                  {loras.length === 0 && <p className="hint">No style packs trained yet.</p>}
+                  {loras.length === 0 && trainingJobs.length === 0 && (
+                    <p className="hint">No style packs trained yet.</p>
+                  )}
                   <ul className="lora-list">
+                    {/* Trainings recovered from the job queue (GET /api/jobs)
+                        -- still queued/running, so no pack meta exists yet
+                        (it is written only when training finishes). Shown
+                        here, not just as this session's busy state, so a
+                        refresh mid-training restores visible progress. */}
+                    {trainingJobs.map((job) => (
+                      <li key={job.id} className="lora-training">
+                        <span className="lora-name">Training style pack…</span>
+                        <span className="lora-status">
+                          {job.status === "queued"
+                            ? "queued — waiting for the GPU"
+                            : "running"}
+                        </span>
+                      </li>
+                    ))}
                     {loras.map((lora) => (
                       <li key={lora.id} className={lora.error ? "lora-error" : ""}>
                         <span className="lora-name">{lora.name}</span>
@@ -1551,16 +1726,27 @@ export default function App() {
                     </label>
                     <button
                       onClick={trainLora}
-                      disabled={busy || loraSourceIds.size < MIN_LORA_SOURCE_TAKES || !loraName.trim()}
+                      disabled={
+                        busy ||
+                        trainingJobs.length > 0 ||
+                        loraSourceIds.size < MIN_LORA_SOURCE_TAKES ||
+                        !loraName.trim()
+                      }
                       title={
-                        loraSourceIds.size < MIN_LORA_SOURCE_TAKES
-                          ? `Select at least ${MIN_LORA_SOURCE_TAKES} takes first`
-                          : !loraName.trim()
-                            ? "Enter a style pack name first"
-                            : undefined
+                        trainingJobs.length > 0
+                          ? "A style pack is already training for this project"
+                          : loraSourceIds.size < MIN_LORA_SOURCE_TAKES
+                            ? `Select at least ${MIN_LORA_SOURCE_TAKES} takes first`
+                            : !loraName.trim()
+                              ? "Enter a style pack name first"
+                              : undefined
                       }
                     >
-                      {busy ? `Training… (${busyStatus ?? "queued"})` : "Train style pack"}
+                      {busy
+                        ? `Training… (${busyStatus ?? "queued"})`
+                        : trainingJobs.length > 0
+                          ? `Training… (${trainingJobs[0].status})`
+                          : "Train style pack"}
                     </button>
                   </div>
                 </section>
@@ -1678,6 +1864,17 @@ export default function App() {
                           ))}
                       </select>
                     </label>
+                    {/* Makes the load-half choice impossible to miss next to
+                        the buttons it affects: the plain <select> above can
+                        read as just another form field. */}
+                    {selectedLora && (
+                      <span
+                        className="lora-active-badge"
+                        title={`Generate/Cover/Repaint will run against the studio_ops base model with style pack "${selectedLora.name}" (SPEC.md sec 4.4)`}
+                      >
+                        Style pack: {selectedLora.name}
+                      </span>
+                    )}
                     <button
                       onClick={generate}
                       disabled={busy}

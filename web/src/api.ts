@@ -76,6 +76,13 @@ export interface Take {
   track_name: string | null;
   favorite: boolean;
   notes: string;
+  // The style pack (LoRA) applied when this take was generated, if any
+  // (SPEC.md sec 4.4 "LoRA train / load") -- server.storage
+  // _normalize_take_meta guarantees the key is present even on takes
+  // written before the field existed. Provenance for reproducing a styled
+  // generation: the UI resolves it to the pack's name via GET
+  // /api/projects/{id}/loras (falling back to this stable id).
+  lora_id: string | null;
 }
 
 export interface ProjectDetail {
@@ -108,6 +115,11 @@ export interface Job {
   dit_profile: string;
   status: string;
   take_id: string | null;
+  // Set for train_lora jobs once the worker allocates the pack (the finished
+  // pack id on `done`; kept on `error` too so a failed training remains a
+  // tracked pack entry). Null while the job is still queued/running and for
+  // every non-train_lora job.
+  lora_id: string | null;
   error: string | null;
   created_at: string;
   updated_at: string;
@@ -298,6 +310,28 @@ export const api = {
       body: JSON.stringify({ take_id: takeId }),
     }),
   getJob: (jobId: string) => request<Job>(`/api/jobs/${jobId}`),
+  // GET /api/jobs with optional narrowing filters, applied server-side
+  // before the limit. The UI uses { projectId, action: "train_lora",
+  // active: true } on project load to recover a style-pack training that
+  // survived a page refresh (training runs up to ~1 hour, SPEC.md sec 4.4)
+  // -- active returns the complete queued/running worklist with no recency
+  // truncation (the server ignores `limit` in that case), so an older
+  // long-running training can never be pushed out by newer or finished
+  // jobs. The recency `limit` applies only when `active` is not set.
+  listJobs: (opts?: {
+    projectId?: string;
+    action?: string;
+    active?: boolean;
+    limit?: number;
+  }) => {
+    const params = new URLSearchParams();
+    if (opts?.projectId) params.set("project_id", opts.projectId);
+    if (opts?.action) params.set("action", opts.action);
+    if (opts?.active) params.set("active", "true");
+    if (opts?.limit != null) params.set("limit", String(opts.limit));
+    const qs = params.toString();
+    return request<Job[]>(`/api/jobs${qs ? `?${qs}` : ""}`);
+  },
   takeAudioUrl: (projectId: string, takeId: string) =>
     `/api/projects/${projectId}/takes/${takeId}/audio`,
   takeLrcUrl: (projectId: string, takeId: string) =>

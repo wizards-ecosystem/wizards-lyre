@@ -341,8 +341,24 @@ def get_job(job_id: str) -> dict:
 
 
 @app.get("/api/jobs")
-def list_jobs(limit: int = 20) -> list[dict]:
-    return jobs.list_recent_jobs(limit=limit)
+def list_jobs(
+    limit: int = 20,
+    project_id: Optional[str] = None,
+    action: Optional[str] = None,
+    active: bool = False,
+) -> list[dict]:
+    # SPEC.md sec 8 "GET /api/jobs | recent jobs". project_id/action are
+    # optional narrowing filters (applied before the limit) -- the web UI
+    # needs them to recover the open project's still-running train_lora job
+    # after a refresh; without a project filter a long training job gets
+    # pushed out of the unfiltered top-N by jobs enqueued behind it.
+    # active=true returns the project's complete still-active (queued/
+    # running) worklist with no recency truncation, so recovery finds an
+    # old running training no matter how many newer or finished rows exist
+    # behind it (see jobs.list_recent_jobs for why `limit` doesn't apply).
+    return jobs.list_recent_jobs(
+        limit=limit, project_id=project_id, action=action, active=active
+    )
 
 
 # Prod: FastAPI serves the built SPA from web/dist (SPEC.md sec 5). Registered
