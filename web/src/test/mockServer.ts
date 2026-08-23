@@ -154,6 +154,11 @@ export function createMockBardServer() {
   const state = {
     projects: [makeProjectSummary()],
     detail: makeProjectDetail(makeTakes(10)),
+    // Projects created via POST /api/projects (SPEC.md sec 8), keyed by id.
+    // The single `detail` above stays the one and only pre-seeded fixture
+    // project (PROJECT_ID); everything created at runtime lives here so GET
+    // /api/projects/{id} has something to return for it afterward.
+    createdDetails: new Map<string, ProjectDetail>(),
     loras: [] as Lora[],
   };
 
@@ -173,6 +178,7 @@ export function createMockBardServer() {
   let jobCounter = 0;
   let loraCounter = 0;
   let uploadCounter = 0;
+  let projectCounter = 0;
 
   function scriptNextJob(script: JobScript): void {
     nextJobScript = script;
@@ -263,10 +269,38 @@ export function createMockBardServer() {
     if (method === "GET" && url === "/api/projects") {
       return Promise.resolve(jsonResponse(state.projects));
     }
+    if (method === "POST" && url === "/api/projects") {
+      const payload = (body ?? {}) as { title?: string; query?: string };
+      projectCounter += 1;
+      const id = `proj-created-${projectCounter}`;
+      const title = payload.title || "Untitled";
+      const project: Project = {
+        id,
+        title,
+        created_at: CREATED_AT,
+        updated_at: CREATED_AT,
+        dit_profile: "iterate",
+        lm_model: "acestep-5Hz-lm-1.7B",
+        active_take_id: null,
+        favorite: false,
+      };
+      state.projects = [...state.projects, makeProjectSummary({ id, title })];
+      const plan = makePlan();
+      if (payload.query) plan.query = payload.query;
+      state.createdDetails.set(id, { project, plan, takes: [] });
+      return Promise.resolve(jsonResponse(project));
+    }
 
     let m = url.match(/^\/api\/projects\/([^/]+)$/);
     if (method === "GET" && m) {
-      return Promise.resolve(jsonResponse(state.detail));
+      if (m[1] === PROJECT_ID) {
+        return Promise.resolve(jsonResponse(state.detail));
+      }
+      const created = state.createdDetails.get(m[1]);
+      if (created) {
+        return Promise.resolve(jsonResponse(created));
+      }
+      return Promise.resolve(jsonResponse({ detail: `no such project ${m[1]}` }, 404));
     }
     if (method === "PATCH" && m) {
       const patch = (body ?? {}) as Partial<Pick<Project, "title" | "dit_profile" | "favorite">>;
