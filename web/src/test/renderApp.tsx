@@ -6,7 +6,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { expect, vi } from "vitest";
 import App from "../App";
-import type { Lora, Take } from "../api";
+import type { Lora, Section, Take } from "../api";
 import { createMockBardServer, type MockBardServer } from "./mockServer";
 
 // The per-take checkbox that opts a take into style-pack training (App.tsx
@@ -20,9 +20,15 @@ export interface OpenedProject {
 }
 
 export async function renderOpenedProject(
-  opts: { takes?: Take[]; loras?: Lora[] } = {},
+  opts: { takes?: Take[]; loras?: Lora[]; sections?: Section[] } = {},
 ): Promise<OpenedProject> {
   const server = createMockBardServer();
+  if (opts.sections) {
+    server.state.detail = {
+      ...server.state.detail,
+      plan: { ...server.state.detail.plan, sections: opts.sections },
+    };
+  }
   if (opts.takes) {
     server.state.detail = {
       ...server.state.detail,

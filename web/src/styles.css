@@ -223,6 +223,59 @@ body {
   gap: 8px;
 }
 
+.plan-sections {
+  margin-top: 12px;
+}
+
+.plan-sections-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.plan-sections-title {
+  color: var(--muted);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.section-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.section-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.section-row .section-name {
+  flex: 1 1 90px;
+  min-width: 60px;
+}
+
+.section-row .section-time {
+  width: 64px;
+  flex: 0 0 auto;
+}
+
+.section-row .section-sep {
+  color: var(--muted);
+  flex: 0 0 auto;
+}
+
+.section-row .section-lyrics {
+  flex: 2 1 120px;
+  min-width: 80px;
+}
+
 .upload-dropzone {
   display: flex;
   flex-direction: column;
@@ -265,6 +318,23 @@ body {
 
 .waveform-wavesurfer {
   width: 100%;
+}
+
+/* Named section labels drawn on the waveform (SPEC.md sec 7.2). The
+   regions plugin marks each region's content element with
+   part="region-content"; keep the text small and legible over the waves. */
+[part="region-content"] {
+  font-size: 11px;
+  color: var(--text);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9);
+  white-space: nowrap;
+}
+
+.region-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
 }
 
 .region-info {

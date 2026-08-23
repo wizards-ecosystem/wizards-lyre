@@ -1,7 +1,7 @@
 import { DragEvent, useCallback, useEffect, useRef, useState } from "react";
 import WaveSurfer from "wavesurfer.js";
 import RegionsPlugin from "wavesurfer.js/plugins/regions";
-import { api, Health, Job, Lora, Plan, ProjectDetail, ProjectSummary } from "./api";
+import { api, Health, Job, Lora, Plan, ProjectDetail, ProjectSummary, Section } from "./api";
 
 const HEALTH_POLL_INTERVAL_MS = 5000;
 const JOB_POLL_INTERVAL_MS = 1000;
@@ -23,6 +23,15 @@ const MIN_LORA_SOURCE_TAKES = 8;
 // keystroke (which can complete out of order and let an older request
 // overwrite a newer edit on disk).
 const PLAN_SAVE_DEBOUNCE_MS = 500;
+
+// Identities for the two kinds of waveform regions (SPEC.md sec 9.2), which
+// share one RegionsPlugin instance: the single ad-hoc repaint selection and
+// the persisted plan section labels. The fixed id scheme is what lets each
+// side tell its own regions apart -- creating a repaint selection must not
+// clear the saved section labels, and re-rendering the labels must not touch
+// the selection.
+const REPAINT_REGION_ID = "repaint-selection";
+const SECTION_REGION_ID_PREFIX = "section-label-";
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -620,18 +629,26 @@ export default function App() {
     // waveform with no indication anything went wrong.
     wavesurfer.on("error", (err) => setErrorMsg(`waveform load failed: ${err.message}`));
 
-    // Only one region at a time (SPEC.md: drag a region -> repaint) -- a new
-    // drag replaces whatever was there before instead of accumulating.
+    // Only one repaint selection at a time (SPEC.md: drag a region ->
+    // repaint) -- a new drag replaces the previous selection instead of
+    // accumulating. Persisted section labels (SECTION_REGION_ID_PREFIX) live
+    // on this same plugin instance and must survive that cleanup, so this
+    // only ever removes regions sharing the selection's fixed id. The
+    // iteration copies the list first because remove() mutates it in place.
     regions.on("region-created", (created) => {
-      for (const existing of regions.getRegions()) {
-        if (existing.id !== created.id) existing.remove();
+      if (created.id.startsWith(SECTION_REGION_ID_PREFIX)) return;
+      for (const existing of regions.getRegions().slice()) {
+        if (existing !== created && existing.id === created.id) existing.remove();
       }
       setRegion({ start: created.start, end: created.end });
     });
     regions.on("region-updated", (updated) => {
+      // Section labels are drag/resize-disabled, but guard anyway: only the
+      // repaint selection feeds the region state used by Repaint/Lego.
+      if (updated.id !== REPAINT_REGION_ID) return;
       setRegion({ start: updated.start, end: updated.end });
     });
-    regions.enableDragSelection({});
+    regions.enableDragSelection({ id: REPAINT_REGION_ID });
 
     return () => {
       wavesurfer.destroy();
@@ -640,8 +657,45 @@ export default function App() {
     };
   }, [selectedTakeId]);
 
+  // Renders plan.sections as labeled, non-editable regions on the waveform
+  // (SPEC.md sec 7.2: sections are "region labels on the waveform") and
+  // keeps them in sync with the Plan pane's section list -- editing, adding,
+  // or deleting a section there redraws its label here. addRegion is safe to
+  // call before the audio finishes decoding: the plugin defers positioning
+  // until ready. Declared after the mount effect above so that on a take
+  // switch effects run in order and the fresh RegionsPlugin already exists
+  // when labels are (re)drawn.
+  useEffect(() => {
+    const regions = regionsPluginRef.current;
+    if (!regions) return;
+    // Copy before iterating: remove() mutates the plugin's region list.
+    for (const existing of regions.getRegions().slice()) {
+      if (existing.id.startsWith(SECTION_REGION_ID_PREFIX)) existing.remove();
+    }
+    for (const [index, section] of (detail?.plan.sections ?? []).entries()) {
+      regions.addRegion({
+        id: `${SECTION_REGION_ID_PREFIX}${index}`,
+        start: section.start_sec,
+        // A section whose end was typed before its start in the Plan pane
+        // would otherwise render with zero/negative width and vanish.
+        end: Math.max(section.end_sec, section.start_sec),
+        content: section.name,
+        // Accent tint so labels are visually distinct from the repaint
+        // selection's default gray; drag/resize off -- these are labels,
+        // edited via the Plan pane, not on the waveform.
+        color: "rgba(124, 140, 255, 0.15)",
+        drag: false,
+        resize: false,
+      });
+    }
+  }, [detail?.plan.sections, selectedTakeId]);
+
   function clearRegion() {
-    regionsPluginRef.current?.clearRegions();
+    // Remove only the repaint selection -- persisted section labels share
+    // this RegionsPlugin instance and must survive clearing it.
+    for (const existing of regionsPluginRef.current?.getRegions().slice() ?? []) {
+      if (existing.id === REPAINT_REGION_ID) existing.remove();
+    }
     setRegion(null);
   }
 
@@ -704,6 +758,41 @@ export default function App() {
       // real outcome via lastSaveOutcomeRef if something awaits it later.
       enqueueSave().catch((err) => setErrorMsg(String(err)));
     }, PLAN_SAVE_DEBOUNCE_MS);
+  }
+
+  // Song-structure sections (SPEC.md sec 7.2) live entirely in plan.json and
+  // are round-tripped verbatim by the backend, so every mutation below just
+  // rewrites plan.sections and funnels through savePlanField -- the exact
+  // same debounced/serialized PUT /plan path as every other plan field, no
+  // separate save mechanism.
+  function updateSection(index: number, patch: Partial<Section>): void {
+    if (!detail) return;
+    const sections = detail.plan.sections.map((section, i) =>
+      i === index ? { ...section, ...patch } : section,
+    );
+    savePlanField("sections", sections);
+  }
+
+  function addSection(section?: Section): void {
+    if (!detail) return;
+    const blank: Section = section ?? { name: "", start_sec: 0, end_sec: 0, lyrics: "" };
+    savePlanField("sections", [...detail.plan.sections, blank]);
+  }
+
+  function removeSection(index: number): void {
+    if (!detail) return;
+    savePlanField(
+      "sections",
+      detail.plan.sections.filter((_, i) => i !== index),
+    );
+  }
+
+  // Turns the single ad-hoc repaint region (drag-select on the waveform) into
+  // a persisted named section, reusing the existing region interaction rather
+  // than a second region-drawing mechanism (SPEC.md sec 7.2 / 9.2).
+  function addSectionFromRegion(): void {
+    if (!region) return;
+    addSection({ name: "", start_sec: region.start, end_sec: region.end, lyrics: "" });
   }
 
   async function generate() {
@@ -1225,6 +1314,65 @@ export default function App() {
                       />
                     </label>
                   </div>
+
+                  <div className="plan-sections">
+                    <div className="plan-sections-header">
+                      <span className="plan-sections-title">Sections</span>
+                      <button type="button" onClick={() => addSection()}>
+                        Add section
+                      </button>
+                    </div>
+                    {detail.plan.sections.length === 0 && (
+                      <p className="hint">
+                        No sections. Add one here, or drag a waveform region and use “Add
+                        section from region”.
+                      </p>
+                    )}
+                    <ul className="section-list">
+                      {detail.plan.sections.map((section, index) => (
+                        <li key={index} className="section-row">
+                          <input
+                            className="section-name"
+                            placeholder="name"
+                            value={section.name}
+                            onChange={(e) => updateSection(index, { name: e.target.value })}
+                          />
+                          <input
+                            className="section-time"
+                            type="number"
+                            min={0}
+                            step={0.1}
+                            title="start (sec)"
+                            value={section.start_sec}
+                            onChange={(e) =>
+                              updateSection(index, { start_sec: Number(e.target.value) })
+                            }
+                          />
+                          <span className="section-sep">–</span>
+                          <input
+                            className="section-time"
+                            type="number"
+                            min={0}
+                            step={0.1}
+                            title="end (sec)"
+                            value={section.end_sec}
+                            onChange={(e) =>
+                              updateSection(index, { end_sec: Number(e.target.value) })
+                            }
+                          />
+                          <input
+                            className="section-lyrics"
+                            placeholder="lyrics snippet"
+                            value={section.lyrics}
+                            onChange={(e) => updateSection(index, { lyrics: e.target.value })}
+                          />
+                          <button type="button" onClick={() => removeSection(index)}>
+                            Delete
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
                 </section>
 
                 <section className="pane takes">
@@ -1488,6 +1636,20 @@ export default function App() {
                     ) : (
                       <p className="hint">no active take</p>
                     )}
+                  </div>
+                  <div className="region-actions">
+                    <button
+                      type="button"
+                      onClick={addSectionFromRegion}
+                      disabled={!region}
+                      title={
+                        region
+                          ? "Append this region as a named section in the Plan"
+                          : "Drag a region on the waveform first"
+                      }
+                    >
+                      Add section from region
+                    </button>
                   </div>
                   {region && (
                     <div className="region-info">

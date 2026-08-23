@@ -110,6 +110,9 @@ export function makePlan(): Plan {
     timesignature: "4/4",
     duration_sec: 120,
     sections: [],
+    // Matches server.storage.default_plan() (and keeps this literal a valid
+    // Plan per the type added by the caption-rewrite job, SPEC.md sec 9.2).
+    caption_rewrite: true,
   };
 }
 
@@ -217,6 +220,14 @@ export function createMockBardServer() {
     let m = url.match(/^\/api\/projects\/([^/]+)$/);
     if (method === "GET" && m) {
       return Promise.resolve(jsonResponse(state.detail));
+    }
+
+    m = url.match(/^\/api\/projects\/([^/]+)\/plan$/);
+    if (method === "PUT" && m) {
+      // SPEC.md sec 8: PUT /plan replaces plan.json outright, so the mock
+      // swaps in whatever body it got verbatim (sections included).
+      state.detail = { ...state.detail, plan: (body ?? {}) as Plan };
+      return Promise.resolve(jsonResponse(state.detail.plan));
     }
 
     m = url.match(/^\/api\/projects\/([^/]+)\/loras$/);

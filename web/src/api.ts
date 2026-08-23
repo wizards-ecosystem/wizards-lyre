@@ -25,6 +25,16 @@ export interface Project {
   favorite: boolean;
 }
 
+// A named song-structure region (SPEC.md sec 7.2). Purely a UI concern --
+// region labels on the waveform; ACE-Step's text2music never reads it -- so
+// the backend round-trips it verbatim inside plan.json.
+export interface Section {
+  name: string;
+  start_sec: number;
+  end_sec: number;
+  lyrics: string;
+}
+
 export interface Plan {
   query: string;
   caption: string;
@@ -36,7 +46,7 @@ export interface Plan {
   keyscale: string | null;
   timesignature: string;
   duration_sec: number;
-  sections: unknown[];
+  sections: Section[];
   // SPEC.md sec 9.2: Custom-mode checkbox -- whether ACE-Step's LM
   // ("thinking") is allowed to rewrite the user's caption. Simple mode
   // ignores this and always runs with thinking=true.
