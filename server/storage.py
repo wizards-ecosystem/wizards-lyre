@@ -521,12 +521,19 @@ def load_project(project_id: str) -> dict:
         if not path.exists():
             raise ProjectNotFound(project_id)
         return _read_json(path)
-    except FileNotFoundError as exc:
+    except (FileNotFoundError, PermissionError) as exc:
         # A concurrent delete_project can rmtree the directory in the gap
         # between the exists() check and the read -- same outcome as the
-        # check itself failing. Without this conversion the race surfaces a
-        # raw OSError instead of the normal ProjectNotFound (-> 404 for HTTP
-        # callers, expected-rejection for enqueue_job racing a deletion).
+        # check itself failing. On Windows this race can surface as either
+        # error depending on exactly when the read lands relative to the
+        # rmtree: FileNotFoundError once the entry is gone, or PermissionError
+        # (WinError 5) for a read that starts while the file is mid-delete
+        # (reviewer-flagged flake under test_project_delete.py's concurrent
+        # enqueue test -- jobs.enqueue_job's unlocked load_project call races
+        # delete_project's locked rmtree directly). Without converting both,
+        # the race surfaces a raw OSError instead of the normal
+        # ProjectNotFound (-> 404 for HTTP callers, expected-rejection for
+        # enqueue_job racing a deletion).
         raise ProjectNotFound(project_id) from exc
 
 
