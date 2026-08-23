@@ -14,8 +14,8 @@ All six phases in SPEC.md sec 12 are implemented:
   `worker/acestep_worker.py`, which calls ACE-Step 1.5's `generate_music` -- it requires ACE-Step
   installed and weights downloaded (see below).
 - **Phase 2 (studio loop):** project library, the plan editor (simple + custom), waveform + region
-  display/select, `cover`, and `repaint` (both take source select + strength), reusing generate's
-  plan-save/poll UX.
+  display/select, `cover` (take source select + strength), and `repaint` (take/region source, no
+  strength control), reusing generate's plan-save/poll UX.
 - **Phase 3 (base swap):** worker unload/load, `extract` / `lego` / `complete` job types, and a
   confirmation UI for the `studio_ops` base-model swap.
 - **Phase 4 (polish):** a quality score on takes, LRC output when ACE-Step supplies timestamps,
@@ -24,7 +24,7 @@ All six phases in SPEC.md sec 12 are implemented:
 - **Phase 5 (studio ergonomics):** A/B take compare, project export as a zip (`project.json`,
   `plan.json`, active mix, optional stems), keyboard shortcuts (generate, play/pause, next/prev
   take, save plan), and a UI to walk `parent_take_id` and restore an earlier take.
-- **Phase 6 (library and ingest):** search and favorites for projects/takes, free-text take
+- **Phase 6 (library and ingest):** project search, favorites for projects/takes, free-text take
   notes, a loudness/peak meter on the player, and drag-drop of a local WAV/MP3 as a cover/repaint
   source.
 
