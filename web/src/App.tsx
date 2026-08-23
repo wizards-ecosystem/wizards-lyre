@@ -44,6 +44,11 @@ const SECTION_REGION_ID_PREFIX = "section-label-";
 // attached (server.jobs._resolve_dit_profile rejects/forces it either way).
 const DIT_PROFILE_OPTIONS = ["iterate", "polish", "quality"] as const;
 
+// SPEC.md sec 4.4/9.2: "Lyrics carry structure tags such as [Verse],
+// [Chorus], [Bridge], [Intro], [Outro]" -- the lyrics textarea is a "textarea
+// with structure tags", so the palette below offers exactly this fixed set.
+const STRUCTURE_TAGS = ["Intro", "Verse", "Chorus", "Bridge", "Outro"] as const;
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -297,6 +302,8 @@ export default function App() {
   // activeId (and the rest of the UI) is already B -- so a subsequent edit
   // would be saved under B's project id but built from A's plan.
   const activeIdRef = useRef<string | null>(null);
+
+  const lyricsTextareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   const waveformContainerRef = useRef<HTMLDivElement | null>(null);
   const wavesurferRef = useRef<WaveSurfer | null>(null);
@@ -911,6 +918,30 @@ export default function App() {
     }, PLAN_SAVE_DEBOUNCE_MS);
   }
 
+  // Inserts a structure tag (SPEC.md sec 4.4/9.2) at the lyrics textarea's
+  // current cursor position, replacing any selection -- or appends it on a
+  // new line when the textarea isn't focused/has no tracked selection.
+  // Routes through savePlanField exactly like typing the tag by hand, so
+  // there's no second save mechanism for tag-button edits.
+  function insertLyricsTag(tag: string): void {
+    if (!detail) return;
+    const current = detail.plan.lyrics ?? "";
+    const el = lyricsTextareaRef.current;
+    const hasSelection = el && document.activeElement === el;
+    const start = hasSelection ? el.selectionStart : current.length;
+    const end = hasSelection ? el.selectionEnd : current.length;
+    const needsLeadingNewline = start > 0 && current[start - 1] !== "\n";
+    const insertion = `${needsLeadingNewline ? "\n" : ""}${tag}\n`;
+    const next = current.slice(0, start) + insertion + current.slice(end);
+    savePlanField("lyrics", next);
+
+    const cursor = start + insertion.length;
+    requestAnimationFrame(() => {
+      el?.focus();
+      el?.setSelectionRange(cursor, cursor);
+    });
+  }
+
   // Song-structure sections (SPEC.md sec 7.2) live entirely in plan.json and
   // are round-tripped verbatim by the backend, so every mutation below just
   // rewrites plan.sections and funnels through savePlanField -- the exact
@@ -1420,7 +1451,20 @@ export default function App() {
                   </label>
                   <label>
                     Lyrics
+                    <div className="lyrics-tag-palette">
+                      {STRUCTURE_TAGS.map((tag) => (
+                        <button
+                          key={tag}
+                          type="button"
+                          className="lyrics-tag-button"
+                          onClick={() => insertLyricsTag(`[${tag}]`)}
+                        >
+                          [{tag}]
+                        </button>
+                      ))}
+                    </div>
                     <textarea
+                      ref={lyricsTextareaRef}
                       value={detail.plan.lyrics}
                       onChange={(e) => savePlanField("lyrics", e.target.value)}
                     />

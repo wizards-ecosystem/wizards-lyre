@@ -217,6 +217,26 @@ body {
   gap: 8px;
 }
 
+.lyrics-tag-palette {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.lyrics-tag-button {
+  padding: 2px 6px;
+  font-size: 11px;
+  font-weight: 500;
+  background: #101116;
+  color: var(--muted);
+  border: 1px solid var(--border);
+}
+
+.lyrics-tag-button:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
 .plan-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
