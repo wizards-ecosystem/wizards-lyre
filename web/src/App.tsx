@@ -1,7 +1,7 @@
 import { DragEvent, useCallback, useEffect, useRef, useState } from "react";
 import WaveSurfer from "wavesurfer.js";
 import RegionsPlugin from "wavesurfer.js/plugins/regions";
-import { api, Health, Job, Plan, ProjectDetail, ProjectSummary } from "./api";
+import { api, Health, Job, Lora, Plan, ProjectDetail, ProjectSummary } from "./api";
 
 const HEALTH_POLL_INTERVAL_MS = 5000;
 const JOB_POLL_INTERVAL_MS = 1000;
@@ -9,6 +9,15 @@ const JOB_POLL_INTERVAL_MS = 1000;
 // behind a dedicated worker process); give it a generous ceiling before
 // giving up on polling rather than declaring failure too early.
 const JOB_POLL_TIMEOUT_MS = 10 * 60 * 1000;
+// train_lora runs the whole training loop under the worker's GPU-exclusive
+// lock and can take roughly an hour (SPEC.md sec 4.4) -- far longer than the
+// ceiling above that's tuned for ordinary generate/cover/repaint jobs.
+const LORA_TRAIN_POLL_TIMEOUT_MS = 90 * 60 * 1000;
+
+// SPEC.md sec 4.4 "Style pack | LoRA train / load | 8+ songs" -- mirrors
+// server.jobs.MIN_LORA_SOURCE_TAKES so the Train button can disable itself
+// before even attempting a request the server would reject.
+const MIN_LORA_SOURCE_TAKES = 8;
 
 // Coalesce rapid keystrokes into one PUT instead of firing one per
 // keystroke (which can complete out of order and let an older request
@@ -22,8 +31,12 @@ function sleep(ms: number): Promise<void> {
 // A job only finishes async, via server.jobs' queued -> running -> done|error
 // lifecycle (SPEC.md sec 5) -- the enqueue response is just the initial
 // `queued` row, so the caller has to keep polling /api/jobs/{id} itself.
-async function pollJob(jobId: string, onUpdate?: (job: Job) => void): Promise<Job> {
-  const deadline = Date.now() + JOB_POLL_TIMEOUT_MS;
+async function pollJob(
+  jobId: string,
+  onUpdate?: (job: Job) => void,
+  timeoutMs: number = JOB_POLL_TIMEOUT_MS,
+): Promise<Job> {
+  const deadline = Date.now() + timeoutMs;
   for (;;) {
     const job = await api.getJob(jobId);
     onUpdate?.(job);
@@ -31,7 +44,7 @@ async function pollJob(jobId: string, onUpdate?: (job: Job) => void): Promise<Jo
       return job;
     }
     if (Date.now() > deadline) {
-      throw new Error(`job ${jobId} is still ${job.status} after ${JOB_POLL_TIMEOUT_MS / 1000}s`);
+      throw new Error(`job ${jobId} is still ${job.status} after ${timeoutMs / 1000}s`);
     }
     await sleep(JOB_POLL_INTERVAL_MS);
   }
@@ -192,6 +205,17 @@ export default function App() {
   const [includeStems, setIncludeStems] = useState(true);
   const [health, setHealth] = useState<Health | null>(null);
   const [healthError, setHealthError] = useState<string | null>(null);
+  const [loras, setLoras] = useState<Lora[]>([]);
+  // Multi-select of takes to train a style pack from (SPEC.md sec 4.4 "8+
+  // songs") -- deliberately separate from selectedTakeId/compareTakeId,
+  // which are single-select take-list concepts used for a different purpose
+  // (waveform/cover/repaint source, A/B compare).
+  const [loraSourceIds, setLoraSourceIds] = useState<Set<string>>(new Set());
+  const [loraName, setLoraName] = useState("");
+  // The style pack (if any) to apply to the next generate/cover/repaint
+  // (SPEC.md sec 4.4 "LoRA train / load" -- the load half). Separate from
+  // loraSourceIds above, which only feeds *training* a new pack.
+  const [selectedLoraId, setSelectedLoraId] = useState<string | null>(null);
 
   // Plan saves are debounced and serialized: at most one PUT /plan in
   // flight at a time, always carrying the latest edit. Without this, one
@@ -446,6 +470,13 @@ export default function App() {
     setDetail(data);
   }
 
+  async function refreshLoras(id: string) {
+    const data = await api.listLoras(id);
+    // Same stale-response guard as refreshDetail above.
+    if (activeIdRef.current !== id) return;
+    setLoras(data);
+  }
+
   useEffect(() => {
     refreshProjects().catch((err) => setErrorMsg(String(err)));
   }, []);
@@ -482,10 +513,15 @@ export default function App() {
     setCompareTakeId(null);
     setUploadedSourcePath(null);
     setUploadedSourceName(null);
+    setLoraSourceIds(new Set());
+    setLoraName("");
+    setSelectedLoraId(null);
     if (activeId) {
       refreshDetail(activeId).catch((err) => setErrorMsg(String(err)));
+      refreshLoras(activeId).catch((err) => setErrorMsg(String(err)));
     } else {
       setDetail(null);
+      setLoras([]);
     }
   }, [activeId]);
 
@@ -647,7 +683,7 @@ export default function App() {
       // the plan from before the user's last edit (e.g. the query/caption
       // they just typed).
       await flushPendingPlanSave();
-      const queued = await api.generate(activeId);
+      const queued = await api.generate(activeId, selectedLoraId);
       const job = await pollJob(queued.id, (update) => setBusyStatus(update.status));
       if (job.status === "error") {
         setErrorMsg(job.error ?? "generate job failed");
@@ -675,7 +711,7 @@ export default function App() {
       const source = selectedTakeId
         ? { takeId: selectedTakeId }
         : { uploadPath: uploadedSourcePath! };
-      const queued = await api.cover(activeId, source, coverStrength);
+      const queued = await api.cover(activeId, source, coverStrength, selectedLoraId);
       const job = await pollJob(queued.id, (update) => setBusyStatus(update.status));
       if (job.status === "error") {
         setErrorMsg(job.error ?? "cover job failed");
@@ -712,7 +748,7 @@ export default function App() {
         : { uploadPath: uploadedSourcePath! };
       const start = selectedTakeId ? region!.start : 0;
       const end = selectedTakeId ? region!.end : -1;
-      const queued = await api.repaint(activeId, source, start, end);
+      const queued = await api.repaint(activeId, source, start, end, selectedLoraId);
       const job = await pollJob(queued.id, (update) => setBusyStatus(update.status));
       if (job.status === "error") {
         setErrorMsg(job.error ?? "repaint job failed");
@@ -817,6 +853,66 @@ export default function App() {
       await refreshDetail(activeId);
     } catch (err) {
       setErrorMsg(String(err));
+    } finally {
+      setBusy(false);
+      setBusyStatus(null);
+    }
+  }
+
+  function toggleLoraSource(takeId: string): void {
+    setLoraSourceIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(takeId)) next.delete(takeId);
+      else next.add(takeId);
+      return next;
+    });
+  }
+
+  async function trainLora() {
+    if (!activeId || loraSourceIds.size < MIN_LORA_SOURCE_TAKES || !loraName.trim()) return;
+    // Captured once, up front -- training can run for up to
+    // LORA_TRAIN_POLL_TIMEOUT_MS (~90 minutes), and nothing stops the user
+    // from switching to a different project while it's in flight. Every
+    // mutation below that touches project-specific state (the error banner,
+    // the source-take selection, the name field, the mid-poll status text)
+    // must check activeIdRef against this before writing, or a stale poll
+    // tick / late completion for project A can clobber project B's
+    // in-progress selections or surface A's failure in B's UI (reviewer-
+    // flagged). busy itself is the exception: it's the single cross-app
+    // "a job is in flight" lock (SPEC.md sec 4.3 one GPU occupant), not
+    // project-specific data, so it's still cleared unconditionally in
+    // `finally` -- guarding that clear would leave every other project
+    // permanently disabled if the user isn't back on this one the moment
+    // training finishes.
+    const projectId = activeId;
+    const sourceIds = Array.from(loraSourceIds);
+    const name = loraName.trim();
+    setBusy(true);
+    setBusyStatus("queued");
+    setErrorMsg(null);
+    try {
+      const queued = await api.trainLora(projectId, sourceIds, name);
+      // Training runs the ACE-Step training loop under the worker's
+      // GPU-exclusive lock and can take roughly an hour (SPEC.md sec 4.4) --
+      // far past the default job-poll ceiling tuned for generate/cover/etc.
+      const job = await pollJob(
+        queued.id,
+        (update) => {
+          if (activeIdRef.current === projectId) setBusyStatus(update.status);
+        },
+        LORA_TRAIN_POLL_TIMEOUT_MS,
+      );
+      if (activeIdRef.current === projectId) {
+        if (job.status === "error") {
+          setErrorMsg(job.error ?? "train_lora job failed");
+        } else {
+          setLoraSourceIds(new Set());
+          setLoraName("");
+        }
+      }
+      await refreshLoras(projectId);
+    } catch (err) {
+      if (activeIdRef.current === projectId) setErrorMsg(String(err));
     } finally {
       setBusy(false);
       setBusyStatus(null);
@@ -1064,6 +1160,14 @@ export default function App() {
                         onClick={() => setSelectedTakeId(take.id)}
                       >
                         <div className="take-meta">
+                          <input
+                            type="checkbox"
+                            className="lora-source-checkbox"
+                            title="Include in style pack training source"
+                            checked={loraSourceIds.has(take.id)}
+                            onClick={(e) => e.stopPropagation()}
+                            onChange={() => toggleLoraSource(take.id)}
+                          />
                           <span>{take.task_type}</span>
                           <span>seed {take.seed}</span>
                           <span>
@@ -1187,6 +1291,49 @@ export default function App() {
                   </div>
                 </section>
 
+                <section className="pane style-packs">
+                  <h3>Style packs</h3>
+                  {loras.length === 0 && <p className="hint">No style packs trained yet.</p>}
+                  <ul className="lora-list">
+                    {loras.map((lora) => (
+                      <li key={lora.id} className={lora.error ? "lora-error" : ""}>
+                        <span className="lora-name">{lora.name}</span>
+                        <span className="lora-status">{lora.error ? `error: ${lora.error}` : lora.status ?? "—"}</span>
+                        <span className="lora-loss">
+                          {lora.final_loss != null ? `loss ${lora.final_loss.toFixed(4)}` : ""}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                  <div className="lora-train-panel">
+                    <p className="hint">
+                      Check {MIN_LORA_SOURCE_TAKES}+ takes above, name the pack, then train.
+                      Selected: {loraSourceIds.size}/{MIN_LORA_SOURCE_TAKES}
+                    </p>
+                    <label>
+                      Style pack name
+                      <input
+                        placeholder="my-style"
+                        value={loraName}
+                        onChange={(e) => setLoraName(e.target.value)}
+                      />
+                    </label>
+                    <button
+                      onClick={trainLora}
+                      disabled={busy || loraSourceIds.size < MIN_LORA_SOURCE_TAKES || !loraName.trim()}
+                      title={
+                        loraSourceIds.size < MIN_LORA_SOURCE_TAKES
+                          ? `Select at least ${MIN_LORA_SOURCE_TAKES} takes first`
+                          : !loraName.trim()
+                            ? "Enter a style pack name first"
+                            : undefined
+                      }
+                    >
+                      {busy ? `Training… (${busyStatus ?? "queued"})` : "Train style pack"}
+                    </button>
+                  </div>
+                </section>
+
                 {compareTakeId &&
                   (() => {
                     const compareTake = detail.takes.find((t) => t.id === compareTakeId);
@@ -1268,6 +1415,24 @@ export default function App() {
                     </div>
                   )}
                   <div className="waveform-actions">
+                    <label className="lora-select">
+                      Style pack
+                      <select
+                        value={selectedLoraId ?? ""}
+                        onChange={(e) => setSelectedLoraId(e.target.value || null)}
+                        disabled={busy}
+                        title="Applies to Generate/Cover/Repaint below (SPEC.md sec 4.4)"
+                      >
+                        <option value="">None</option>
+                        {loras
+                          .filter((lora) => !lora.error)
+                          .map((lora) => (
+                            <option key={lora.id} value={lora.id}>
+                              {lora.name}
+                            </option>
+                          ))}
+                      </select>
+                    </label>
                     <button
                       onClick={generate}
                       disabled={busy}
