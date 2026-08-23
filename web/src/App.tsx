@@ -219,6 +219,11 @@ function TakeAudioPlayer({
 export default function App() {
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [librarySearch, setLibrarySearch] = useState("");
+  // Jukebox-style inline preview from the library list: one shared <audio>
+  // element so starting a second project's preview stops the first rather
+  // than letting previews stack up concurrently.
+  const [previewProjectId, setPreviewProjectId] = useState<string | null>(null);
+  const previewAudioRef = useRef<HTMLAudioElement | null>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [detail, setDetail] = useState<ProjectDetail | null>(null);
   const [newTitle, setNewTitle] = useState("");
@@ -417,6 +422,23 @@ export default function App() {
     } catch (err) {
       setErrorMsg(String(err));
     }
+  }
+
+  // SPEC.md sec 9.1 "Play last take inline (optional)": preview a project's
+  // active take straight from the library list, without opening it. A single
+  // shared <audio> element makes this jukebox-style -- playing one project's
+  // preview replaces whatever was previously playing.
+  function togglePreview(p: ProjectSummary): void {
+    const audio = previewAudioRef.current;
+    if (!audio || !p.active_take_id) return;
+    if (previewProjectId === p.id) {
+      audio.pause();
+      setPreviewProjectId(null);
+      return;
+    }
+    audio.src = api.takeAudioUrl(p.id, p.active_take_id);
+    audio.play();
+    setPreviewProjectId(p.id);
   }
 
   // SPEC.md sec 4.1: the DiT profile is a project-level default, persisted
@@ -1416,6 +1438,23 @@ export default function App() {
                   >
                     {p.favorite ? "★" : "☆"}
                   </button>
+                  <button
+                    className="preview-btn"
+                    title={
+                      p.active_take_id
+                        ? previewProjectId === p.id
+                          ? "Pause preview"
+                          : "Play last take"
+                        : "No takes yet"
+                    }
+                    disabled={!p.active_take_id}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      togglePreview(p);
+                    }}
+                  >
+                    {previewProjectId === p.id ? "⏸" : "▶"}
+                  </button>
                   <button className="open-btn" onClick={() => switchActiveProject(p.id)}>
                     Open
                   </button>
@@ -1432,6 +1471,11 @@ export default function App() {
                 </li>
               ))}
           </ul>
+          <audio
+            ref={previewAudioRef}
+            onEnded={() => setPreviewProjectId(null)}
+            style={{ display: "none" }}
+          />
         </aside>
 
         <main className="workspace">
