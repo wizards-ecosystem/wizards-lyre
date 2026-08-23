@@ -870,28 +870,49 @@ export default function App() {
 
   async function trainLora() {
     if (!activeId || loraSourceIds.size < MIN_LORA_SOURCE_TAKES || !loraName.trim()) return;
+    // Captured once, up front -- training can run for up to
+    // LORA_TRAIN_POLL_TIMEOUT_MS (~90 minutes), and nothing stops the user
+    // from switching to a different project while it's in flight. Every
+    // mutation below that touches project-specific state (the error banner,
+    // the source-take selection, the name field, the mid-poll status text)
+    // must check activeIdRef against this before writing, or a stale poll
+    // tick / late completion for project A can clobber project B's
+    // in-progress selections or surface A's failure in B's UI (reviewer-
+    // flagged). busy itself is the exception: it's the single cross-app
+    // "a job is in flight" lock (SPEC.md sec 4.3 one GPU occupant), not
+    // project-specific data, so it's still cleared unconditionally in
+    // `finally` -- guarding that clear would leave every other project
+    // permanently disabled if the user isn't back on this one the moment
+    // training finishes.
+    const projectId = activeId;
+    const sourceIds = Array.from(loraSourceIds);
+    const name = loraName.trim();
     setBusy(true);
     setBusyStatus("queued");
     setErrorMsg(null);
     try {
-      const queued = await api.trainLora(activeId, Array.from(loraSourceIds), loraName.trim());
+      const queued = await api.trainLora(projectId, sourceIds, name);
       // Training runs the ACE-Step training loop under the worker's
       // GPU-exclusive lock and can take roughly an hour (SPEC.md sec 4.4) --
       // far past the default job-poll ceiling tuned for generate/cover/etc.
       const job = await pollJob(
         queued.id,
-        (update) => setBusyStatus(update.status),
+        (update) => {
+          if (activeIdRef.current === projectId) setBusyStatus(update.status);
+        },
         LORA_TRAIN_POLL_TIMEOUT_MS,
       );
-      if (job.status === "error") {
-        setErrorMsg(job.error ?? "train_lora job failed");
-      } else {
-        setLoraSourceIds(new Set());
-        setLoraName("");
+      if (activeIdRef.current === projectId) {
+        if (job.status === "error") {
+          setErrorMsg(job.error ?? "train_lora job failed");
+        } else {
+          setLoraSourceIds(new Set());
+          setLoraName("");
+        }
       }
-      await refreshLoras(activeId);
+      await refreshLoras(projectId);
     } catch (err) {
-      setErrorMsg(String(err));
+      if (activeIdRef.current === projectId) setErrorMsg(String(err));
     } finally {
       setBusy(false);
       setBusyStatus(null);
