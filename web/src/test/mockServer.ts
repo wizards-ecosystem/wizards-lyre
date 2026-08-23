@@ -159,12 +159,20 @@ export function createMockBardServer() {
 
   const jobEntries = new Map<
     string,
-    { projectId: string; action: string; script: JobScript; pollIndex: number }
+    {
+      projectId: string;
+      action: string;
+      script: JobScript;
+      pollIndex: number;
+      takeAdded: boolean;
+    }
   >();
   let nextJobScript: JobScript | null = null;
   let jobsPostFailure: { status: number; body: unknown } | null = null;
+  let uploadFailure: { status: number; body: unknown } | null = null;
   let jobCounter = 0;
   let loraCounter = 0;
+  let uploadCounter = 0;
 
   function scriptNextJob(script: JobScript): void {
     nextJobScript = script;
@@ -174,6 +182,12 @@ export function createMockBardServer() {
   // status/body (server-side validation errors, e.g. the 8-take floor).
   function failNextJobsPost(status: number, body: unknown): void {
     jobsPostFailure = { status, body };
+  }
+
+  // Makes the next POST /api/projects/{id}/uploads fail with the given HTTP
+  // status/body (e.g. an unsupported file type/size the server rejects).
+  function failNextUpload(status: number, body: unknown): void {
+    uploadFailure = { status, body };
   }
 
   function jobRow(
@@ -288,6 +302,19 @@ export function createMockBardServer() {
       return Promise.resolve(jsonResponse(state.loras));
     }
 
+    m = url.match(/^\/api\/projects\/([^/]+)\/uploads$/);
+    if (method === "POST" && m) {
+      if (uploadFailure) {
+        const failure = uploadFailure;
+        uploadFailure = null;
+        return Promise.resolve(jsonResponse(failure.body, failure.status));
+      }
+      uploadCounter += 1;
+      return Promise.resolve(
+        jsonResponse({ upload_path: `uploads/upload-${uploadCounter}.wav` }),
+      );
+    }
+
     m = url.match(/^\/api\/projects\/([^/]+)\/jobs$/);
     if (method === "POST" && m) {
       if (jobsPostFailure) {
@@ -301,7 +328,7 @@ export function createMockBardServer() {
       const id = `job-${jobCounter}`;
       const script = nextJobScript ?? { statuses: ["done"] };
       nextJobScript = null;
-      jobEntries.set(id, { projectId: m[1], action, script, pollIndex: 0 });
+      jobEntries.set(id, { projectId: m[1], action, script, pollIndex: 0, takeAdded: false });
       // A successful train_lora makes the pack listable right away, like
       // server.jobs._run_train_lora_job writing meta.json before the job
       // row flips to done (the UI re-fetches this list after the poll).
@@ -330,6 +357,17 @@ export function createMockBardServer() {
           Math.min(entry.pollIndex, entry.script.statuses.length - 1)
         ];
       entry.pollIndex += 1;
+      // Mirrors server.jobs writing the new take before flipping the job row
+      // to done -- the first poll to observe "done" is what makes the take
+      // show up in the next GET /api/projects/{id} (App calls refreshDetail
+      // right after the poll resolves).
+      if (status === "done" && entry.action !== "train_lora" && !entry.takeAdded) {
+        entry.takeAdded = true;
+        const take = makeTake(`take-of-${m[1]}`, state.detail.takes.length + 1, {
+          task_type: entry.action,
+        });
+        state.detail = { ...state.detail, takes: [...state.detail.takes, take] };
+      }
       return Promise.resolve(
         jsonResponse(jobRow(m[1], entry.projectId, entry.action, status, entry.script)),
       );
@@ -365,6 +403,7 @@ export function createMockBardServer() {
     uninstall,
     scriptNextJob,
     failNextJobsPost,
+    failNextUpload,
     jobRequests,
   };
 }
