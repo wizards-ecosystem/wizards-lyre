@@ -1102,6 +1102,7 @@ def list_recent_jobs(
     limit: int = 20,
     project_id: str | None = None,
     action: str | None = None,
+    active: bool = False,
 ) -> list[dict]:
     """Recent jobs, newest first, optionally narrowed to one project and/or
     one action *before* the LIMIT applies. The web UI uses this to recover
@@ -1110,8 +1111,14 @@ def list_recent_jobs(
     refresh mid-training is expected to restore visible progress) -- with
     only the unfiltered top-N, a long training job gets pushed out of the
     window by jobs enqueued after it (which pile up behind it while the GPU
-    is locked), exactly when the user most needs to find it. Filters are
-    optional; with neither given this is exactly the old unfiltered query."""
+    is locked), exactly when the user most needs to find it. `active` keeps
+    only still-active jobs (`queued`/`running`) and returns them ALL, with
+    no recency truncation: the caller is recovering the queue's outstanding
+    worklist (and deriving "finished" from membership in it), so any cap --
+    even one applied after the status filter -- could drop the oldest
+    running job again behind newer queued ones. `limit` therefore only
+    applies when `active` is false. Filters are optional; with none given
+    this is exactly the old unfiltered query."""
     query = "SELECT * FROM jobs"
     clauses: list[str] = []
     params: list[Any] = []
@@ -1121,10 +1128,14 @@ def list_recent_jobs(
     if action is not None:
         clauses.append("action = ?")
         params.append(action)
+    if active:
+        clauses.append("status IN ('queued', 'running')")
     if clauses:
         query += " WHERE " + " AND ".join(clauses)
-    query += " ORDER BY created_at DESC LIMIT ?"
-    params.append(limit)
+    query += " ORDER BY created_at DESC"
+    if not active:
+        query += " LIMIT ?"
+        params.append(limit)
     with closing(_connect()) as conn:
         rows = conn.execute(query, params).fetchall()
     return [_row_to_dict(row) for row in rows]

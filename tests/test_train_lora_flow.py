@@ -13,11 +13,13 @@ from __future__ import annotations
 
 import threading
 import time
+from contextlib import closing
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
+from server import jobs as jobs_module
 from server import storage
 from server.app import app
 from worker import mock_worker
@@ -167,8 +169,6 @@ def test_resolve_lora_sources_requires_minimum_count(
     monkeypatch.setenv("BARD_PROJECTS_DIR", str(tmp_path / "projects"))
     monkeypatch.setenv("BARD_DB_PATH", str(tmp_path / "bard.db"))
 
-    from server import jobs as jobs_module
-
     project = storage.create_project(title="Unit Test")
     project_id = project["id"]
 
@@ -286,3 +286,99 @@ def test_queued_train_lora_job_is_recoverable_via_filtered_jobs_list(
             j["id"] == queued["id"]
             for j in client.get("/api/jobs").json()
         )
+        # The UI's recovery lookup narrows further to still-active jobs
+        # (queued/running, returned complete -- no recency truncation).
+        active = client.get(
+            "/api/jobs",
+            params={"project_id": project_id, "action": "train_lora", "active": "true"},
+        ).json()
+        assert [j["id"] for j in active] == [queued["id"]]
+
+
+def test_active_filter_recovers_a_running_job_buried_beyond_the_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The recovery must not depend on the recency LIMIT. An older running
+    train_lora job with more than `limit` newer train_lora rows behind it
+    (multiple tabs / direct API use can pile these up while the GPU is
+    locked on the long training) is pushed out of the scoped top-N -- the
+    exact case where the UI would lose a running training after a refresh.
+    `active=true` returns the complete queued/running worklist with no
+    recency truncation, so every still-active job comes back no matter how
+    many newer or finished rows exist."""
+    monkeypatch.setenv("BARD_PROJECTS_DIR", str(tmp_path / "projects"))
+    monkeypatch.setenv("BARD_DB_PATH", str(tmp_path / "bard.db"))
+    monkeypatch.setenv("BARD_WORKER", "mock")
+
+    total = 23  # comfortably past the default limit of 20
+
+    with TestClient(app) as client:
+        project = storage.create_project(title="Buried Running Training")
+        project_id = project["id"]
+
+        # Source takes on disk without any worker draining the queue.
+        take_ids: list[str] = []
+        for _ in range(MIN_LORA_SOURCES):
+            take_id, tdir = storage.allocate_take_dir(project_id)
+            mock_worker._write_silent_wav(tdir / "mix.wav")
+            take_ids.append(take_id)
+
+        job_ids: list[str] = []
+        for _ in range(total):
+            resp = client.post(
+                f"/api/projects/{project_id}/jobs",
+                json={
+                    "action": "train_lora",
+                    "name": "buried",
+                    "source_take_ids": take_ids,
+                },
+            )
+            assert resp.status_code == 200
+            job_ids.append(resp.json()["id"])
+
+        running_id, done_id = job_ids[0], job_ids[-1]
+        jobs_module._set_status(running_id, "running")
+        jobs_module._set_status(done_id, "done")
+        # Backdate the running job so ORDER BY created_at DESC places it
+        # strictly behind the limit window -- the burial the recovery has
+        # to survive (a worker in this state: claimed long ago, still
+        # training while later jobs queue up behind it).
+        with closing(jobs_module._connect()) as conn:
+            conn.execute(
+                "UPDATE jobs SET created_at = ? WHERE id = ?",
+                ("2000-01-01T00:00:00+00:00", running_id),
+            )
+            conn.commit()
+
+        # The scoped-but-unfiltered top-N loses the running job...
+        scoped = client.get(
+            "/api/jobs",
+            params={"project_id": project_id, "action": "train_lora"},
+        ).json()
+        assert len(scoped) == 20
+        assert running_id not in {j["id"] for j in scoped}
+
+        # ...but active=true returns every still-active job: 22 of 23 (the
+        # done one excluded), more than the limit of 20 -- only possible
+        # when the active worklist is not recency-truncated.
+        active = client.get(
+            "/api/jobs",
+            params={"project_id": project_id, "action": "train_lora", "active": "true"},
+        ).json()
+        assert len(active) == total - 1
+        assert {j["status"] for j in active} <= {"queued", "running"}
+        assert running_id in {j["id"] for j in active}
+        assert done_id not in {j["id"] for j in active}
+
+        # An explicit limit doesn't truncate the active worklist either --
+        # completeness is the whole point of the parameter.
+        capped = client.get(
+            "/api/jobs",
+            params={
+                "project_id": project_id,
+                "action": "train_lora",
+                "active": "true",
+                "limit": "1",
+            },
+        ).json()
+        assert len(capped) == total - 1

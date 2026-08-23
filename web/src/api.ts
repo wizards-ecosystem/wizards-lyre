@@ -311,14 +311,23 @@ export const api = {
     }),
   getJob: (jobId: string) => request<Job>(`/api/jobs/${jobId}`),
   // GET /api/jobs with optional narrowing filters, applied server-side
-  // before the limit. The UI uses { projectId, action: "train_lora" } on
-  // project load to recover a style-pack training that survived a page
-  // refresh (training runs up to ~1 hour, SPEC.md sec 4.4) -- the
-  // unfiltered top-20 would lose it behind jobs enqueued while it runs.
-  listJobs: (opts?: { projectId?: string; action?: string; limit?: number }) => {
+  // before the limit. The UI uses { projectId, action: "train_lora",
+  // active: true } on project load to recover a style-pack training that
+  // survived a page refresh (training runs up to ~1 hour, SPEC.md sec 4.4)
+  // -- active returns the complete queued/running worklist with no recency
+  // truncation (the server ignores `limit` in that case), so an older
+  // long-running training can never be pushed out by newer or finished
+  // jobs. The recency `limit` applies only when `active` is not set.
+  listJobs: (opts?: {
+    projectId?: string;
+    action?: string;
+    active?: boolean;
+    limit?: number;
+  }) => {
     const params = new URLSearchParams();
     if (opts?.projectId) params.set("project_id", opts.projectId);
     if (opts?.action) params.set("action", opts.action);
+    if (opts?.active) params.set("active", "true");
     if (opts?.limit != null) params.set("limit", String(opts.limit));
     const qs = params.toString();
     return request<Job[]>(`/api/jobs${qs ? `?${qs}` : ""}`);

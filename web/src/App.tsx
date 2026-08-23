@@ -536,9 +536,14 @@ export default function App() {
   // from the shared job queue (SPEC.md sec 8 GET /api/jobs) -- called on
   // project load so a refresh mid-training restores visible progress, and
   // again after a training finishes/fails so the pane matches the queue.
+  // active: true returns the project's complete queued/running worklist
+  // (no recency truncation server-side), so an older running training can
+  // never be pushed out of the result by newer jobs and lost to the
+  // recovery.
   async function refreshTrainingJobs(id: string): Promise<void> {
-    const jobs = await api.listJobs({ projectId: id, action: "train_lora" });
-    // Same stale-response guard as refreshDetail above.
+    const jobs = await api.listJobs({ projectId: id, action: "train_lora", active: true });
+    // Same stale-response guard as refreshDetail above. The client-side
+    // filter is belt-and-braces on top of the server's active filter.
     if (activeIdRef.current !== id) return;
     setTrainingJobs(jobs.filter((j) => j.status === "queued" || j.status === "running"));
   }
@@ -616,27 +621,43 @@ export default function App() {
     async function tick() {
       let jobs: Job[];
       try {
-        jobs = await api.listJobs({ projectId, action: "train_lora" });
+        // active: true returns the complete queued/running worklist (no
+        // recency truncation server-side), so a watched training can never
+        // drop out of this list (and out of the pane/poll) just because
+        // newer jobs piled up behind it while it runs.
+        jobs = await api.listJobs({ projectId, action: "train_lora", active: true });
       } catch {
         return; // transient (server restarting...) -- retry on the next tick
       }
       if (cancelled || activeIdRef.current !== projectId) return;
-      const active = jobs.filter((j) => j.status === "queued" || j.status === "running");
-      const activeIds = new Set(active.map((j) => j.id));
-      const finished = jobs.filter((j) => watchedIds.includes(j.id) && !activeIds.has(j.id));
-      setTrainingJobs(active);
-      if (finished.length > 0) {
-        await refreshLoras(projectId);
-        // The await above can outlast a project switch -- never surface this
-        // project's training failure on top of another project's workspace.
-        if (cancelled || activeIdRef.current !== projectId) return;
-        for (const job of finished) {
-          if (job.status === "error") {
-            // The pack entry itself (refreshLoras above) shows up in the
-            // list whenever the worker allocated one before failing; this
-            // banner is the actionable message either way.
-            setErrorMsg(`style pack training failed: ${job.error ?? "unknown error"}`);
-          }
+      const activeIds = new Set(jobs.map((j) => j.id));
+      // A watched id that fell out of the active set has finished (done or
+      // error). Fetch those by id -- the active-filtered list excludes them
+      // by definition, and a recency-limited unfiltered list can drop them
+      // too, which would silently lose the finish event and its error.
+      const finishedIds = watchedIds.filter((id) => !activeIds.has(id));
+      setTrainingJobs(jobs);
+      if (finishedIds.length === 0) return;
+      const finished: Job[] = [];
+      for (const id of finishedIds) {
+        try {
+          finished.push(await api.getJob(id));
+        } catch {
+          // No longer fetchable (e.g. the job row vanished with a project
+          // deletion) -- nothing left to surface for it.
+        }
+      }
+      if (finished.length === 0 || cancelled || activeIdRef.current !== projectId) return;
+      await refreshLoras(projectId);
+      // The await above can outlast a project switch -- never surface this
+      // project's training failure on top of another project's workspace.
+      if (cancelled || activeIdRef.current !== projectId) return;
+      for (const job of finished) {
+        if (job.status === "error") {
+          // The pack entry itself (refreshLoras above) shows up in the
+          // list whenever the worker allocated one before failing; this
+          // banner is the actionable message either way.
+          setErrorMsg(`style pack training failed: ${job.error ?? "unknown error"}`);
         }
       }
     }
