@@ -201,6 +201,35 @@ def patch_project(project_id: str, body: PatchProjectBody) -> dict:
     return storage.patch_project(project_id, body.model_dump(exclude_unset=True))
 
 
+@app.delete("/api/projects/{project_id}", status_code=204)
+def delete_project(project_id: str) -> Response:
+    # SPEC.md sec 9.1 "Delete (confirm)". storage.load_project raises
+    # ProjectNotFound (-> 404, see the exception handler above) for an
+    # unknown id before either the job queue or the filesystem is touched.
+    #
+    # jobs.begin_project_deletion records a tombstone and cancels this
+    # project's queued jobs in one atomic transaction (reviewer-flagged: a
+    # non-atomic cancel-then-delete left a window where a concurrent
+    # enqueue_job could insert a new queued job for this project_id after
+    # the cancel swept past it, orphaning an actionable job for a project
+    # about to disappear -- see that function's docstring for how the
+    # tombstone closes it). A job already running for this project fails
+    # safely on its own once the directory disappears.
+    #
+    # If the filesystem removal itself fails (disk error, permissions, a
+    # handle still open), the project still exists on disk, so its jobs
+    # must not stay cancelled -- abort_project_deletion restores them and
+    # removes the tombstone before the original error is re-raised.
+    storage.load_project(project_id)
+    cancelled_job_ids = jobs.begin_project_deletion(project_id)
+    try:
+        storage.delete_project(project_id)
+    except Exception:
+        jobs.abort_project_deletion(project_id, cancelled_job_ids)
+        raise
+    return Response(status_code=204)
+
+
 @app.put("/api/projects/{project_id}/plan")
 def put_plan(project_id: str, body: dict[str, Any]) -> dict:
     return storage.save_plan(project_id, body)
@@ -275,23 +304,24 @@ async def upload_audio(project_id: str, file: UploadFile = File(...)) -> dict:
     # published (atomic rename) once the whole body has been accepted, and
     # is exactly what JobBody.upload_path already knows how to resolve
     # (SPEC.md sec 8.1).
-    tmp_path, dest_path = storage.open_upload_destination(project_id, file.filename or "")
-    total_bytes = 0
-    try:
-        with open(tmp_path, "wb") as out:
-            while chunk := await file.read(storage.UPLOAD_CHUNK_BYTES):
-                total_bytes += len(chunk)
-                if total_bytes > storage.MAX_UPLOAD_BYTES:
-                    raise ValueError(
-                        f"upload too large: exceeds {storage.MAX_UPLOAD_BYTES} bytes"
-                    )
-                out.write(chunk)
-    except BaseException:
-        tmp_path.unlink(missing_ok=True)
-        raise
-    finally:
-        await file.close()
-    upload_path = storage.finalize_upload(tmp_path, dest_path)
+    with storage.project_lifecycle_lock(project_id):
+        tmp_path, dest_path = storage.open_upload_destination(project_id, file.filename or "")
+        total_bytes = 0
+        try:
+            with open(tmp_path, "wb") as out:
+                while chunk := await file.read(storage.UPLOAD_CHUNK_BYTES):
+                    total_bytes += len(chunk)
+                    if total_bytes > storage.MAX_UPLOAD_BYTES:
+                        raise ValueError(
+                            f"upload too large: exceeds {storage.MAX_UPLOAD_BYTES} bytes"
+                        )
+                    out.write(chunk)
+        except BaseException:
+            tmp_path.unlink(missing_ok=True)
+            raise
+        finally:
+            await file.close()
+        upload_path = storage.finalize_upload(tmp_path, dest_path)
     return {"upload_path": upload_path}
 
 

@@ -370,6 +370,40 @@ export default function App() {
     }
   }
 
+  // SPEC.md sec 9.1 "Delete (confirm)". window.confirm is the explicit
+  // confirmation gate -- deletion is irreversible (server.storage.delete_project
+  // rmtrees the project dir), so there's no undo to fall back on.
+  async function deleteProject(p: ProjectSummary): Promise<void> {
+    if (!window.confirm(`Delete "${p.title}"? This permanently removes its takes and cannot be undone.`)) {
+      return;
+    }
+    try {
+      await api.deleteProject(p.id);
+    } catch (err) {
+      setErrorMsg(String(err));
+      return;
+    }
+    if (activeIdRef.current === p.id) {
+      // The project (and anything a debounced save would target) is gone --
+      // drop any save/notes work still pending for it rather than let it
+      // fire later against a now-404 project id, then clear the open-project
+      // state the same way the [activeId] effect does for `activeId === null`.
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current);
+        saveTimeoutRef.current = null;
+      }
+      pendingSaveRef.current = null;
+      for (const timeout of Object.values(takeSaveTimeoutsRef.current)) {
+        if (timeout) clearTimeout(timeout);
+      }
+      takeSaveTimeoutsRef.current = {};
+      pendingTakeNotesRef.current = {};
+      activeIdRef.current = null;
+      setActiveId(null);
+    }
+    await refreshProjects();
+  }
+
   function updateTakeLocal(takeId: string, patch: { favorite?: boolean; notes?: string }): void {
     setDetail((prev) =>
       prev
@@ -1085,6 +1119,16 @@ export default function App() {
                   </button>
                   <button className="open-btn" onClick={() => switchActiveProject(p.id)}>
                     Open
+                  </button>
+                  <button
+                    className="delete-btn"
+                    title="Delete project"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      deleteProject(p);
+                    }}
+                  >
+                    ✕
                   </button>
                 </li>
               ))}
