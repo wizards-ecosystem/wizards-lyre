@@ -5,10 +5,16 @@
 // Generate/Cover/Repaint. Everything runs against the mocked fetch backend
 // in src/test/mockServer.ts -- no FastAPI, CUDA, ACE-Step, credentials, or
 // generated audio.
-import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { makeLora, makeTakes } from "./test/mockServer";
+import App from "./App";
+import { createMockBardServer, makeLora, makeTake, makeTakes, PROJECT_ID } from "./test/mockServer";
 import { LORA_SOURCE_TITLE, renderOpenedProject, type OpenedProject } from "./test/renderApp";
+
+// Mirrors App.tsx's LORA_TRAIN_RECOVERY_POLL_MS (not exported) -- the
+// cadence of the recovery poll that watches a still-active train_lora job
+// found via GET /api/jobs.
+const LORA_TRAIN_RECOVERY_POLL_MS = 3000;
 
 interface FakeRegion {
   id: string;
@@ -92,6 +98,41 @@ function takeRows(): HTMLElement[] {
 function jobsPost(action?: string) {
   if (!app) throw new Error("app not rendered");
   return app.server.jobRequests(action);
+}
+
+const RECOVERED_JOB_ID = "job-recovered";
+
+// Like renderOpenedProject, but seeds a train_lora job directly into the
+// mock server's job queue *before* the app ever renders -- simulating a
+// training that was started before this page load (a refresh mid-training,
+// or another tab) and must be recovered via GET /api/jobs on project open,
+// not via this test clicking Train.
+async function renderProjectWithSeededTraining(status: string): Promise<OpenedProject> {
+  const server = createMockBardServer();
+  server.seedJob(RECOVERED_JOB_ID, PROJECT_ID, "train_lora", status);
+  server.install();
+
+  const originalConfirm = window.confirm;
+  const confirm = vi.fn(() => true);
+  window.confirm = confirm as unknown as typeof window.confirm;
+
+  const rendered = render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "Open" }));
+  await waitFor(() => {
+    expect(screen.getAllByTitle(LORA_SOURCE_TITLE)).toHaveLength(
+      server.state.detail.takes.length,
+    );
+  });
+
+  return {
+    server,
+    confirm,
+    cleanup: () => {
+      rendered.unmount();
+      server.uninstall();
+      window.confirm = originalConfirm;
+    },
+  };
 }
 
 describe("LoRA style packs (SPEC.md sec 4.4)", () => {
@@ -303,5 +344,89 @@ describe("LoRA style packs (SPEC.md sec 4.4)", () => {
     fireEvent.click(screen.getByRole("button", { name: "Generate" }));
 
     expect(await screen.findByText("worker crashed")).toBeTruthy();
+  });
+
+  it("recovers an in-progress training after opening a project with an active train_lora job", async () => {
+    app = await renderProjectWithSeededTraining("running");
+
+    // Recovered purely from GET /api/jobs on project open -- this test
+    // never clicked Train.
+    expect(screen.getByText("Training style pack…")).toBeTruthy();
+    expect(screen.getByText("running")).toBeTruthy();
+    expect(app.server.jobRequests("train_lora")).toHaveLength(0);
+    const train = screen.getByRole("button", { name: /Training…/ }) as HTMLButtonElement;
+    expect(train.disabled).toBe(true);
+    expect(train.title).toBe("A style pack is already training for this project");
+  });
+
+  it(
+    "refreshes the pack list once a recovered training job finishes",
+    async () => {
+      // jsdom has no MessageChannel, so React 18 falls back to setTimeout to
+      // flush state updates that land outside a synthetic event handler
+      // (e.g. after an awaited fetch resolves) -- vitest's fake timers
+      // would freeze that flush entirely along with the recovery poll's own
+      // setInterval, hanging the test. Advancing past the real poll
+      // interval on the real clock avoids that trap.
+      app = await renderProjectWithSeededTraining("running");
+      expect(screen.getByText("Training style pack…")).toBeTruthy();
+
+      // The training finishes behind the scenes (as it would in another
+      // tab, or a worker that outlives this page's own poller) -- flip the
+      // job to done and make the pack listable, mirroring what
+      // server.jobs._run_train_lora_job does before the job row flips.
+      app.server.state.loras = [GOOD_LORA];
+      app.server.seedJob(RECOVERED_JOB_ID, PROJECT_ID, "train_lora", "done");
+
+      await waitFor(
+        () => {
+          expect(screen.queryByText("Training style pack…")).toBeNull();
+        },
+        { timeout: LORA_TRAIN_RECOVERY_POLL_MS + 2000 },
+      );
+      expect(screen.getAllByText("good-style").length).toBeGreaterThan(0);
+    },
+    LORA_TRAIN_RECOVERY_POLL_MS + 5000,
+  );
+
+  it("shows a clickable style badge for a take generated with a still-loadable pack", async () => {
+    app = await renderOpenedProject({
+      takes: [makeTake("take-01", 1, { lora_id: GOOD_LORA.id })],
+      loras: [GOOD_LORA],
+    });
+
+    const badge = await screen.findByRole("button", { name: "style: good-style" });
+    expect(badge.title).toBe(
+      'Generated with style pack "good-style" — click to select it for the next Generate/Cover/Repaint',
+    );
+
+    fireEvent.click(badge);
+    expect(loraSelect().value).toBe("lora-good");
+  });
+
+  it("shows a non-clickable style badge for a take whose pack failed training", async () => {
+    app = await renderOpenedProject({
+      takes: [makeTake("take-01", 1, { lora_id: FAILED_LORA.id })],
+      loras: [FAILED_LORA],
+    });
+
+    const badge = await screen.findByText("style: bad-style");
+    expect(badge.tagName).toBe("SPAN");
+    expect(badge.title).toBe(
+      `Generated with style pack "bad-style" (${FAILED_LORA.id}) — it failed training and cannot be loaded`,
+    );
+  });
+
+  it("shows a truncated-id style badge for a take whose pack no longer resolves in this project", async () => {
+    app = await renderOpenedProject({
+      takes: [makeTake("take-01", 1, { lora_id: "lora-vanished-id" })],
+      loras: [],
+    });
+
+    const badge = await screen.findByText("style: lora-van");
+    expect(badge.tagName).toBe("SPAN");
+    expect(badge.title).toBe(
+      "Generated with style pack lora-vanished-id (not found in this project)",
+    );
   });
 });

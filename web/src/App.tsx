@@ -693,8 +693,10 @@ export default function App() {
       // by definition, and a recency-limited unfiltered list can drop them
       // too, which would silently lose the finish event and its error.
       const finishedIds = watchedIds.filter((id) => !activeIds.has(id));
-      setTrainingJobs(jobs);
-      if (finishedIds.length === 0) return;
+      if (finishedIds.length === 0) {
+        setTrainingJobs(jobs);
+        return;
+      }
       const finished: Job[] = [];
       for (const id of finishedIds) {
         try {
@@ -704,11 +706,18 @@ export default function App() {
           // deletion) -- nothing left to surface for it.
         }
       }
-      if (finished.length === 0 || cancelled || activeIdRef.current !== projectId) return;
-      await refreshLoras(projectId);
+      // setTrainingJobs (below) drops this tick's now-finished id from
+      // trainingJobIds, which is this effect's own dependency -- committing
+      // that update re-runs the effect and marks this closure `cancelled`
+      // via its cleanup. Do the refresh/error work first so that this
+      // self-triggered cleanup can never preempt it.
+      if (finished.length > 0 && !cancelled && activeIdRef.current === projectId) {
+        await refreshLoras(projectId);
+      }
       // The await above can outlast a project switch -- never surface this
       // project's training failure on top of another project's workspace.
       if (cancelled || activeIdRef.current !== projectId) return;
+      setTrainingJobs(jobs);
       for (const job of finished) {
         if (job.status === "error") {
           // The pack entry itself (refreshLoras above) shows up in the

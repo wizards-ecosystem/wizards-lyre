@@ -213,6 +213,35 @@ export function createMockBardServer() {
     };
   }
 
+  // Current status of an entry without advancing its poll script -- used by
+  // the GET /api/jobs list route below, which (unlike GET /api/jobs/{id})
+  // must not itself drive queued -> running -> done progression just by
+  // being listed.
+  function entryStatus(entry: { script: JobScript; pollIndex: number }): string {
+    return entry.script.statuses[Math.min(entry.pollIndex, entry.script.statuses.length - 1)];
+  }
+
+  // Directly inserts a job row into the queue the way a job created by
+  // another session/tab (or before this test's render) would already exist
+  // -- for the LoRA training-recovery tests, which need a queued/running (or
+  // finished) train_lora job to already be in the queue *before* the app
+  // opens the project, so GET /api/jobs can recover it on project load.
+  function seedJob(
+    id: string,
+    projectId: string,
+    action: string,
+    status: string,
+    error: string | null = null,
+  ): void {
+    jobEntries.set(id, {
+      projectId,
+      action,
+      script: { statuses: [status], error },
+      pollIndex: 0,
+      takeAdded: status === "done",
+    });
+  }
+
   function handle(input: string | URL | Request, init?: RequestInit): Promise<MockResponseLike> {
     const url = String(input);
     const method = (init?.method ?? "GET").toUpperCase();
@@ -346,16 +375,46 @@ export function createMockBardServer() {
       return Promise.resolve(jsonResponse(jobRow(id, m[1], action, "queued", script)));
     }
 
+    // GET /api/jobs?project_id=&action=&active=&limit= -- SPEC.md sec 8,
+    // added for LoRA training recovery (App.tsx refreshTrainingJobs). Must
+    // be checked before the /api/jobs/{id} regex below since both start
+    // with "/api/jobs", but this route only ever appears as exactly
+    // "/api/jobs" or with a "?" query string, never a "/" path segment.
+    if (method === "GET" && (url === "/api/jobs" || url.startsWith("/api/jobs?"))) {
+      const qs = url.includes("?") ? url.slice(url.indexOf("?") + 1) : "";
+      const params = new URLSearchParams(qs);
+      const projectId = params.get("project_id");
+      const action = params.get("action");
+      const active = params.get("active") === "true";
+      const limit = params.has("limit") ? Number(params.get("limit")) : 20;
+
+      // jobEntries preserves insertion (creation) order; newest-first
+      // mirrors server/jobs.py's "ORDER BY created_at DESC".
+      let rows = Array.from(jobEntries.entries()).reverse();
+      if (projectId) rows = rows.filter(([, e]) => e.projectId === projectId);
+      if (action) rows = rows.filter(([, e]) => e.action === action);
+      if (active) {
+        rows = rows.filter(([, e]) => {
+          const status = entryStatus(e);
+          return status === "queued" || status === "running";
+        });
+      } else {
+        rows = rows.slice(0, limit);
+      }
+      return Promise.resolve(
+        jsonResponse(
+          rows.map(([id, e]) => jobRow(id, e.projectId, e.action, entryStatus(e), e.script)),
+        ),
+      );
+    }
+
     m = url.match(/^\/api\/jobs\/([^/]+)$/);
     if (method === "GET" && m) {
       const entry = jobEntries.get(m[1]);
       if (!entry) {
         return Promise.resolve(jsonResponse({ detail: "no such job" }, 404));
       }
-      const status =
-        entry.script.statuses[
-          Math.min(entry.pollIndex, entry.script.statuses.length - 1)
-        ];
+      const status = entryStatus(entry);
       entry.pollIndex += 1;
       // Mirrors server.jobs writing the new take before flipping the job row
       // to done -- the first poll to observe "done" is what makes the take
@@ -405,6 +464,7 @@ export function createMockBardServer() {
     failNextJobsPost,
     failNextUpload,
     jobRequests,
+    seedJob,
   };
 }
 
