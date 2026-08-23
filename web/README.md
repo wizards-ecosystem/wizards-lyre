@@ -32,6 +32,19 @@ npm run build
 Type-checks with `tsc -b` and produces a production bundle in `web/dist/`,
 which FastAPI serves directly in prod (SPEC.md §5).
 
+## Tests
+
+```
+npm test
+```
+
+Frontend regression tests (Vitest + React Testing Library + jsdom), covering
+the LoRA train/load UX (SPEC.md §4.4) against a mocked fetch backend in
+`src/test/mockServer.ts` — no FastAPI, CUDA, ACE-Step, credentials, or
+generated audio required. Python-side tests stay pytest at the repo root
+(SPEC.md §11). Like `dev.mjs` / `build.mjs`, the Vitest config lives inline
+in `test.mjs` instead of a `vitest.config.ts`; see the Notes section for why.
+
 ## Keyboard shortcuts
 
 Active whenever a project is open. `g` / `Space` / `↑` / `↓` are disabled
