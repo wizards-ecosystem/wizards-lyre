@@ -61,9 +61,27 @@ def new_id() -> str:
     return uuid.uuid4().hex
 
 
+def _strip_win_extended_prefix(path: Path) -> Path:
+    # Windows quirk: Path.resolve() goes through ntpath.realpath, which gets
+    # an extended-length "\\?\"-prefixed result from GetFinalPathNameByHandle
+    # and only strips the prefix after re-resolving the stripped form. If the
+    # path is deleted in that gap (delete_project's rmtree racing a reader),
+    # the prefixed form leaks out -- so two resolves of the same tree can
+    # differ in prefix only, and relative_to() below would misread that as a
+    # jail escape. The stripped form names the same file, so this changes no
+    # containment outcome, only its string spelling. (\\?\UNC\ maps back to
+    # the \\server\share spelling the same code path uses.)
+    s = str(path)
+    if s.startswith("\\\\?\\UNC\\"):
+        return Path("\\\\" + s[len("\\\\?\\UNC\\"):])
+    if s.startswith("\\\\?\\"):
+        return Path(s[len("\\\\?\\"):])
+    return path
+
+
 def _jail(base: Path, target: Path) -> Path:
-    base_r = base.resolve()
-    target_r = target.resolve()
+    base_r = _strip_win_extended_prefix(base.resolve())
+    target_r = _strip_win_extended_prefix(target.resolve())
     try:
         target_r.relative_to(base_r)
     except ValueError as exc:
@@ -379,9 +397,17 @@ def list_projects() -> list[dict]:
 
 def load_project(project_id: str) -> dict:
     path = project_json_path(project_id)
-    if not path.exists():
-        raise ProjectNotFound(project_id)
-    return _read_json(path)
+    try:
+        if not path.exists():
+            raise ProjectNotFound(project_id)
+        return _read_json(path)
+    except FileNotFoundError as exc:
+        # A concurrent delete_project can rmtree the directory in the gap
+        # between the exists() check and the read -- same outcome as the
+        # check itself failing. Without this conversion the race surfaces a
+        # raw OSError instead of the normal ProjectNotFound (-> 404 for HTTP
+        # callers, expected-rejection for enqueue_job racing a deletion).
+        raise ProjectNotFound(project_id) from exc
 
 
 def delete_project(project_id: str) -> None:
@@ -393,10 +419,25 @@ def delete_project(project_id: str) -> None:
     through. `load_project` first so an unknown id raises `ProjectNotFound`
     (-> 404) rather than `rmtree` silently no-oping on a path that never
     existed, matching every other lookup in this module.
+
+    The rmtree itself retries briefly on PermissionError: on Windows a
+    concurrent lock-free reader (e.g. jobs.enqueue_job's load_project) can
+    still hold a file handle open for a few microseconds, which surfaces as
+    a sharing violation (WinError 32 / PermissionError) instead of the
+    delete completing. Such handles drop almost immediately, so a short
+    retry turns an avoidable failure into a successful deletion.
     """
     with _project_lock(project_id):
         load_project(project_id)
-        shutil.rmtree(project_dir(project_id))
+        pdir = project_dir(project_id)
+        for attempt in range(5):
+            try:
+                shutil.rmtree(pdir)
+                return
+            except PermissionError:
+                if attempt == 4:
+                    raise
+                time.sleep(0.05)
 
 
 def load_plan(project_id: str) -> dict:
