@@ -37,6 +37,10 @@ export interface Plan {
   timesignature: string;
   duration_sec: number;
   sections: unknown[];
+  // SPEC.md sec 9.2: Custom-mode checkbox -- whether ACE-Step's LM
+  // ("thinking") is allowed to rewrite the user's caption. Simple mode
+  // ignores this and always runs with thinking=true.
+  caption_rewrite: boolean;
 }
 
 export interface Take {
