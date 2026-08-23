@@ -6,16 +6,31 @@ The product spec is **[SPEC.md](SPEC.md)**. Implement that file. Do not invent e
 
 ## Status
 
-Phase 1 (SPEC.md sec 12): FastAPI health/projects/plan/takes/jobs API, a SQLite
-`queued -> running -> done|error` job queue, a dedicated worker process (`worker/run_worker.py`)
-that drains it, a minimal React shell (library, plan, takes, generate), and a mocked worker for
-tests. The production job backend is `worker/acestep_worker.py`, which calls ACE-Step 1.5's
-`generate_music` -- it requires ACE-Step installed and weights downloaded (see below).
+All six phases in SPEC.md sec 12 are implemented:
 
-Phase 2 (SPEC.md sec 12, studio loop) is landing incrementally: `cover` (take source select +
-strength) is enabled end-to-end (API + React), reusing generate's plan-save/poll UX. The rest of
-phase 2 -- waveform + region display, repaint, richer project library -- is not implemented yet.
-Phases 3-4 (base-model swap, LoRA/polish) are not implemented yet either.
+- **Phase 1 (scaffold + generate):** FastAPI health/projects/plan/takes/jobs API, a SQLite
+  `queued -> running -> done|error` job queue, a dedicated worker process (`worker/run_worker.py`)
+  that drains it, a React shell, and a mocked worker for tests. The production job backend is
+  `worker/acestep_worker.py`, which calls ACE-Step 1.5's `generate_music` -- it requires ACE-Step
+  installed and weights downloaded (see below).
+- **Phase 2 (studio loop):** project library, the plan editor (simple + custom), waveform + region
+  display/select, `cover`, and `repaint` (both take source select + strength), reusing generate's
+  plan-save/poll UX.
+- **Phase 3 (base swap):** worker unload/load, `extract` / `lego` / `complete` job types, and a
+  confirmation UI for the `studio_ops` base-model swap.
+- **Phase 4 (polish):** a quality score on takes, LRC output when ACE-Step supplies timestamps,
+  and a LoRA train/load path (style-pack UI to train from selected takes, then load a trained
+  LoRA into generation).
+- **Phase 5 (studio ergonomics):** A/B take compare, project export as a zip (`project.json`,
+  `plan.json`, active mix, optional stems), keyboard shortcuts (generate, play/pause, next/prev
+  take, save plan), and a UI to walk `parent_take_id` and restore an earlier take.
+- **Phase 6 (library and ingest):** search and favorites for projects/takes, free-text take
+  notes, a loudness/peak meter on the player, and drag-drop of a local WAV/MP3 as a cover/repaint
+  source.
+
+This describes what the code implements, not verified GPU performance -- generation quality, LoRA
+training throughput, etc. depend on ACE-Step and real hardware and are not something this repo's
+test suite exercises.
 
 ## Machine
 
@@ -72,10 +87,10 @@ was run from (override the worker's read side with `BARD_CHECKPOINTS_DIR` if you
 at weights downloaded elsewhere, e.g. the `ACE-Step-1.5` checkout's own `checkpoints/`) -- see
 `worker/acestep_worker.py`'s `CHECKPOINTS_ROOT`.
 
-Without ACE-Step installed, the server still runs; `generate` and `cover` jobs (the only actions
-accepted so far -- see Status above) will fail with a clear "acestep is not installed" error
-instead of crashing. Set `BARD_WORKER=mock` to force the mocked worker (silent WAV, no GPU) for
-local UI/API poking without a GPU.
+Without ACE-Step installed, the server still runs; job types that need it (`generate`, `cover`,
+`repaint`, `extract`, `lego`, `complete` -- see Status above) will fail with a clear "acestep is
+not installed" error instead of crashing. Set `BARD_WORKER=mock` to force the mocked worker
+(silent WAV, no GPU) for local UI/API poking without a GPU.
 
 ## Run the server + worker
 
