@@ -57,16 +57,16 @@ def test_project_plan_roundtrip(client: TestClient) -> None:
     assert body["project"]["id"] == project_id
 
 
-def test_default_plan_has_caption_rewrite_false(client: TestClient) -> None:
+def test_default_plan_has_caption_rewrite_true(client: TestClient) -> None:
     """SPEC.md sec 9.2/7.2: a brand-new project's plan defaults `caption_rewrite`
-    to False -- Custom-mode generation must not rewrite the user's caption
-    unless they explicitly opt in."""
+    to True -- Custom-mode generation may rewrite the user's caption unless
+    they explicitly disable it."""
     project = client.post("/api/projects", json={"title": "Defaults"}).json()
     project_id = project["id"]
 
     resp = client.get(f"/api/projects/{project_id}")
     assert resp.status_code == 200
-    assert resp.json()["plan"]["caption_rewrite"] is False
+    assert resp.json()["plan"]["caption_rewrite"] is True
 
 
 def test_plan_missing_caption_rewrite_loads_as_false(

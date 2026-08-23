@@ -315,14 +315,10 @@ def default_plan() -> dict:
         "sections": [],
         # SPEC.md sec 9.2/7.2: Custom-mode checkbox controlling whether
         # ACE-Step's LM ("thinking") is allowed to rewrite the user's caption.
-        # Defaults False -- before this field existed, Custom-mode generation
-        # always ran with thinking=False (worker/acestep_worker.py's run_job
-        # set thinking=simple_mode); a plan.json written before this field
-        # existed has no key at all and must keep behaving exactly like that
-        # (worker.run_job reads this via plan.get("caption_rewrite", False),
-        # same default), not silently start rewriting captions no one asked
-        # to have rewritten.
-        "caption_rewrite": False,
+        # New plans allow rewriting until the user disables it, as required
+        # by SPEC.md sec 7.2. _normalize_plan separately keeps legacy plans
+        # without this field on their historical False behavior.
+        "caption_rewrite": True,
     }
 
 
