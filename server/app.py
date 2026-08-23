@@ -304,23 +304,24 @@ async def upload_audio(project_id: str, file: UploadFile = File(...)) -> dict:
     # published (atomic rename) once the whole body has been accepted, and
     # is exactly what JobBody.upload_path already knows how to resolve
     # (SPEC.md sec 8.1).
-    tmp_path, dest_path = storage.open_upload_destination(project_id, file.filename or "")
-    total_bytes = 0
-    try:
-        with open(tmp_path, "wb") as out:
-            while chunk := await file.read(storage.UPLOAD_CHUNK_BYTES):
-                total_bytes += len(chunk)
-                if total_bytes > storage.MAX_UPLOAD_BYTES:
-                    raise ValueError(
-                        f"upload too large: exceeds {storage.MAX_UPLOAD_BYTES} bytes"
-                    )
-                out.write(chunk)
-    except BaseException:
-        tmp_path.unlink(missing_ok=True)
-        raise
-    finally:
-        await file.close()
-    upload_path = storage.finalize_upload(tmp_path, dest_path)
+    with storage.project_lifecycle_lock(project_id):
+        tmp_path, dest_path = storage.open_upload_destination(project_id, file.filename or "")
+        total_bytes = 0
+        try:
+            with open(tmp_path, "wb") as out:
+                while chunk := await file.read(storage.UPLOAD_CHUNK_BYTES):
+                    total_bytes += len(chunk)
+                    if total_bytes > storage.MAX_UPLOAD_BYTES:
+                        raise ValueError(
+                            f"upload too large: exceeds {storage.MAX_UPLOAD_BYTES} bytes"
+                        )
+                    out.write(chunk)
+        except BaseException:
+            tmp_path.unlink(missing_ok=True)
+            raise
+        finally:
+            await file.close()
+        upload_path = storage.finalize_upload(tmp_path, dest_path)
     return {"upload_path": upload_path}
 
 

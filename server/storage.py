@@ -12,6 +12,7 @@ import os
 import posixpath
 import re
 import shutil
+import threading
 import time
 import uuid
 import zipfile
@@ -164,18 +165,31 @@ def _write_text(path: Path, text: str) -> None:
 # (atomic exclusive create, `os.O_CREAT | os.O_EXCL`) rather than an
 # in-process lock, since it must work *across* the server/worker process
 # boundary, not just across threads within one of them.
-_PROJECT_LOCK_TIMEOUT_SEC = 10.0
+_PROJECT_LOCK_TIMEOUT_SEC = 24 * 60 * 60.0
 _PROJECT_LOCK_POLL_SEC = 0.05
 # A lock file older than this is assumed abandoned by a crashed process
 # (e.g. the worker was killed mid-write) and is reclaimed rather than
 # blocking every future update to this project forever.
 _PROJECT_LOCK_STALE_SEC = 30.0
+_PROJECT_LOCK_STATE = threading.local()
 
 
 @contextmanager
 def _project_lock(project_id: str) -> Iterator[None]:
-    lock_path = jailed_path(project_id, ".project.lock")
+    # Keep lifecycle locks outside the project directory.  A lock inside
+    # projects/<id> disappears during rmtree, allowing a waiting writer to
+    # create a fresh lock (and project directory) while deletion still owns
+    # the old, unlinked lock file.
+    lock_path = jailed_path(".project-locks", f"{project_id}.lock")
     lock_path.parent.mkdir(parents=True, exist_ok=True)
+    held = getattr(_PROJECT_LOCK_STATE, "held", {})
+    if held.get(project_id, 0):
+        held[project_id] += 1
+        try:
+            yield
+        finally:
+            held[project_id] -= 1
+        return
     deadline = time.monotonic() + _PROJECT_LOCK_TIMEOUT_SEC
     fd: int | None = None
     while fd is None:
@@ -204,13 +218,36 @@ def _project_lock(project_id: str) -> Iterator[None]:
                 raise TimeoutError(f"timed out waiting for project lock: {project_id}")
             time.sleep(_PROJECT_LOCK_POLL_SEC)
     try:
+        held[project_id] = 1
+        _PROJECT_LOCK_STATE.held = held
+        stop_refresh = threading.Event()
+
+        def _refresh_lock() -> None:
+            while not stop_refresh.wait(_PROJECT_LOCK_STALE_SEC / 3):
+                try:
+                    lock_path.touch()
+                except OSError:
+                    return
+
+        refresh_thread = threading.Thread(target=_refresh_lock, daemon=True)
+        refresh_thread.start()
         yield
     finally:
+        stop_refresh.set()
+        refresh_thread.join()
+        del held[project_id]
         os.close(fd)
         try:
             lock_path.unlink()
         except FileNotFoundError:
             pass
+
+
+# Public lifecycle guard for operations (worker execution and streamed
+# uploads) that perform several filesystem writes over an extended period.
+# Deletion takes this same cross-process lock and therefore waits until the
+# complete operation, not merely one metadata write, has finished.
+project_lifecycle_lock = _project_lock
 
 
 def _update_project(project_id: str, mutate: Callable[[dict], None]) -> dict:
@@ -339,8 +376,9 @@ def delete_project(project_id: str) -> None:
     (-> 404) rather than `rmtree` silently no-oping on a path that never
     existed, matching every other lookup in this module.
     """
-    load_project(project_id)
-    shutil.rmtree(project_dir(project_id))
+    with _project_lock(project_id):
+        load_project(project_id)
+        shutil.rmtree(project_dir(project_id))
 
 
 def load_plan(project_id: str) -> dict:
@@ -532,16 +570,19 @@ def finalize_upload(tmp_path: Path, dest_path: Path) -> str:
 
 
 def allocate_take_dir(project_id: str) -> tuple[str, Path]:
-    load_project(project_id)
-    take_id = new_id()
-    tdir = take_dir(project_id, take_id)
-    tdir.mkdir(parents=True, exist_ok=False)
-    return take_id, tdir
+    with _project_lock(project_id):
+        load_project(project_id)
+        take_id = new_id()
+        tdir = take_dir(project_id, take_id)
+        tdir.mkdir(parents=True, exist_ok=False)
+        return take_id, tdir
 
 
 def write_take_meta(project_id: str, take_id: str, meta: dict) -> None:
-    path = take_dir(project_id, take_id) / "meta.json"
-    _write_json(path, meta)
+    with _project_lock(project_id):
+        load_project(project_id)
+        path = take_dir(project_id, take_id) / "meta.json"
+        _write_json(path, meta)
 
 
 def update_take_annotations(
@@ -572,24 +613,29 @@ def update_take_annotations(
 
 
 def allocate_lora_dir(project_id: str) -> tuple[str, Path]:
-    load_project(project_id)
-    lora_id = new_id()
-    ldir = lora_dir(project_id, lora_id)
-    ldir.mkdir(parents=True, exist_ok=False)
-    return lora_id, ldir
+    with _project_lock(project_id):
+        load_project(project_id)
+        lora_id = new_id()
+        ldir = lora_dir(project_id, lora_id)
+        ldir.mkdir(parents=True, exist_ok=False)
+        return lora_id, ldir
 
 
 def write_lora_meta(project_id: str, lora_id: str, meta: dict) -> None:
-    path = lora_dir(project_id, lora_id) / "meta.json"
-    _write_json(path, meta)
+    with _project_lock(project_id):
+        load_project(project_id)
+        path = lora_dir(project_id, lora_id) / "meta.json"
+        _write_json(path, meta)
 
 
 def write_take_lrc(project_id: str, take_id: str, lrc_text: str) -> None:
     """SPEC.md sec 7 `lyrics.lrc`; `worker.acestep_worker.run_job` only
     returns `lrc_text` (see its docstring) -- this is what actually persists
     it, same division of labor as `write_take_meta` above."""
-    path = take_dir(project_id, take_id) / "lyrics.lrc"
-    _write_text(path, lrc_text)
+    with _project_lock(project_id):
+        load_project(project_id)
+        path = take_dir(project_id, take_id) / "lyrics.lrc"
+        _write_text(path, lrc_text)
 
 
 def _sanitize_component(value: str, fallback: str) -> str:

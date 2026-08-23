@@ -822,14 +822,13 @@ def run_claimed_job(job: dict[str, Any]) -> None:
     )
     heartbeat_thread.start()
     try:
-        if action == "train_lora":
-            # train_lora has no take/DiT-swap shape at all (no source audio
-            # generation, no plan) -- it gets its own worker entry point
-            # (resolve_worker_module().train_lora) instead of the
-            # generate-shaped run_job path every other action uses below.
-            _run_train_lora_job(job_id, project_id, payload)
-        else:
-            _run_generate_shaped_job(job_id, project_id, action, dit_profile, payload)
+        with storage.project_lifecycle_lock(project_id):
+            if action == "train_lora":
+                # train_lora has no take/DiT-swap shape at all (no source audio
+                # generation, no plan) -- it gets its own worker entry point.
+                _run_train_lora_job(job_id, project_id, payload)
+            else:
+                _run_generate_shaped_job(job_id, project_id, action, dit_profile, payload)
     finally:
         stop_heartbeat.set()
         heartbeat_thread.join(timeout=HEARTBEAT_INTERVAL_SEC)

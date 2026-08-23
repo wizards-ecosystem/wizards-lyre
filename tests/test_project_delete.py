@@ -206,6 +206,47 @@ def test_concurrent_enqueue_never_orphans_a_queued_job_past_deletion(
     assert all(j["status"] == "error" for j in remaining)
 
 
+def test_delete_waits_for_inflight_save_and_directory_stays_absent(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A save past its existence check cannot recreate a deleted project."""
+    project = client.post("/api/projects", json={"title": "Save Race"}).json()
+    project_id = project["id"]
+    pdir = storage.project_dir(project_id)
+    save_paused = threading.Event()
+    resume_save = threading.Event()
+    real_write_json = storage._write_json
+
+    def paused_write(path: Path, data: dict) -> None:
+        if path == storage.plan_json_path(project_id):
+            save_paused.set()
+            assert resume_save.wait(timeout=10)
+        real_write_json(path, data)
+
+    monkeypatch.setattr(storage, "_write_json", paused_write)
+    save_thread = threading.Thread(target=storage.save_plan, args=(project_id, {"query": "new"}))
+    save_thread.start()
+    assert save_paused.wait(timeout=10)
+
+    delete_result: list[int] = []
+
+    def delete() -> None:
+        delete_result.append(client.delete(f"/api/projects/{project_id}").status_code)
+
+    delete_thread = threading.Thread(target=delete)
+    delete_thread.start()
+    time.sleep(0.1)
+    assert delete_thread.is_alive(), "DELETE must wait for the in-flight writer"
+    resume_save.set()
+    save_thread.join(timeout=10)
+    delete_thread.join(timeout=10)
+
+    assert not save_thread.is_alive()
+    assert not delete_thread.is_alive()
+    assert delete_result == [204]
+    assert not pdir.exists()
+
+
 def test_filesystem_failure_rolls_back_job_cancellation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
