@@ -351,6 +351,19 @@ export function createMockBardServer() {
       );
       return Promise.resolve(jsonResponse(state.detail.project));
     }
+    if (method === "PATCH" && m) {
+      const patch = (body ?? {}) as Partial<Pick<Project, "title" | "dit_profile" | "favorite">>;
+      state.projects = state.projects.map((p) => (p.id === m![1] ? { ...p, ...patch } : p));
+      if (state.detail.project.id === m[1]) {
+        state.detail = { ...state.detail, project: { ...state.detail.project, ...patch } };
+      }
+      const updated = state.projects.find((p) => p.id === m![1]) ?? state.detail.project;
+      return Promise.resolve(jsonResponse(updated));
+    }
+    if (method === "DELETE" && m) {
+      state.projects = state.projects.filter((p) => p.id !== m![1]);
+      return Promise.resolve(jsonResponse(null, 204));
+    }
 
     m = url.match(/^\/api\/projects\/([^/]+)\/plan$/);
     if (method === "PUT" && m) {
