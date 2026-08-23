@@ -276,6 +276,10 @@ body {
   font-size: 12px;
 }
 
+.lora-select select {
+  max-width: 160px;
+}
+
 .cover-strength {
   display: flex;
   align-items: center;
