@@ -377,6 +377,36 @@ body {
   white-space: nowrap;
 }
 
+.seed-input {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.seed-input input {
+  width: 90px;
+}
+
+.dit-profile-picker {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.dit-profile-picker .dit-profile-option {
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
+.dit-profile-picker .dit-profile-option.selected {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
 .cover-strength {
   display: flex;
   align-items: center;

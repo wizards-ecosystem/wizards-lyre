@@ -69,6 +69,7 @@ export function makeTake(id: string, index: number, overrides: Partial<Take> = {
     has_lrc: false,
     error: null,
     track_name: null,
+    lora_id: null,
     favorite: false,
     notes: "",
     ...overrides,
@@ -189,6 +190,9 @@ export function createMockBardServer() {
       dit_profile: action === "train_lora" ? "studio_ops" : "iterate",
       status,
       take_id: status === "done" && action !== "train_lora" ? `take-of-${id}` : null,
+      // The UI never reads a job row's lora_id (take provenance comes from
+      // take.lora_id); null keeps the row shaped like server.jobs._row_to_dict.
+      lora_id: null,
       error: status === "error" ? (script.error ?? "job failed") : null,
       created_at: CREATED_AT,
       updated_at: CREATED_AT,
