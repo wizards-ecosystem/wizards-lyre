@@ -1,11 +1,17 @@
 """SPEC.md sec 9.1 Library: "Delete (confirm)". Covers server.storage.delete_project
 / DELETE /api/projects/{id} -- successful deletion, unknown ids, path-jail
-resistance, and that deleting a project cancels its own queued jobs without
-touching another project's.
+resistance, that deleting a project cancels its own queued jobs without
+touching another project's, that a concurrent enqueue can never land once
+deletion has begun (server.jobs.begin_project_deletion's tombstone), and
+that a filesystem failure during deletion rolls the cancellation back
+instead of leaving a still-existing project with irreversibly cancelled
+jobs (server.jobs.abort_project_deletion).
 """
 
 from __future__ import annotations
 
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -121,7 +127,7 @@ def test_delete_cancels_the_projects_own_queued_jobs_only(client: TestClient) ->
     assert jobs.claim_next_queued_job()["id"] == survivor_job["id"]
 
 
-def test_cancel_queued_jobs_for_project_returns_cancelled_ids(client: TestClient) -> None:
+def test_begin_project_deletion_returns_cancelled_ids(client: TestClient) -> None:
     project = client.post("/api/projects", json={"title": "Cancel Return"}).json()
     job_a = client.post(
         f"/api/projects/{project['id']}/jobs", json={"action": "generate", "seed": -1}
@@ -130,8 +136,122 @@ def test_cancel_queued_jobs_for_project_returns_cancelled_ids(client: TestClient
         f"/api/projects/{project['id']}/jobs", json={"action": "generate", "seed": -1}
     ).json()
 
-    cancelled_ids = jobs.cancel_queued_jobs_for_project(project["id"])
+    cancelled_ids = jobs.begin_project_deletion(project["id"])
     assert set(cancelled_ids) == {job_a["id"], job_b["id"]}
 
-    # calling it again once nothing is queued is a no-op, not an error
-    assert jobs.cancel_queued_jobs_for_project(project["id"]) == []
+    # A tombstone now exists -- calling it again (a second concurrent DELETE,
+    # or a retry) must not silently re-cancel/re-tombstone, it must reject.
+    with pytest.raises(jobs.ProjectDeletionConflict):
+        jobs.begin_project_deletion(project["id"])
+
+
+def test_enqueue_is_rejected_once_project_deletion_has_begun(client: TestClient) -> None:
+    # Reviewer-flagged race: a concurrent enqueue_job that lands between
+    # begin_project_deletion's cancel step and storage.delete_project's
+    # rmtree must never succeed in inserting an orphaned queued job -- the
+    # tombstone begin_project_deletion writes is what enqueue_job checks
+    # atomically before inserting (server.jobs.enqueue_job).
+    project = client.post("/api/projects", json={"title": "Deleting"}).json()
+    jobs.begin_project_deletion(project["id"])
+
+    resp = client.post(
+        f"/api/projects/{project['id']}/jobs", json={"action": "generate", "seed": -1}
+    )
+    assert resp.status_code == 400
+
+    # No job row leaked in for this project despite the rejected request.
+    recent = jobs.list_recent_jobs(limit=50)
+    assert all(j["project_id"] != project["id"] for j in recent)
+
+
+def test_concurrent_enqueue_never_orphans_a_queued_job_past_deletion(
+    client: TestClient,
+) -> None:
+    # Reviewer-flagged race, exercised under real concurrent execution rather
+    # than by hand-sequencing calls: hammer server.jobs.enqueue_job from
+    # several threads while a deletion runs concurrently, and assert the
+    # invariant the tombstone in begin_project_deletion/enqueue_job exists to
+    # guarantee -- once storage.delete_project has removed the project
+    # directory, no `queued` (or `running`) row for it can still exist,
+    # whichever way the enqueue/delete calls happened to interleave.
+    project = client.post("/api/projects", json={"title": "Race"}).json()
+    project_id = project["id"]
+
+    unexpected_errors: list[BaseException] = []
+
+    def enqueue_repeatedly() -> None:
+        for _ in range(50):
+            try:
+                jobs.enqueue_job(project_id, {"action": "generate", "seed": -1})
+            except jobs.JobError:
+                pass  # rejected once the tombstone is in place -- expected
+            except storage.ProjectNotFound:
+                pass  # project already gone -- expected once delete finishes
+            except BaseException as exc:  # noqa: BLE001 - want to see everything else
+                unexpected_errors.append(exc)
+
+    threads = [threading.Thread(target=enqueue_repeatedly) for _ in range(4)]
+    for t in threads:
+        t.start()
+    time.sleep(0.01)  # let a few enqueues land before the delete starts racing them
+    jobs.begin_project_deletion(project_id)
+    storage.delete_project(project_id)
+    for t in threads:
+        t.join(timeout=10)
+        assert not t.is_alive()
+
+    assert unexpected_errors == []
+    remaining = [j for j in jobs.list_recent_jobs(limit=1000) if j["project_id"] == project_id]
+    assert remaining, "expected at least the jobs begin_project_deletion cancelled"
+    assert all(j["status"] == "error" for j in remaining)
+
+
+def test_filesystem_failure_rolls_back_job_cancellation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Reviewer-flagged: if shutil.rmtree fails after queued jobs were
+    # already cancelled, the project (which still exists on disk) must not
+    # be left with irreversibly cancelled jobs.
+    #
+    # raise_server_exceptions=False here (unlike the module's `client`
+    # fixture) so an unhandled OSError from the simulated disk failure comes
+    # back as a real 500 response to inspect, the way a production ASGI
+    # server's ServerErrorMiddleware would return it, instead of TestClient
+    # re-raising it into the test for debugging.
+    monkeypatch.setenv("BARD_PROJECTS_DIR", str(tmp_path / "projects"))
+    monkeypatch.setenv("BARD_DB_PATH", str(tmp_path / "bard.db"))
+    monkeypatch.setenv("BARD_WORKER", "mock")
+    with TestClient(app, raise_server_exceptions=False) as client:
+        project = client.post("/api/projects", json={"title": "Rmtree Fails"}).json()
+        job = client.post(
+            f"/api/projects/{project['id']}/jobs", json={"action": "generate", "seed": -1}
+        ).json()
+
+        real_rmtree = storage.shutil.rmtree
+
+        def _boom(*_args, **_kwargs):
+            raise OSError("simulated disk failure")
+
+        storage.shutil.rmtree = _boom
+        try:
+            resp = client.delete(f"/api/projects/{project['id']}")
+        finally:
+            storage.shutil.rmtree = real_rmtree
+        assert resp.status_code == 500
+
+        # The project still exists (rmtree never actually ran) and is still
+        # listed...
+        pdir = storage.project_dir(project["id"])
+        assert pdir.is_dir()
+        listed = client.get("/api/projects").json()
+        assert any(p["id"] == project["id"] for p in listed)
+
+        # ...and its job was restored to `queued`, not left `error`.
+        restored = client.get(f"/api/jobs/{job['id']}").json()
+        assert restored["status"] == "queued"
+        assert restored["error"] is None
+
+        # The tombstone was removed too, so a real (non-failing) retry succeeds.
+        resp = client.delete(f"/api/projects/{project['id']}")
+        assert resp.status_code == 204
+        assert not pdir.exists()

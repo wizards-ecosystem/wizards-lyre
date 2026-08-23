@@ -206,14 +206,27 @@ def delete_project(project_id: str) -> Response:
     # SPEC.md sec 9.1 "Delete (confirm)". storage.load_project raises
     # ProjectNotFound (-> 404, see the exception handler above) for an
     # unknown id before either the job queue or the filesystem is touched.
-    # Queued jobs for this project are cancelled first (jobs.py's
-    # cancel_queued_jobs_for_project) so a worker can never claim one after
-    # the project directory it depends on is gone; a job already running
-    # for this project fails safely on its own once the directory
-    # disappears (see that function's docstring).
+    #
+    # jobs.begin_project_deletion records a tombstone and cancels this
+    # project's queued jobs in one atomic transaction (reviewer-flagged: a
+    # non-atomic cancel-then-delete left a window where a concurrent
+    # enqueue_job could insert a new queued job for this project_id after
+    # the cancel swept past it, orphaning an actionable job for a project
+    # about to disappear -- see that function's docstring for how the
+    # tombstone closes it). A job already running for this project fails
+    # safely on its own once the directory disappears.
+    #
+    # If the filesystem removal itself fails (disk error, permissions, a
+    # handle still open), the project still exists on disk, so its jobs
+    # must not stay cancelled -- abort_project_deletion restores them and
+    # removes the tombstone before the original error is re-raised.
     storage.load_project(project_id)
-    jobs.cancel_queued_jobs_for_project(project_id)
-    storage.delete_project(project_id)
+    cancelled_job_ids = jobs.begin_project_deletion(project_id)
+    try:
+        storage.delete_project(project_id)
+    except Exception:
+        jobs.abort_project_deletion(project_id, cancelled_job_ids)
+        raise
     return Response(status_code=204)
 
 
