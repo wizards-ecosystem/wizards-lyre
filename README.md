@@ -125,6 +125,10 @@ pytest
 
 Default pytest must not load CUDA or ACE-Step weights (it pins `BARD_WORKER=mock`).
 
+Frontend regression tests: `cd web && npm test` (Vitest + React Testing
+Library against a mocked backend, no FastAPI/CUDA/ACE-Step required) — see
+web/README.md's Tests section for details.
+
 ## GPU smoke (manual)
 
 ```powershell

@@ -39,9 +39,11 @@ npm test
 ```
 
 Frontend regression tests (Vitest + React Testing Library + jsdom), covering
-the LoRA train/load UX (SPEC.md §4.4) against a mocked fetch backend in
-`src/test/mockServer.ts` — no FastAPI, CUDA, ACE-Step, credentials, or
-generated audio required. Python-side tests stay pytest at the repo root
+the studio's core flows (generate/cover/repaint, extract/lego/complete,
+library management, take annotations, plan editing, LoRA train/load, and
+more) against a mocked fetch backend in `src/test/mockServer.ts` — no
+FastAPI, CUDA, ACE-Step, credentials, or generated audio required. Python-side
+tests stay pytest at the repo root
 (SPEC.md §11). Like `dev.mjs` / `build.mjs`, the Vitest config lives inline
 in `test.mjs` instead of a `vitest.config.ts`; see the Notes section for why.
 
