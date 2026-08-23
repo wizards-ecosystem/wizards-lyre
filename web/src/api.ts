@@ -70,6 +70,23 @@ export interface ProjectDetail {
   takes: Take[];
 }
 
+// Mirrors the meta dict worker.acestep_worker.train_lora (and
+// worker.mock_worker.train_lora) return -- server.storage persists it
+// verbatim as <lora_dir>/meta.json and GET /api/projects/{id}/loras lists
+// those dicts as-is (SPEC.md sec 4.4 "Style pack | LoRA train / load").
+export interface Lora {
+  id: string;
+  name: string;
+  created_at: string;
+  source_take_count: number;
+  base_checkpoint: string;
+  dit_profile: string;
+  final_step: number | null;
+  final_loss: number | null;
+  status: string | null;
+  error: string | null;
+}
+
 export interface Job {
   id: string;
   project_id: string;
@@ -218,6 +235,20 @@ export const api = {
         dit_profile: "studio_ops",
         source_take_id: sourceTakeId,
         track_name: trackName,
+        seed: -1,
+      }),
+    }),
+  listLoras: (projectId: string) => request<Lora[]>(`/api/projects/${projectId}/loras`),
+  // source_take_ids must contain 8+ distinct take ids -- server.jobs
+  // enforces MIN_LORA_SOURCE_TAKES and rejects with a clear JobError
+  // otherwise (SPEC.md sec 4.4 "8+ songs").
+  trainLora: (projectId: string, sourceTakeIds: string[], name: string) =>
+    request<Job>(`/api/projects/${projectId}/jobs`, {
+      method: "POST",
+      body: JSON.stringify({
+        action: "train_lora",
+        source_take_ids: sourceTakeIds,
+        name,
         seed: -1,
       }),
     }),
