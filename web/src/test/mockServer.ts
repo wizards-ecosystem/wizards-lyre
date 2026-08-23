@@ -71,6 +71,9 @@ export function makeTake(id: string, index: number, overrides: Partial<Take> = {
     track_name: null,
     favorite: false,
     notes: "",
+    // Required by Take since the applied-style provenance UX; tests that
+    // need a styled take override this.
+    lora_id: null,
     ...overrides,
   };
 }
@@ -189,6 +192,9 @@ export function createMockBardServer() {
       dit_profile: action === "train_lora" ? "studio_ops" : "iterate",
       status,
       take_id: status === "done" && action !== "train_lora" ? `take-of-${id}` : null,
+      // Required by Job since the training-recovery work; null matches
+      // "queued/running or non-train_lora" (no pack allocated yet).
+      lora_id: null,
       error: status === "error" ? (script.error ?? "job failed") : null,
       created_at: CREATED_AT,
       updated_at: CREATED_AT,

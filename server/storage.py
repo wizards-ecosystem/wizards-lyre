@@ -460,6 +460,17 @@ def validate_plan(plan: object) -> dict:
     return normalized
 
 
+def _normalize_title(title: str | None) -> str:
+    """The one title rule shared by create_project and patch_project:
+    surrounding whitespace is stripped, and an empty or whitespace-only
+    title falls back to 'Untitled'. Keeping both paths on the same rule
+    means a rename (PATCH) can never produce a blank or padding-only
+    title the library would render as an empty row -- the same guarantee
+    create already gave for empty titles."""
+    cleaned = (title or "").strip()
+    return cleaned or "Untitled"
+
+
 def create_project(
     title: str | None = None,
     query: str | None = None,
@@ -469,7 +480,7 @@ def create_project(
     now = _now()
     project = {
         "id": project_id,
-        "title": title or "Untitled",
+        "title": _normalize_title(title),
         "created_at": now,
         "updated_at": now,
         "dit_profile": dit_profile,
@@ -593,7 +604,7 @@ def touch_project(project_id: str) -> dict:
 def patch_project(project_id: str, patch: dict) -> dict:
     def mutate(project: dict) -> None:
         if patch.get("title") is not None:
-            project["title"] = patch["title"]
+            project["title"] = _normalize_title(patch["title"])
         if patch.get("dit_profile") is not None:
             if patch["dit_profile"] not in VALID_DIT_PROFILES:
                 raise ValueError(f"invalid dit_profile: {patch['dit_profile']}")

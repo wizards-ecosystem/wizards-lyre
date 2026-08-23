@@ -180,6 +180,60 @@ body {
   overflow-y: auto;
 }
 
+/* The workspace heading doubles as the rename affordance (SPEC.md sec 9):
+   the project title renders as a text-like button whose chrome appears on
+   hover/focus, swapped for .rename-title-input while editing. Both states
+   share the same padding + compensating negative margin so the text never
+   jumps when toggling between them. */
+.workspace-title {
+  display: flex;
+  align-items: center;
+}
+
+.rename-title,
+.rename-title-input {
+  font: inherit;
+  color: inherit;
+  border-radius: 4px;
+  padding: 2px 8px;
+  /* Cancel the padding+border above so the text sits exactly where the
+     plain <h2> text did. */
+  margin: -3px 0 -3px -9px;
+}
+
+.rename-title {
+  background: none;
+  border: 1px solid transparent;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+}
+
+.rename-title:hover,
+.rename-title:focus-visible {
+  border-color: var(--border);
+  background: var(--panel);
+}
+
+.rename-title-icon {
+  font-size: 0.6em;
+  color: var(--muted);
+  opacity: 0;
+}
+
+.rename-title:hover .rename-title-icon,
+.rename-title:focus-visible .rename-title-icon {
+  opacity: 1;
+}
+
+.rename-title-input {
+  background: #101116;
+  border: 1px solid var(--accent);
+  width: min(480px, 100%);
+}
+
 .panes {
   display: grid;
   grid-template-columns: 1fr 1fr 1fr;

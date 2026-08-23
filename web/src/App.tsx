@@ -238,6 +238,18 @@ export default function App() {
   // refresh the pack list the moment it finishes (no second reload needed).
   const [trainingJobs, setTrainingJobs] = useState<Job[]>([]);
 
+  // Inline rename of the open project from the workspace heading (SPEC.md
+  // sec 9). Non-null while the heading's edit input is open, holding the
+  // in-progress draft; null shows the plain heading. Deliberately NOT part
+  // of the debounced plan-save machinery above: a rename commits as one
+  // PATCH /api/projects/{id} on Enter/blur, never one request per
+  // keystroke.
+  const [titleDraft, setTitleDraft] = useState<string | null>(null);
+  // Guards Enter and blur against racing each other into two PATCHes for
+  // the same commit (Enter fires it; the input can still blur while the
+  // request is in flight).
+  const titleSavingRef = useRef(false);
+
   // Plan saves are debounced and serialized: at most one PUT /plan in
   // flight at a time, always carrying the latest edit. Without this, one
   // PUT per keystroke can complete out of order and let an older request
@@ -388,6 +400,41 @@ export default function App() {
       await refreshProjects();
     } catch (err) {
       setErrorMsg(String(err));
+    }
+  }
+
+  // Renames the open project from the workspace heading: one PATCH
+  // /api/projects/{id} on commit (Enter or blur), nothing per keystroke.
+  // On success the server-normalized project from the response replaces
+  // detail.project (covers e.g. a whitespace-only draft coming back as
+  // 'Untitled', matching storage.create_project), and the library list is
+  // refreshed so the sidebar title matches too. On failure the error is
+  // surfaced in the banner and the input stays open with the typed value
+  // intact, so the edit is never lost.
+  async function commitProjectTitle(): Promise<void> {
+    if (!activeId || !detail || titleDraft === null || titleSavingRef.current) return;
+    const projectId = activeId;
+    const draft = titleDraft;
+    if (draft === detail.project.title) {
+      // Opened the editor but changed nothing -- close it, skip the PATCH.
+      setTitleDraft(null);
+      return;
+    }
+    titleSavingRef.current = true;
+    try {
+      const updated = await api.patchProject(projectId, { title: draft });
+      // Stale-response guard (same reasoning as activeIdRef above): if the
+      // user switched projects while the PATCH was in flight, keep the new
+      // project's detail instead of clobbering it with the old one's.
+      setDetail((prev) =>
+        prev && prev.project.id === projectId ? { ...prev, project: updated } : prev,
+      );
+      setTitleDraft(null);
+      await refreshProjects();
+    } catch (err) {
+      setErrorMsg(String(err));
+    } finally {
+      titleSavingRef.current = false;
     }
   }
 
@@ -588,6 +635,9 @@ export default function App() {
     setLoraName("");
     setSelectedLoraId(null);
     setTrainingJobs([]);
+    // Drop any in-progress rename from the project being left -- the draft
+    // belongs to that project's title and must not appear on the next one.
+    setTitleDraft(null);
     if (activeId) {
       refreshDetail(activeId).catch((err) => setErrorMsg(String(err)));
       refreshLoras(activeId).catch((err) => setErrorMsg(String(err)));
@@ -1349,7 +1399,41 @@ export default function App() {
           {!detail && <p className="hint">Select or create a project.</p>}
           {detail && (
             <>
-              <h2>{detail.project.title}</h2>
+              {titleDraft === null ? (
+                <h2 className="workspace-title">
+                  <button
+                    type="button"
+                    className="rename-title"
+                    title="Rename project"
+                    onClick={() => setTitleDraft(detail.project.title)}
+                  >
+                    {detail.project.title}
+                    <span className="rename-title-icon" aria-hidden="true">
+                      ✎
+                    </span>
+                  </button>
+                </h2>
+              ) : (
+                <h2 className="workspace-title">
+                  <input
+                    className="rename-title-input"
+                    aria-label="Project title"
+                    value={titleDraft}
+                    autoFocus
+                    onChange={(e) => setTitleDraft(e.target.value)}
+                    onFocus={(e) => e.currentTarget.select()}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        commitProjectTitle();
+                      } else if (e.key === "Escape") {
+                        // Cancel: drop the draft, keep the saved title.
+                        setTitleDraft(null);
+                      }
+                    }}
+                    onBlur={() => commitProjectTitle()}
+                  />
+                </h2>
+              )}
 
               <div className="panes">
                 <section className="pane plan">
