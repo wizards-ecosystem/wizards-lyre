@@ -542,22 +542,27 @@ def delete_project(project_id: str) -> None:
 
     The rmtree itself retries briefly on PermissionError: on Windows a
     concurrent lock-free reader (e.g. jobs.enqueue_job's load_project) can
-    still hold a file handle open for a few microseconds, which surfaces as
-    a sharing violation (WinError 32 / PermissionError) instead of the
-    delete completing. Such handles drop almost immediately, so a short
-    retry turns an avoidable failure into a successful deletion.
+    still hold a file handle open for a moment, which surfaces as a sharing
+    violation (WinError 32 / PermissionError) instead of the delete
+    completing. Such handles drop almost immediately, so a short retry turns
+    an avoidable failure into a successful deletion. The attempt count/total
+    budget (~1.5s) is sized for many concurrent readers hammering the same
+    project (reviewer-flagged flake under test_project_delete.py's
+    concurrent-enqueue test: 4 threads x 50 enqueues can keep re-opening
+    project.json for longer than a couple of retries cover).
     """
     with _project_lock(project_id):
         load_project(project_id)
         pdir = project_dir(project_id)
-        for attempt in range(5):
+        attempts = 15
+        for attempt in range(attempts):
             try:
                 shutil.rmtree(pdir)
                 return
             except PermissionError:
-                if attempt == 4:
+                if attempt == attempts - 1:
                     raise
-                time.sleep(0.05)
+                time.sleep(0.1)
 
 
 def load_plan(project_id: str) -> dict:
