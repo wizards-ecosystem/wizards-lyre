@@ -1457,6 +1457,13 @@ export default function App() {
                           key={tag}
                           type="button"
                           className="lyrics-tag-button"
+                          // Pointer-down on a button steals focus from the
+                          // textarea *before* onClick fires -- without this,
+                          // insertLyricsTag would always see
+                          // document.activeElement !== textarea and fall
+                          // back to appending instead of honoring the
+                          // cursor/selection the user actually clicked with.
+                          onMouseDown={(e) => e.preventDefault()}
                           onClick={() => insertLyricsTag(`[${tag}]`)}
                         >
                           [{tag}]

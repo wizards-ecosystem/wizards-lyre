@@ -521,19 +521,24 @@ def load_project(project_id: str) -> dict:
         if not path.exists():
             raise ProjectNotFound(project_id)
         return _read_json(path)
-    except (FileNotFoundError, PermissionError) as exc:
+    except FileNotFoundError as exc:
         # A concurrent delete_project can rmtree the directory in the gap
         # between the exists() check and the read -- same outcome as the
-        # check itself failing. On Windows this race can surface as either
-        # error depending on exactly when the read lands relative to the
-        # rmtree: FileNotFoundError once the entry is gone, or PermissionError
-        # (WinError 5) for a read that starts while the file is mid-delete
-        # (reviewer-flagged flake under test_project_delete.py's concurrent
-        # enqueue test -- jobs.enqueue_job's unlocked load_project call races
-        # delete_project's locked rmtree directly). Without converting both,
-        # the race surfaces a raw OSError instead of the normal
-        # ProjectNotFound (-> 404 for HTTP callers, expected-rejection for
-        # enqueue_job racing a deletion).
+        # check itself failing.
+        raise ProjectNotFound(project_id) from exc
+    except PermissionError as exc:
+        # On Windows, the same delete-project race above can surface as
+        # PermissionError (WinError 5) instead of FileNotFoundError, for a
+        # read that starts while the file is mid-delete (reviewer-flagged
+        # flake under test_project_delete.py's concurrent enqueue test --
+        # jobs.enqueue_job's unlocked load_project call races
+        # delete_project's locked rmtree directly). But a PermissionError can
+        # also be a genuine ACL/filesystem problem on a project that still
+        # exists -- only normalize it to ProjectNotFound once the path has
+        # actually disappeared (confirming the race), otherwise propagate the
+        # real error instead of masking it as a 404.
+        if path.exists():
+            raise
         raise ProjectNotFound(project_id) from exc
 
 

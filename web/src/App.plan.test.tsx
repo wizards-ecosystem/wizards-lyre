@@ -52,6 +52,38 @@ function planPutRequests(server: MockBardServer): RecordedRequest[] {
   return server.requests.filter((r) => r.method === "PUT" && r.url.endsWith("/plan"));
 }
 
+// The Lyrics field's wrapping <label> also contains the structure-tag
+// buttons (App.tsx), so it has more than one labelable descendant --
+// getByLabelText("Lyrics") resolves to the *first* one (an "[Intro]"
+// button), not the textarea, because testing-library's implicit label
+// association picks the first labelable descendant. The Plan pane has
+// exactly one <textarea> (the other one, "take-notes", lives in the Takes
+// pane), so scoping a plain tag query to the Plan section finds it
+// unambiguously.
+function lyricsTextarea(): HTMLTextAreaElement {
+  const pane = screen.getByRole("heading", { name: "Plan" }).closest("section");
+  if (!pane) throw new Error("plan pane not found");
+  const el = pane.querySelector("textarea");
+  if (!el) throw new Error("lyrics textarea not found");
+  return el as HTMLTextAreaElement;
+}
+
+// jsdom does not implement a real browser's default action of moving focus
+// to a pointer-down target, so a plain fireEvent.click here would never
+// reproduce the reviewer-flagged bug (a tag button's mousedown stealing
+// focus from the textarea before onClick runs, which made insertLyricsTag
+// always see activeElement !== textarea and append instead of honoring the
+// cursor/selection). This reproduces that default action by hand, honoring
+// preventDefault() exactly like a real browser would, so it both exercises
+// the original bug and verifies the fix (onMouseDown={preventDefault} on
+// the tag buttons).
+function clickStealingFocus(el: HTMLElement): void {
+  const notPrevented = fireEvent.mouseDown(el);
+  if (notPrevented) el.focus();
+  fireEvent.mouseUp(el);
+  fireEvent.click(el);
+}
+
 // Opens the fixture project against an already-installed server, for the
 // remount ("reopen") test below -- renderOpenedProject() owns its own
 // server per call, which doesn't fit that test's need to unmount and
@@ -70,7 +102,7 @@ it("saves every Custom plan field through one debounced PUT /plan with correct t
   fireEvent.change(screen.getByLabelText("Caption"), {
     target: { value: "brooding wizard folk" },
   });
-  fireEvent.change(screen.getByLabelText("Lyrics"), {
+  fireEvent.change(lyricsTextarea(), {
     target: { value: "[Chorus]\nburn the old maps" },
   });
   fireEvent.click(screen.getByLabelText("Instrumental"));
@@ -111,9 +143,7 @@ it("saves every Custom plan field through one debounced PUT /plan with correct t
   expect((screen.getByLabelText("Caption") as HTMLInputElement).value).toBe(
     "brooding wizard folk",
   );
-  expect((screen.getByLabelText("Lyrics") as HTMLTextAreaElement).value).toBe(
-    "[Chorus]\nburn the old maps",
-  );
+  expect(lyricsTextarea().value).toBe("[Chorus]\nburn the old maps");
   expect((screen.getByLabelText("Instrumental") as HTMLInputElement).checked).toBe(true);
   expect(
     (screen.getByLabelText("Allow caption rewrite (Custom mode LM thinking)") as HTMLInputElement)
@@ -207,4 +237,33 @@ it("keeps a rejected edit visible without letting it clobber the last accepted p
   expect(server.state.detail.plan.caption).toBe("accepted caption");
 
   vi.stubGlobal("fetch", previousFetch);
+});
+
+it("inserts a structure tag at the lyrics cursor instead of always appending", async () => {
+  app = await renderOpenedProject();
+  const textarea = lyricsTextarea();
+
+  fireEvent.change(textarea, { target: { value: "la la la\nmore lyrics" } });
+  textarea.focus();
+  textarea.setSelectionRange(9, 9); // collapsed cursor right after the newline
+
+  // A plain (non-focus-stealing) click on the tag button must not disturb
+  // the textarea's cursor -- if it did, the tag would land at the end of
+  // the text instead of where the user actually clicked from.
+  clickStealingFocus(screen.getByRole("button", { name: "[Chorus]" }));
+
+  expect(textarea.value).toBe("la la la\n[Chorus]\nmore lyrics");
+});
+
+it("replaces a selected lyrics range when a structure tag button is clicked", async () => {
+  app = await renderOpenedProject();
+  const textarea = lyricsTextarea();
+
+  fireEvent.change(textarea, { target: { value: "la la la\nmore lyrics" } });
+  textarea.focus();
+  textarea.setSelectionRange(0, 8); // select "la la la"
+
+  clickStealingFocus(screen.getByRole("button", { name: "[Bridge]" }));
+
+  expect(textarea.value).toBe("[Bridge]\n\nmore lyrics");
 });
