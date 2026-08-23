@@ -9,7 +9,7 @@
 // Math.random, and jobs complete on the first /api/jobs/{id} poll unless a
 // test explicitly scripts a different sequence via scriptNextJob().
 import { vi } from "vitest";
-import type { Job, Lora, Plan, ProjectDetail, ProjectSummary, Take } from "../api";
+import type { Job, Lora, Plan, Project, ProjectDetail, ProjectSummary, Take } from "../api";
 
 export const PROJECT_ID = "proj-1";
 
@@ -224,6 +224,55 @@ export function createMockBardServer() {
     let m = url.match(/^\/api\/projects\/([^/]+)$/);
     if (method === "GET" && m) {
       return Promise.resolve(jsonResponse(state.detail));
+    }
+    if (method === "PATCH" && m) {
+      const patch = (body ?? {}) as Partial<Pick<Project, "title" | "dit_profile" | "favorite">>;
+      state.detail = { ...state.detail, project: { ...state.detail.project, ...patch } };
+      state.projects = state.projects.map((p) =>
+        p.id === m![1] ? { ...p, ...patch } : p,
+      );
+      return Promise.resolve(jsonResponse(state.detail.project));
+    }
+    if (method === "DELETE" && m) {
+      state.projects = state.projects.filter((p) => p.id !== m![1]);
+      return Promise.resolve({
+        ok: true,
+        status: 204,
+        statusText: "No Content",
+        json: async () => undefined,
+        text: async () => "",
+      });
+    }
+
+    m = url.match(/^\/api\/projects\/([^/]+)\/takes\/([^/]+)$/);
+    if (method === "PATCH" && m) {
+      const patch = (body ?? {}) as Partial<Pick<Take, "favorite" | "notes">>;
+      let updated: Take | null = null;
+      state.detail = {
+        ...state.detail,
+        takes: state.detail.takes.map((t) => {
+          if (t.id !== m![2]) return t;
+          updated = { ...t, ...patch };
+          return updated;
+        }),
+      };
+      if (!updated) {
+        return Promise.resolve(jsonResponse({ detail: `no such take ${m[2]}` }, 404));
+      }
+      return Promise.resolve(jsonResponse(updated));
+    }
+
+    m = url.match(/^\/api\/projects\/([^/]+)\/active_take$/);
+    if (method === "POST" && m) {
+      const payload = (body ?? {}) as { take_id: string };
+      state.detail = {
+        ...state.detail,
+        project: { ...state.detail.project, active_take_id: payload.take_id },
+      };
+      state.projects = state.projects.map((p) =>
+        p.id === m![1] ? { ...p, active_take_id: payload.take_id } : p,
+      );
+      return Promise.resolve(jsonResponse(state.detail.project));
     }
 
     m = url.match(/^\/api\/projects\/([^/]+)\/plan$/);
