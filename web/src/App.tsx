@@ -38,8 +38,25 @@ const PLAN_SAVE_DEBOUNCE_MS = 500;
 const REPAINT_REGION_ID = "repaint-selection";
 const SECTION_REGION_ID_PREFIX = "section-label-";
 
+// SPEC.md sec 4.1: the DiT profiles a generate/cover/repaint job may run
+// under. studio_ops is deliberately not offered -- it is reserved for
+// extract/lego/complete, or generate/cover/repaint with a style pack
+// attached (server.jobs._resolve_dit_profile rejects/forces it either way).
+const DIT_PROFILE_OPTIONS = ["iterate", "polish", "quality"] as const;
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// SPEC.md sec 7.3: "-1 from the user means worker picks and records" the
+// seed. An empty input is the UI's way of saying -1; anything that doesn't
+// parse to an integer also falls back to -1 rather than posting a value the
+// server would reject as a validation error.
+function parseSeed(raw: string): number {
+  const trimmed = raw.trim();
+  if (trimmed === "") return -1;
+  const parsed = Number(trimmed);
+  return Number.isInteger(parsed) ? parsed : -1;
 }
 
 // A job only finishes async, via server.jobs' queued -> running -> done|error
@@ -215,6 +232,10 @@ export default function App() {
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [region, setRegion] = useState<{ start: number; end: number } | null>(null);
   const [coverStrength, setCoverStrength] = useState(0.7);
+  // Fixed seed for the next Generate/Cover/Repaint (SPEC.md sec 7.3). Kept
+  // as the raw input string so an empty field stays empty on screen; empty
+  // or -1 means the worker picks a seed and records the actual one used.
+  const [seedInput, setSeedInput] = useState("");
   const [trackName, setTrackName] = useState("");
   const [includeStems, setIncludeStems] = useState(true);
   const [health, setHealth] = useState<Health | null>(null);
@@ -387,6 +408,35 @@ export default function App() {
       await api.patchProject(p.id, { favorite: !p.favorite });
       await refreshProjects();
     } catch (err) {
+      setErrorMsg(String(err));
+    }
+  }
+
+  // SPEC.md sec 4.1: the DiT profile is a project-level default, persisted
+  // via PATCH /api/projects/{id} -- jobs never carry their own dit_profile
+  // from this UI (server.jobs._resolve_dit_profile falls back to the
+  // project's persisted value, and coerces lora-attached jobs to studio_ops
+  // on its own). Optimistic update with revert on failure, same shape as the
+  // take-favorite toggle below.
+  async function setDitProfile(profile: string): Promise<void> {
+    if (!activeId || !detail) return;
+    const projectId = activeId;
+    const previous = detail.project.dit_profile;
+    if (previous === profile) return;
+    setDetail((prev) =>
+      prev ? { ...prev, project: { ...prev.project, dit_profile: profile } } : prev,
+    );
+    try {
+      await api.patchProject(projectId, { dit_profile: profile });
+    } catch (err) {
+      // Revert only if the user is still looking at this project -- a
+      // switch that already happened means `detail` holds the other
+      // project's data and must not be clobbered with this one's old value.
+      if (activeIdRef.current === projectId) {
+        setDetail((prev) =>
+          prev ? { ...prev, project: { ...prev.project, dit_profile: previous } } : prev,
+        );
+      }
       setErrorMsg(String(err));
     }
   }
@@ -920,7 +970,7 @@ export default function App() {
       // the plan from before the user's last edit (e.g. the query/caption
       // they just typed).
       await flushPendingPlanSave();
-      const queued = await api.generate(activeId, selectedLoraId);
+      const queued = await api.generate(activeId, selectedLoraId, parseSeed(seedInput));
       const job = await pollJob(queued.id, (update) => setBusyStatus(update.status));
       if (job.status === "error") {
         setErrorMsg(job.error ?? "generate job failed");
@@ -957,7 +1007,7 @@ export default function App() {
       const source = selectedTakeId
         ? { takeId: selectedTakeId }
         : { uploadPath: uploadedSourcePath! };
-      const queued = await api.cover(activeId, source, coverStrength, selectedLoraId);
+      const queued = await api.cover(activeId, source, coverStrength, selectedLoraId, parseSeed(seedInput));
       const job = await pollJob(queued.id, (update) => setBusyStatus(update.status));
       if (job.status === "error") {
         setErrorMsg(job.error ?? "cover job failed");
@@ -1003,7 +1053,7 @@ export default function App() {
         : { uploadPath: uploadedSourcePath! };
       const start = selectedTakeId ? region!.start : 0;
       const end = selectedTakeId ? region!.end : -1;
-      const queued = await api.repaint(activeId, source, start, end, selectedLoraId);
+      const queued = await api.repaint(activeId, source, start, end, selectedLoraId, parseSeed(seedInput));
       const job = await pollJob(queued.id, (update) => setBusyStatus(update.status));
       if (job.status === "error") {
         setErrorMsg(job.error ?? "repaint job failed");
@@ -1875,6 +1925,47 @@ export default function App() {
                         Style pack: {selectedLora.name}
                       </span>
                     )}
+                    <label className="seed-input">
+                      Seed
+                      <input
+                        type="number"
+                        step={1}
+                        min={-1}
+                        placeholder="-1"
+                        value={seedInput}
+                        onChange={(e) => setSeedInput(e.target.value)}
+                        disabled={busy}
+                        title="Fixed seed for Generate/Cover/Repaint; empty or -1 lets the worker pick and record one (SPEC.md sec 7.3)"
+                      />
+                    </label>
+                    <div
+                      className="dit-profile-picker"
+                      role="group"
+                      aria-label="DiT profile"
+                      title="Project default DiT checkpoint for Generate/Cover/Repaint (SPEC.md sec 4.1); a style pack always forces studio_ops"
+                    >
+                      <span className="dit-profile-caption">DiT</span>
+                      {DIT_PROFILE_OPTIONS.map((profile) => (
+                        <button
+                          key={profile}
+                          type="button"
+                          className={`dit-profile-option ${
+                            detail.project.dit_profile === profile ? "selected" : ""
+                          }`}
+                          disabled={busy}
+                          onClick={() => setDitProfile(profile)}
+                          title={
+                            profile === "iterate"
+                              ? "Fast daily generate/cover/repaint (turbo, 8 steps)"
+                              : profile === "polish"
+                                ? "More prompt adherence / detail (sft, 50 steps + CFG)"
+                                : "XL turbo; the job is rejected if the worker cannot load XL"
+                          }
+                        >
+                          {profile}
+                        </button>
+                      ))}
+                    </div>
                     <button
                       onClick={generate}
                       disabled={busy}

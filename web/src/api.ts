@@ -205,23 +205,29 @@ export const api = {
   // dit_profile to "studio_ops" for us, since a trained LoRA's weights are
   // only valid against that base checkpoint -- callers must not also pass an
   // explicit dit_profile here or the server rejects the conflict.
-  generate: (id: string, loraId?: string | null) =>
+  //
+  // seed (SPEC.md sec 7.3): -1 means the worker picks a seed and records
+  // the actual one used in the take meta; any other integer is a fixed seed
+  // the worker must honor verbatim.
+  generate: (id: string, loraId?: string | null, seed: number = -1) =>
     request<Job>(`/api/projects/${id}/jobs`, {
       method: "POST",
       body: JSON.stringify({
         action: "generate",
-        seed: -1,
+        seed,
         ...(loraId ? { lora_id: loraId } : {}),
       }),
     }),
   // Exactly one of source_take_id/upload_path is ever sent, matching
   // server.jobs._resolve_source_audio's "source_take_id or upload_path"
   // contract (SPEC.md sec 8.1) -- callers pass whichever source is active.
+  // seed: see generate() above (-1 = worker picks and records).
   cover: (
     id: string,
     source: { takeId: string } | { uploadPath: string },
     strength: number,
     loraId?: string | null,
+    seed: number = -1,
   ) =>
     request<Job>(`/api/projects/${id}/jobs`, {
       method: "POST",
@@ -229,16 +235,18 @@ export const api = {
         action: "cover",
         ...("takeId" in source ? { source_take_id: source.takeId } : { upload_path: source.uploadPath }),
         audio_cover_strength: strength,
-        seed: -1,
+        seed,
         ...(loraId ? { lora_id: loraId } : {}),
       }),
     }),
+  // seed: see generate() above (-1 = worker picks and records).
   repaint: (
     id: string,
     source: { takeId: string } | { uploadPath: string },
     start: number,
     end: number,
     loraId?: string | null,
+    seed: number = -1,
   ) =>
     request<Job>(`/api/projects/${id}/jobs`, {
       method: "POST",
@@ -247,7 +255,7 @@ export const api = {
         ...("takeId" in source ? { source_take_id: source.takeId } : { upload_path: source.uploadPath }),
         repainting_start: start,
         repainting_end: end,
-        seed: -1,
+        seed,
         ...(loraId ? { lora_id: loraId } : {}),
       }),
     }),
