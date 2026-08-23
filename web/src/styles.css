@@ -320,6 +320,16 @@ body {
   width: 100%;
 }
 
+/* Named section labels drawn on the waveform (SPEC.md sec 7.2). The
+   regions plugin marks each region's content element with
+   part="region-content"; keep the text small and legible over the waves. */
+[part="region-content"] {
+  font-size: 11px;
+  color: var(--text);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9);
+  white-space: nowrap;
+}
+
 .region-actions {
   display: flex;
   align-items: center;
