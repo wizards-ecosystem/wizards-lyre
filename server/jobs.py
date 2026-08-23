@@ -1098,11 +1098,35 @@ def get_job(job_id: str) -> dict:
     return _row_to_dict(row)
 
 
-def list_recent_jobs(limit: int = 20) -> list[dict]:
+def list_recent_jobs(
+    limit: int = 20,
+    project_id: str | None = None,
+    action: str | None = None,
+) -> list[dict]:
+    """Recent jobs, newest first, optionally narrowed to one project and/or
+    one action *before* the LIMIT applies. The web UI uses this to recover
+    the open project's still-queued/running `train_lora` job after a page
+    refresh (SPEC.md sec 4.4 style-pack training runs up to ~1 hour, so a
+    refresh mid-training is expected to restore visible progress) -- with
+    only the unfiltered top-N, a long training job gets pushed out of the
+    window by jobs enqueued after it (which pile up behind it while the GPU
+    is locked), exactly when the user most needs to find it. Filters are
+    optional; with neither given this is exactly the old unfiltered query."""
+    query = "SELECT * FROM jobs"
+    clauses: list[str] = []
+    params: list[Any] = []
+    if project_id is not None:
+        clauses.append("project_id = ?")
+        params.append(project_id)
+    if action is not None:
+        clauses.append("action = ?")
+        params.append(action)
+    if clauses:
+        query += " WHERE " + " AND ".join(clauses)
+    query += " ORDER BY created_at DESC LIMIT ?"
+    params.append(limit)
     with closing(_connect()) as conn:
-        rows = conn.execute(
-            "SELECT * FROM jobs ORDER BY created_at DESC LIMIT ?", (limit,)
-        ).fetchall()
+        rows = conn.execute(query, params).fetchall()
     return [_row_to_dict(row) for row in rows]
 
 
