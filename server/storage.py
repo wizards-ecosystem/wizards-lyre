@@ -11,6 +11,7 @@ import json
 import os
 import posixpath
 import re
+import shutil
 import time
 import uuid
 import zipfile
@@ -326,6 +327,20 @@ def load_project(project_id: str) -> dict:
     if not path.exists():
         raise ProjectNotFound(project_id)
     return _read_json(path)
+
+
+def delete_project(project_id: str) -> None:
+    """Remove `projects/<id>` entirely (SPEC.md sec 9.1 "Delete (confirm)").
+
+    `project_dir()` resolves through `jailed_path`, so this can never be
+    tricked (via a crafted/traversal id) into `rmtree`-ing anything outside
+    `projects_dir()` -- same jail every other write in this module goes
+    through. `load_project` first so an unknown id raises `ProjectNotFound`
+    (-> 404) rather than `rmtree` silently no-oping on a path that never
+    existed, matching every other lookup in this module.
+    """
+    load_project(project_id)
+    shutil.rmtree(project_dir(project_id))
 
 
 def load_plan(project_id: str) -> dict:

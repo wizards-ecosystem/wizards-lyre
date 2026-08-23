@@ -967,6 +967,32 @@ def process_one_queued_job() -> bool:
     return True
 
 
+def cancel_queued_jobs_for_project(project_id: str) -> list[str]:
+    """Mark every still-`queued` job for `project_id` as `error` (SPEC.md
+    sec 9.1 "Delete (confirm)") so `claim_next_queued_job` can never pick one
+    up after `server.storage.delete_project` removes the project directory
+    out from under it. Returns the cancelled job ids.
+
+    Only `queued` jobs are touched -- a job already `running` for this
+    project fails safely on its own (`_run_generate_shaped_job` /
+    `_run_train_lora_job` both wrap their work in a try/except that persists
+    an `error` status without needing the project directory to still exist),
+    so there's nothing to reconcile for it here.
+    """
+    with closing(_connect()) as conn:
+        rows = conn.execute(
+            "SELECT id FROM jobs WHERE project_id = ? AND status = 'queued'",
+            (project_id,),
+        ).fetchall()
+        conn.execute(
+            "UPDATE jobs SET status = 'error', error = ?, updated_at = ? "
+            "WHERE project_id = ? AND status = 'queued'",
+            ("project deleted", _now(), project_id),
+        )
+        conn.commit()
+    return [row["id"] for row in rows]
+
+
 def get_job(job_id: str) -> dict:
     with closing(_connect()) as conn:
         row = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()

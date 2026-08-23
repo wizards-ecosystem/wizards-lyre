@@ -108,6 +108,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     const body = await resp.text();
     throw new Error(`${resp.status} ${resp.statusText}: ${body}`);
   }
+  // DELETE /api/projects/{id} responds 204 No Content -- resp.json() would
+  // throw on the empty body, so every other (JSON-bodied) response takes
+  // the normal path and this one alone returns undefined.
+  if (resp.status === 204) {
+    return undefined as T;
+  }
   return resp.json() as Promise<T>;
 }
 
@@ -137,6 +143,8 @@ export const api = {
       body: JSON.stringify({ title, query }),
     }),
   getProject: (id: string) => request<ProjectDetail>(`/api/projects/${id}`),
+  deleteProject: (id: string) =>
+    request<void>(`/api/projects/${id}`, { method: "DELETE" }),
   patchProject: (id: string, patch: Partial<Pick<Project, "title" | "dit_profile" | "favorite">>) =>
     request<Project>(`/api/projects/${id}`, {
       method: "PATCH",

@@ -201,6 +201,22 @@ def patch_project(project_id: str, body: PatchProjectBody) -> dict:
     return storage.patch_project(project_id, body.model_dump(exclude_unset=True))
 
 
+@app.delete("/api/projects/{project_id}", status_code=204)
+def delete_project(project_id: str) -> Response:
+    # SPEC.md sec 9.1 "Delete (confirm)". storage.load_project raises
+    # ProjectNotFound (-> 404, see the exception handler above) for an
+    # unknown id before either the job queue or the filesystem is touched.
+    # Queued jobs for this project are cancelled first (jobs.py's
+    # cancel_queued_jobs_for_project) so a worker can never claim one after
+    # the project directory it depends on is gone; a job already running
+    # for this project fails safely on its own once the directory
+    # disappears (see that function's docstring).
+    storage.load_project(project_id)
+    jobs.cancel_queued_jobs_for_project(project_id)
+    storage.delete_project(project_id)
+    return Response(status_code=204)
+
+
 @app.put("/api/projects/{project_id}/plan")
 def put_plan(project_id: str, body: dict[str, Any]) -> dict:
     return storage.save_plan(project_id, body)

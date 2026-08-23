@@ -160,6 +160,21 @@ body {
   color: #f5c518;
 }
 
+.delete-btn {
+  font-size: 12px;
+  line-height: 1;
+  padding: 3px 6px;
+  flex: 0 0 auto;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: var(--muted);
+}
+
+.delete-btn:hover {
+  color: #e5484d;
+}
+
 .workspace {
   padding: 20px;
   overflow-y: auto;
