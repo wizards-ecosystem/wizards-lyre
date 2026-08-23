@@ -165,15 +165,30 @@ export const api = {
   // project's own persisted dit_profile (PATCH /api/projects/{id}) when the
   // job body doesn't provide one. Hardcoding "iterate" here would silently
   // override that project-level choice on every generate request.
-  generate: (id: string) =>
+  //
+  // loraId is optional (SPEC.md sec 4.4 "LoRA train / load" -- the load
+  // half): when set, server.jobs._resolve_dit_profile coerces the omitted
+  // dit_profile to "studio_ops" for us, since a trained LoRA's weights are
+  // only valid against that base checkpoint -- callers must not also pass an
+  // explicit dit_profile here or the server rejects the conflict.
+  generate: (id: string, loraId?: string | null) =>
     request<Job>(`/api/projects/${id}/jobs`, {
       method: "POST",
-      body: JSON.stringify({ action: "generate", seed: -1 }),
+      body: JSON.stringify({
+        action: "generate",
+        seed: -1,
+        ...(loraId ? { lora_id: loraId } : {}),
+      }),
     }),
   // Exactly one of source_take_id/upload_path is ever sent, matching
   // server.jobs._resolve_source_audio's "source_take_id or upload_path"
   // contract (SPEC.md sec 8.1) -- callers pass whichever source is active.
-  cover: (id: string, source: { takeId: string } | { uploadPath: string }, strength: number) =>
+  cover: (
+    id: string,
+    source: { takeId: string } | { uploadPath: string },
+    strength: number,
+    loraId?: string | null,
+  ) =>
     request<Job>(`/api/projects/${id}/jobs`, {
       method: "POST",
       body: JSON.stringify({
@@ -181,6 +196,7 @@ export const api = {
         ...("takeId" in source ? { source_take_id: source.takeId } : { upload_path: source.uploadPath }),
         audio_cover_strength: strength,
         seed: -1,
+        ...(loraId ? { lora_id: loraId } : {}),
       }),
     }),
   repaint: (
@@ -188,6 +204,7 @@ export const api = {
     source: { takeId: string } | { uploadPath: string },
     start: number,
     end: number,
+    loraId?: string | null,
   ) =>
     request<Job>(`/api/projects/${id}/jobs`, {
       method: "POST",
@@ -197,6 +214,7 @@ export const api = {
         repainting_start: start,
         repainting_end: end,
         seed: -1,
+        ...(loraId ? { lora_id: loraId } : {}),
       }),
     }),
   extract: (id: string, sourceTakeId: string, trackName: string) =>

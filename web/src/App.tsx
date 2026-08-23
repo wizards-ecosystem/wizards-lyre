@@ -212,6 +212,10 @@ export default function App() {
   // (waveform/cover/repaint source, A/B compare).
   const [loraSourceIds, setLoraSourceIds] = useState<Set<string>>(new Set());
   const [loraName, setLoraName] = useState("");
+  // The style pack (if any) to apply to the next generate/cover/repaint
+  // (SPEC.md sec 4.4 "LoRA train / load" -- the load half). Separate from
+  // loraSourceIds above, which only feeds *training* a new pack.
+  const [selectedLoraId, setSelectedLoraId] = useState<string | null>(null);
 
   // Plan saves are debounced and serialized: at most one PUT /plan in
   // flight at a time, always carrying the latest edit. Without this, one
@@ -511,6 +515,7 @@ export default function App() {
     setUploadedSourceName(null);
     setLoraSourceIds(new Set());
     setLoraName("");
+    setSelectedLoraId(null);
     if (activeId) {
       refreshDetail(activeId).catch((err) => setErrorMsg(String(err)));
       refreshLoras(activeId).catch((err) => setErrorMsg(String(err)));
@@ -678,7 +683,7 @@ export default function App() {
       // the plan from before the user's last edit (e.g. the query/caption
       // they just typed).
       await flushPendingPlanSave();
-      const queued = await api.generate(activeId);
+      const queued = await api.generate(activeId, selectedLoraId);
       const job = await pollJob(queued.id, (update) => setBusyStatus(update.status));
       if (job.status === "error") {
         setErrorMsg(job.error ?? "generate job failed");
@@ -706,7 +711,7 @@ export default function App() {
       const source = selectedTakeId
         ? { takeId: selectedTakeId }
         : { uploadPath: uploadedSourcePath! };
-      const queued = await api.cover(activeId, source, coverStrength);
+      const queued = await api.cover(activeId, source, coverStrength, selectedLoraId);
       const job = await pollJob(queued.id, (update) => setBusyStatus(update.status));
       if (job.status === "error") {
         setErrorMsg(job.error ?? "cover job failed");
@@ -743,7 +748,7 @@ export default function App() {
         : { uploadPath: uploadedSourcePath! };
       const start = selectedTakeId ? region!.start : 0;
       const end = selectedTakeId ? region!.end : -1;
-      const queued = await api.repaint(activeId, source, start, end);
+      const queued = await api.repaint(activeId, source, start, end, selectedLoraId);
       const job = await pollJob(queued.id, (update) => setBusyStatus(update.status));
       if (job.status === "error") {
         setErrorMsg(job.error ?? "repaint job failed");
@@ -1389,6 +1394,24 @@ export default function App() {
                     </div>
                   )}
                   <div className="waveform-actions">
+                    <label className="lora-select">
+                      Style pack
+                      <select
+                        value={selectedLoraId ?? ""}
+                        onChange={(e) => setSelectedLoraId(e.target.value || null)}
+                        disabled={busy}
+                        title="Applies to Generate/Cover/Repaint below (SPEC.md sec 4.4)"
+                      >
+                        <option value="">None</option>
+                        {loras
+                          .filter((lora) => !lora.error)
+                          .map((lora) => (
+                            <option key={lora.id} value={lora.id}>
+                              {lora.name}
+                            </option>
+                          ))}
+                      </select>
+                    </label>
                     <button
                       onClick={generate}
                       disabled={busy}
