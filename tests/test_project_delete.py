@@ -177,6 +177,17 @@ def test_concurrent_enqueue_never_orphans_a_queued_job_past_deletion(
     project = client.post("/api/projects", json={"title": "Race"}).json()
     project_id = project["id"]
 
+    # Seed one queued job synchronously. The final `remaining` assert needs
+    # at least one row for begin_project_deletion to have cancelled, and the
+    # hammer threads below are not guaranteed to land an enqueue before the
+    # deletion starts racing them -- thread startup can take longer than the
+    # sleep below on a loaded runner, in which case every enqueue is
+    # (correctly) rejected by the tombstone and `remaining` comes back
+    # empty. The seed covers the "enqueue landed entirely before the
+    # deletion transaction" interleave deterministically; the hammer still
+    # covers the racing interleaves.
+    jobs.enqueue_job(project_id, {"action": "generate", "seed": -1})
+
     unexpected_errors: list[BaseException] = []
 
     def enqueue_repeatedly() -> None:
