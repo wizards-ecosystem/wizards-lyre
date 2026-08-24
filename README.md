@@ -34,7 +34,8 @@ test suite exercises.
 
 ## Machine
 
-Windows, RTX 4070 Ti SUPER 16 GB. Default: ACE-Step 2B turbo + 1.7B LM. Bind `127.0.0.1:8421`.
+WSL Ubuntu (`limb06`), RTX 4070 Ti SUPER 16 GB. Checkout: `/home/limb06/wizards-bard`.
+Default: ACE-Step 2B turbo + 1.7B LM. Bind `127.0.0.1:8421`.
 
 ## Layout
 
@@ -49,10 +50,10 @@ Windows, RTX 4070 Ti SUPER 16 GB. Default: ACE-Step 2B turbo + 1.7B LM. Bind `12
 
 ## Setup
 
-```powershell
-py -3.11 -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -e ".[dev]"
+```bash
+uv venv --python 3.12 .venv
+source .venv/bin/activate
+uv pip install -e ".[dev]"
 ```
 
 `pip install -e ".[dev]"` above only installs this repo's own dependencies (FastAPI, uvicorn,
@@ -61,12 +62,9 @@ sec 4, sec 13) that `worker/acestep_worker.py` imports lazily, so it's only requ
 machine that runs `worker.run_worker`, not on a server-only box. Install it before downloading
 weights:
 
-```powershell
-$bardRoot = Get-Location    # `cd -` isn't a thing in Windows PowerShell -- come back explicitly
-git clone https://github.com/ace-step/ACE-Step-1.5 ..\ACE-Step-1.5
-cd ..\ACE-Step-1.5
-pip install -e .          # follow docs/en/INSTALL.md there if this repo's exact steps have drifted
-cd $bardRoot
+```bash
+git clone https://github.com/ace-step/ACE-Step-1.5 ../ACE-Step-1.5
+( cd ../ACE-Step-1.5 && uv pip install -e . )  # follow docs/en/INSTALL.md there if this has drifted
 ```
 
 Once `acestep` is importable and its download entry point is on PATH, pull the turbo checkpoint +
@@ -78,7 +76,7 @@ checkout) -- `worker/acestep_worker.py`'s `CHECKPOINTS_ROOT` resolves the relati
 `checkpoints/` under its own current directory the same way, so the two must be run from the same
 place or the worker won't find what was downloaded:
 
-```powershell
+```bash
 acestep-download
 ```
 
@@ -98,7 +96,7 @@ Two separate processes (SPEC.md sec 5): the FastAPI server only ever reads/write
 disk; the worker is where CUDA and ACE-Step actually load, so a GPU crash can't take HTTP down
 and a long generation never blocks a request.
 
-```powershell
+```bash
 python -m server.app          # terminal 1: HTTP API + (if built) the SPA
 python -m worker.run_worker   # terminal 2: claims `queued` jobs, runs them one at a time
 ```
@@ -110,7 +108,7 @@ server. Jobs posted to `/api/projects/{id}/jobs` sit as `queued` until `worker.r
 
 ## Frontend
 
-```powershell
+```bash
 cd web
 npm install
 npm run build     # writes web/dist, served by the FastAPI app above
@@ -119,7 +117,7 @@ npm run dev        # Vite dev server with a /api proxy to BARD_PORT (default 842
 
 ## Tests
 
-```powershell
+```bash
 pytest
 ```
 
@@ -131,29 +129,18 @@ web/README.md's Tests section for details.
 
 ## GPU smoke (manual)
 
-```powershell
+```bash
 python scripts/smoke-gpu.py
 ```
 
 Loads ACE-Step turbo, generates ~10s of instrumental `text2music`, prints the output path, exits
 0. Not part of `pytest`; requires a real GPU and installed weights.
 
-## Conclave / jail
+## Location
 
-The canonical clone lives at `wizards-conclave/.projects/wizards-bard`. That `.projects/` folder
-is the NTFS jail (`jail.root`). Conclave jobs work in their own worktree under
-`.projects/.conclave-wt/<job>` and merge back into that clone. Agents may write anything in
-`.projects`; they must not write Conclave source, `.env`, or `.conclave`.
+Canonical checkout: `/home/limb06/wizards-bard` (WSL Ubuntu, next to the other limb06 projects).
+Studio data (`projects/`) lives in this tree and is gitignored.
 
-Do not recreate `C:/Users/isaac/Documents/wizards-bard`. Conclave skips any `repo:` path outside
-`.projects/`.
-
-Jail setup (once, elevated, from the Conclave repo):
-
-```powershell
-cd C:\Users\isaac\Documents\wizards-conclave
-.\scripts\setup-windows-jail.cmd
-.\scripts\wz.ps1 doctor
-```
-
-Doctor must show PASS for `jail .projects`. Re-run setup after `pnpm install`. `config/projects/bard.yaml` is enabled; goals are implement SPEC.md in phase order.
+Conclave on Windows cannot jail a WSL path, so `config/projects/wizards-bard.yaml` stays
+`active: false`. Do not recreate a Windows clone under `.projects/` unless you want Conclave
+to drive Bard again.

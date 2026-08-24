@@ -101,6 +101,7 @@ class FakeGenerationParams:
         instruction: Any,
         inference_steps: int,
         guidance_scale: float,
+        enable_normalization: bool,
     ) -> None:
         self.task_type = task_type
         self.caption = caption
@@ -121,16 +122,15 @@ class FakeGenerationParams:
         self.instruction = instruction
         self.inference_steps = inference_steps
         self.guidance_scale = guidance_scale
+        self.enable_normalization = enable_normalization
 
 
 class FakeGenerationConfig:
-    """batch_size/audio_format/use_random_seed/enable_normalization --
-    inference_steps/guidance_scale belong on GenerationParams instead (this
-    is exactly what the reviewer flagged). use_random_seed defaults True
+    """batch_size/audio_format/use_random_seed -- inference_steps,
+    guidance_scale, and enable_normalization belong on GenerationParams
+    (that's the installed ACE-Step 1.5 split). use_random_seed defaults True
     upstream and must be explicitly False for a fixed (non--1) seed to
-    actually be honored -- also reviewer-flagged. enable_normalization must
-    be requested explicitly True (SPEC.md sec 4.3: "default on") rather than
-    left unset."""
+    actually be honored."""
 
     def __init__(
         self,
@@ -138,12 +138,10 @@ class FakeGenerationConfig:
         batch_size: int,
         audio_format: str,
         use_random_seed: bool,
-        enable_normalization: bool,
     ) -> None:
         self.batch_size = batch_size
         self.audio_format = audio_format
         self.use_random_seed = use_random_seed
-        self.enable_normalization = enable_normalization
 
 
 class FakeResult:
@@ -345,9 +343,9 @@ def _install_fake_acestep(
         }
 
     def generate_music(
-        *, dit_handler: Any, lm_handler: Any, params: Any, config: Any, save_dir: str
+        *, dit_handler: Any, llm_handler: Any, params: Any, config: Any, save_dir: str
     ) -> FakeResult:
-        log.append(("generate_music", dit_handler, lm_handler, params, config, save_dir))
+        log.append(("generate_music", dit_handler, llm_handler, params, config, save_dir))
         # ACE-Step writes its own output filename -- not mix.wav -- so the
         # adapter has to find and rename it (SPEC.md sec 7.3).
         if audio_path_override is not None:
@@ -474,8 +472,9 @@ def test_run_job_matches_installed_api_contract(
     # instead of silently relabeling whatever comes back as .wav.
     assert config.audio_format == "wav"
     # SPEC.md sec 4.3: loudness normalization is "default on" -- requested
-    # explicitly rather than relying on whatever ACE-Step's own default is.
-    assert config.enable_normalization is True
+    # explicitly on GenerationParams (not GenerationConfig).
+    assert params.enable_normalization is True
+    assert not hasattr(config, "enable_normalization")
     # Custom-mode plan metadata (language, time signature) must actually
     # reach the renderer, not be dropped.
     assert params.vocal_language == "fr"
@@ -485,11 +484,11 @@ def test_run_job_matches_installed_api_contract(
     # must not let the LM rewrite the caption.
     assert params.thinking is False
     # GenerationParams has no negative_tags/track_name field; plan.json's
-    # "negative" is not forwarded (no confirmed upstream field), and
-    # "generate" doesn't send an instruction (that's extract/lego/complete
-    # only -- see test_track_name_maps_to_instruction_for_studio_ops).
+    # "negative" is not forwarded (no confirmed upstream field). generate
+    # still sends ACE-Step's default instruction string because the
+    # installed handler calls .endswith(":") on it and crashes on None.
     assert not hasattr(params, "negative_tags")
-    assert params.instruction is None
+    assert params.instruction == "Fill the audio semantic mask based on the given conditions:"
     # SPEC.md sec 7.3: -1 means "worker picks" -- ACE-Step's own random-seed
     # path, not a fixed request.
     assert params.seed == -1

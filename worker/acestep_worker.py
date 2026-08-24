@@ -51,10 +51,11 @@ adapter must not silently relabel as `.wav`), `use_random_seed` --
 `GenerationParams.seed` alone is not enough to reproduce a take: this must
 be explicitly `False` whenever a fixed (non--1) seed is requested, or
 ACE-Step's own default (`True`) ignores it -- and `enable_normalization=True`
-(SPEC.md sec 4.3: "default on", always requested explicitly rather than
-trusting whatever ACE-Step's own default happens to be); `generate_music`
+on `GenerationParams` (SPEC.md sec 4.3: "default on", always requested
+explicitly rather than trusting whatever ACE-Step's own default happens to
+be; this field lives on params, not `GenerationConfig`); `generate_music`
 takes both plus `dit_handler` (not `handler`)
-and `lm_handler`. Its `GenerationResult` reports `success` plus generated
+and `llm_handler`. Its `GenerationResult` reports `success` plus generated
 files in `audios` (dicts) and LM/CoT-filled metadata in `extra_outputs`;
 the actual seed used lives nested at `audio["params"]["seed"]`, not
 top-level. Every acestep call below is wrapped so a further API drift
@@ -971,30 +972,44 @@ def run_job(
             "GenerationParams",
             GenerationParams,
             task_type=TASK_TYPE_BY_ACTION[job["action"]],
-            caption=effective_plan.get("caption", ""),
-            lyrics=effective_plan.get("lyrics", ""),
+            caption=effective_plan.get("caption") or "",
+            lyrics=effective_plan.get("lyrics") or "",
             bpm=effective_plan.get("bpm"),
-            keyscale=effective_plan.get("keyscale"),
+            keyscale=effective_plan.get("keyscale") or "",
             duration=effective_plan.get("duration_sec"),
             instrumental=effective_plan.get("instrumental", False),
-            vocal_language=effective_plan.get("vocal_language"),
-            timesignature=effective_plan.get("timesignature"),
+            vocal_language=effective_plan.get("vocal_language") or "unknown",
+            # ACE-Step calls .strip() on timesignature; None crashes inside
+            # generate_music (AttributeError), so never forward a missing
+            # plan field as None -- empty string is the upstream default.
+            timesignature=effective_plan.get("timesignature") or "",
             thinking=thinking,
             use_cot_metas=use_cot_metas,
             seed=seed,
             src_audio=job.get("src_audio"),
-            audio_cover_strength=job.get("audio_cover_strength"),
-            repainting_start=job.get("repainting_start"),
-            repainting_end=job.get("repainting_end"),
+            audio_cover_strength=(
+                1.0
+                if job.get("audio_cover_strength") is None
+                else job.get("audio_cover_strength")
+            ),
+            repainting_start=job.get("repainting_start") if job.get("repainting_start") is not None else 0.0,
+            repainting_end=job.get("repainting_end") if job.get("repainting_end") is not None else -1,
             # extract/lego/complete's track selection goes through the
             # task-specific `instruction` field, not a `track_name` kwarg
             # (GenerationParams has no such field -- passing it raised
             # TypeError on every real call, converted to WorkerUnavailable).
             instruction=(
-                job.get("track_name") if job["action"] in TRACK_INSTRUCTION_ACTIONS else None
+                job.get("track_name")
+                if job["action"] in TRACK_INSTRUCTION_ACTIONS
+                else "Fill the audio semantic mask based on the given conditions:"
             ),
             inference_steps=GENERATION_STEPS[dit_profile],
             guidance_scale=GENERATION_GUIDANCE_SCALE[dit_profile],
+            # SPEC.md sec 4.3: loudness normalization is "default on, no
+            # extra mastering chain in v1" -- requested explicitly rather
+            # than relying on ACE-Step's own default staying True upstream.
+            # Lives on GenerationParams, not GenerationConfig.
+            enable_normalization=True,
         )
         config = _api_call(
             "GenerationConfig",
@@ -1005,16 +1020,12 @@ def run_job(
             # sec 7: mix.wav is "preferred archive").
             audio_format="wav",
             use_random_seed=use_random_seed,
-            # SPEC.md sec 4.3: loudness normalization is "default on, no
-            # extra mastering chain in v1" -- requested explicitly rather
-            # than relying on ACE-Step's own default staying True upstream.
-            enable_normalization=True,
         )
         result = _api_call(
             "generate_music",
             generate_music,
             dit_handler=handler,
-            lm_handler=lm,
+            llm_handler=lm,
             params=params,
             config=config,
             save_dir=str(take_dir),
