@@ -1,5 +1,5 @@
 [project]
-name = "wizards-bard"
+name = "wizards-lyre"
 version = "0.1.0"
 description = "Local ACE-Step generative music studio"
 readme = "README.md"

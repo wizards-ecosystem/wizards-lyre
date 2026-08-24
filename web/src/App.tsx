@@ -1387,7 +1387,7 @@ export default function App() {
   return (
     <div className="app">
       <header className="topbar">
-        <h1>Wizard's Bard</h1>
+        <h1>Wizard's Lyre</h1>
         <div className={`health ${health?.ok ? "ok" : "down"}`} title={healthError ?? undefined}>
           <span className="dot" />
           {health ? `${health.gpu}${health.dit_loaded ? ` · ${health.dit_loaded}` : ""}` : "server offline"}

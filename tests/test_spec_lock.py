@@ -108,7 +108,7 @@ def test_source_does_not_reference_forbidden_clients() -> None:
 
 
 def test_source_does_not_bind_public_host() -> None:
-    """Bard server entrypoints must not default to a public bind host.
+    """Lyre server entrypoints must not default to a public bind host.
     127.0.0.1 is fine; 0.0.0.0 (all interfaces) is not.
     """
     pattern = re.compile("|".join(re.escape(host) for host in FORBIDDEN_BIND_HOSTS))

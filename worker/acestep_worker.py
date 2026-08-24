@@ -15,14 +15,14 @@ not the HTTP process (sec 10 point 5). Run this worker as its own OS process
 ACE-Step/CUDA can't take the FastAPI server down with it either.
 
 Adapter notes (installed ACE-Step 1.5 Python API, SPEC.md sec 13 -- "follow
-ACE-Step's current API and keep Bard's HTTP schema stable with an
+ACE-Step's current API and keep Lyre's HTTP schema stable with an
 adapter"): `AceStepHandler`/`LLMHandler` are constructed with no arguments.
 `AceStepHandler` is loaded via `initialize_service(project_root=...,
 config_path=<checkpoint name>, device=..., offload_to_cpu=...)` -- CPU
 offload for `quality` (XL) is `offload_to_cpu`, not `cpu_offload`. Upstream
 resolves the DiT checkpoint at `<project_root>/checkpoints/<config_path>`,
 *not* at `<project_root>/<config_path>` -- `project_root` and the checkpoint
-directory are two different things to ACE-Step, even though Bard only has
+directory are two different things to ACE-Step, even though Lyre only has
 one (`CHECKPOINTS_ROOT`, SPEC.md sec 6). Passing `CHECKPOINTS_ROOT` itself as
 `project_root` (an earlier version of this adapter did) resolves as
 `checkpoints/checkpoints/<name>` and can't find real weights; `project_root`
@@ -36,7 +36,7 @@ passed explicitly (SPEC.md sec 4.2: ACE-Step otherwise defaults it to
 success)`; a falsy `success` is treated as a failed load, not cached as
 ready. Simple-mode planning goes through the module-level `acestep.
 inference.create_sample` (not a handler method); its result carries the
-language under `language`, which this adapter maps onto Bard's own
+language under `language`, which this adapter maps onto Lyre's own
 `vocal_language` plan field. `GenerationParams` carries every per-request
 field -- `inference_steps` and `guidance_scale` (not `num_inference_steps`/
 `use_cfg`), `duration` (not `duration_sec`), plus `vocal_language` and
@@ -709,7 +709,7 @@ def _plan_from_query(create_sample_fn: Any, lm: Any, plan: dict[str, Any]) -> di
         "keyscale": _field("keyscale", plan.get("keyscale")),
         "duration_sec": _field("duration", plan.get("duration_sec")),
         # create_sample's result field is "language", not "vocal_language"
-        # (that's Bard's own plan.json field name -- see storage.default_plan).
+        # (that's Lyre's own plan.json field name -- see storage.default_plan).
         "vocal_language": _field("language", plan.get("vocal_language")),
         "timesignature": _field("timesignature", plan.get("timesignature")),
     }

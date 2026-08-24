@@ -1,4 +1,4 @@
-# Wizard's Bard — SPEC
+# Wizard's Lyre — SPEC
 
 This file is the sole product spec. Implement it in phase order. Do not invent extra engines, unofficial APIs, or a one-click generate page. Do not follow `wizards-conclave/docs/BARD_HANDOFF.md`; that document is a pointer here.
 
@@ -10,7 +10,7 @@ This file is the sole product spec. Implement it in phase order. Do not invent e
 
 ## 1. Vision
 
-ACE-Step 1.5 is built for **human-centered generation**, not one-click vendor mode. Bard is a local generative **studio**: throw a seed, listen to takes, iterate with Cover / Repaint / Extract / Lego / Complete, export. The human rides the model; the model does not deliver a finished Spotify track from one prompt.
+ACE-Step 1.5 is built for **human-centered generation**, not one-click vendor mode. Lyre is a local generative **studio**: throw a seed, listen to takes, iterate with Cover / Repaint / Extract / Lego / Complete, export. The human rides the model; the model does not deliver a finished Spotify track from one prompt.
 
 The product ACE-Step's authors reject (and the old handoff specified): one page with prompt, lyrics, duration, generate, play, download.
 
@@ -29,7 +29,7 @@ The product this spec locks: a library of song **projects**, each with a **plan*
 - Second lyric LLM besides ACE-Step's 5Hz LM (Simple mode uses that LM; Custom mode is the human)
 - RoFormer / Demucs as a second GPU model in v1 (ACE-Step `extract` is the stem path)
 - Auth, multi-user, reverse proxy, Docker, cloud GPU
-- Shipping ACE-Step's Gradio UI as Bard. Gradio is upstream's demo. Bard owns the product UI.
+- Shipping ACE-Step's Gradio UI as Lyre. Gradio is upstream's demo. Lyre owns the product UI.
 
 ---
 
@@ -371,7 +371,7 @@ Still ACE-Step only. Do not open cloud-music tasks.
 - GPU tiers: `docs/en/GPU_COMPATIBILITY.md` — 16 GB is turbo/sft + 1.7B; XL with offload
 - Install: `docs/en/INSTALL.md` — Python 3.11+ stable
 
-If upstream parameter names drift, follow ACE-Step's current `GenerationParams` and keep Bard's HTTP schema stable with an adapter.
+If upstream parameter names drift, follow ACE-Step's current `GenerationParams` and keep Lyre's HTTP schema stable with an adapter.
 
 ---
 

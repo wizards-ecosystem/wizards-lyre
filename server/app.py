@@ -25,7 +25,7 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     yield
 
 
-app = FastAPI(title="Wizard's Bard", version="0.1.0", lifespan=_lifespan)
+app = FastAPI(title="Wizard's Lyre", version="0.1.0", lifespan=_lifespan)
 
 
 class _MaxRequestBodyMiddleware:

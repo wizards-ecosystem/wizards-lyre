@@ -1,4 +1,4 @@
-# Wizard's Bard
+# Wizard's Lyre
 
 Local generative music studio. ACE-Step 1.5 on the GPU. No cloud music APIs.
 
@@ -34,7 +34,7 @@ test suite exercises.
 
 ## Machine
 
-WSL Ubuntu (`limb06`), RTX 4070 Ti SUPER 16 GB. Checkout: `/home/limb06/wizards-bard`.
+WSL Ubuntu (`limb06`), RTX 4070 Ti SUPER 16 GB. Checkout: `/home/limb06/wizards-lyre`.
 Default: ACE-Step 2B turbo + 1.7B LM. Bind `127.0.0.1:8421`.
 
 ## Layout
@@ -138,9 +138,9 @@ Loads ACE-Step turbo, generates ~10s of instrumental `text2music`, prints the ou
 
 ## Location
 
-Canonical checkout: `/home/limb06/wizards-bard` (WSL Ubuntu, next to the other limb06 projects).
+Canonical checkout: `/home/limb06/wizards-lyre` (WSL Ubuntu, next to the other limb06 projects).
 Studio data (`projects/`) lives in this tree and is gitignored.
 
-Conclave on Windows cannot jail a WSL path, so `config/projects/wizards-bard.yaml` stays
-`active: false`. Do not recreate a Windows clone under `.projects/` unless you want Conclave
-to drive Bard again.
+Conclave on Windows cannot jail a WSL path, so the legacy
+`config/projects/wizards-bard.yaml` remains `active: false`. Do not recreate a Windows clone
+under `.projects/` unless you want Conclave to drive Lyre again.

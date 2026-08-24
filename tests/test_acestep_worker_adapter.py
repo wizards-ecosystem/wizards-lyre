@@ -15,7 +15,7 @@ argument names, `initialize(checkpoint_dir=..., lm_model_path=...,
 backend="pt", device=...)`, returning `(status_message, success)` (a falsy
 `success` must be treated as a failed load, not cached as ready), module-
 level `create_sample` whose result carries the language under `language`
-(mapped onto Bard's own `vocal_language` plan field), `inference_steps`/
+(mapped onto Lyre's own `vocal_language` plan field), `inference_steps`/
 `guidance_scale`/`vocal_language`/`timesignature`/`instruction` on
 `GenerationParams` (not `GenerationConfig`, and *no* `negative_tags` or
 `track_name` field -- those don't exist upstream and previously raised
@@ -337,7 +337,7 @@ def _install_fake_acestep(
             "keyscale": "C Major",
             "duration": 30,
             # ACE-Step's own field name is "language", not "vocal_language"
-            # (Bard's plan.json field) -- distinct from extra_outputs'
+            # (Lyre's plan.json field) -- distinct from extra_outputs'
             # "en" below so the mapping in _plan_from_query is unambiguous.
             "language": "ja",
         }
@@ -440,7 +440,7 @@ def test_run_job_matches_installed_api_contract(
     kwargs = handler_init[1]
     # The real assertion that matters (reviewer-flagged): ACE-Step resolves
     # the checkpoint at <project_root>/checkpoints/<config_path>, so this
-    # must land on Bard's actual weights directory -- not
+    # must land on Lyre's actual weights directory -- not
     # checkpoints/checkpoints/acestep-v15-turbo, which is what passing
     # CHECKPOINTS_ROOT itself as project_root used to produce.
     assert kwargs["resolved_checkpoint_dir"] == acestep_worker.CHECKPOINTS_ROOT / "acestep-v15-turbo"
@@ -810,7 +810,7 @@ def test_simple_mode_uses_module_level_create_sample_and_persists_full_plan(
     assert params.thinking is True
     assert params.use_cot_metas is True
     # create_sample's result carries the language under "language", not
-    # "vocal_language" (Bard's own plan.json field name) -- confirms
+    # "vocal_language" (Lyre's own plan.json field name) -- confirms
     # _plan_from_query maps it correctly before generation even runs.
     assert params.vocal_language == "ja"
 

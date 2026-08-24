@@ -1,6 +1,6 @@
 # web
 
-Vite + React + TypeScript SPA for Wizard's Bard (SPEC.md §9). Dark, dense,
+Vite + React + TypeScript SPA for Wizard's Lyre (SPEC.md §9). Dark, dense,
 local-tool aesthetic — a project library plus a three-pane project workspace
 (Plan / Takes / Waveform). No accounts, no marketing shell.
 
