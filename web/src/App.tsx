@@ -1758,7 +1758,7 @@ export default function App() {
           <span className="brand-mark"><Icon name="wave" /></span>
           <div>
             <h1>Wizard's Lyre</h1>
-            <span className="brand-subtitle">Local generative studio</span>
+            <span className="brand-subtitle">A local music sketchbook</span>
           </div>
         </div>
         <div className="topbar-tools">
@@ -1931,9 +1931,9 @@ export default function App() {
           {!detail && (
             <section className="workspace-empty" aria-labelledby="empty-title">
               <span className="empty-mark"><Icon name="wave" /></span>
-              <span className="eyebrow">The workbench is ready</span>
-              <h2 id="empty-title">Choose a project or begin a new composition.</h2>
-              <p>Your plan, waveform, and take history stay together here.</p>
+              <span className="eyebrow">Make room for an idea</span>
+              <h2 id="empty-title">Choose a project or start a fresh musical sketch.</h2>
+              <p>Your prompt, listening space, and take history stay together here.</p>
               <button type="button" className="button-primary" onClick={() => { setCreatingProject(true); setLibraryOpen(true); }}>
                 <Icon name="add" /> New project
               </button>
@@ -1983,7 +1983,7 @@ export default function App() {
                   </span>
                 </div>
                 <div className="workspace-actions">
-                  <button type="button" className="panel-action" aria-controls="composition-plan" aria-expanded={planOpen} onClick={() => setPlanOpen(true)}>
+                  <button type="button" className="panel-action builder-toggle" aria-controls="composition-plan" aria-expanded={planOpen} onClick={() => setPlanOpen(true)}>
                     <Icon name="settings" /> Plan
                   </button>
                   <button type="button" className="panel-action" aria-controls="studio-inspector" aria-expanded={inspectorOpen} onClick={() => { setInspectorTab("takes"); setInspectorOpen(true); }}>
@@ -2019,7 +2019,7 @@ export default function App() {
                 <PlanInspector open={planOpen}>
                   <div className="pane-heading">
                     <div>
-                      <span className="eyebrow">Score</span>
+                      <span className="eyebrow">Instrument deck</span>
                       <h3>Plan</h3>
                     </div>
                     <div className={`save-state save-${saveState}`} role="status" aria-live="polite">
@@ -2031,88 +2031,128 @@ export default function App() {
                   </div>
 
                   <div className="plan-scroll">
-                    <label className="field-label intent-field">
-                      Starting idea
-                      <textarea
-                        value={detail.plan.query}
-                        placeholder="Describe the song you want to explore…"
-                        onChange={(event) => savePlanField("query", event.target.value)}
-                      />
-                      <small>Leave the details open for precise authorship, or let ACE-Step complete the plan.</small>
-                    </label>
+                    <p className="builder-intro">Begin with the feeling. Add structure only when the song asks for it.</p>
+
+                    <section className="builder-section builder-brief" aria-labelledby="builder-brief-title">
+                      <div className="builder-section-heading">
+                        <span className="builder-index">01</span>
+                        <div>
+                          <span className="eyebrow">The brief</span>
+                          <h4 id="builder-brief-title">Set the scene</h4>
+                        </div>
+                      </div>
+                      <label className="field-label intent-field">
+                        Starting idea
+                        <textarea
+                          value={detail.plan.query}
+                          placeholder="Describe the song you want to explore…"
+                          onChange={(event) => savePlanField("query", event.target.value)}
+                        />
+                      </label>
+                      <p className="builder-tip">A scene, a sound, and a feeling is plenty. You can refine it after the first take.</p>
+                    </section>
 
                     <button
                       type="button"
-                      className="disclosure-button"
+                      className="disclosure-button builder-disclosure"
                       aria-expanded={planDetailsOpen}
                       aria-controls="composition-details"
                       onClick={() => setPlanDetailsOpen((open) => !open)}
                     >
-                      <span>Composition details</span>
-                      <span>{planDetailsOpen ? "Hide" : "Author"}</span>
+                      <span className="builder-disclosure-copy">
+                        <span className="builder-index">02</span>
+                        <span><strong>Open the sound controls</strong><small>Voice, timing, and arrangement</small></span>
+                      </span>
+                      <span>{planDetailsOpen ? "Collapse" : "Open"}</span>
                     </button>
 
-                    <div id="composition-details" className="plan-details" hidden={!planDetailsOpen}>
-                      <label className="field-label">
-                        Caption
-                        <input
-                          value={detail.plan.caption}
-                          onChange={(event) => savePlanField("caption", event.target.value)}
-                        />
-                      </label>
-                      <div className="field-label lyrics-field">
-                        <label htmlFor="plan-lyrics">Lyrics</label>
-                        <div className="lyrics-tag-palette">
-                          {STRUCTURE_TAGS.map((tag) => (
-                            <button
-                              key={tag}
-                              type="button"
-                              className="lyrics-tag-button"
-                              onMouseDown={(event) => event.preventDefault()}
-                              onClick={() => insertLyricsTag(`[${tag}]`)}
-                            >
-                              [{tag}]
-                            </button>
-                          ))}
+                    <div id="composition-details" className="plan-details builder-details" hidden={!planDetailsOpen}>
+                      <section className="builder-section builder-song-details" aria-labelledby="song-details-title">
+                        <div className="builder-section-heading">
+                          <span className="builder-index">A</span>
+                          <div>
+                            <span className="eyebrow">Direction</span>
+                            <h4 id="song-details-title">Tune the pulse</h4>
+                          </div>
                         </div>
-                        <textarea
-                          id="plan-lyrics"
-                          ref={lyricsTextareaRef}
-                          value={detail.plan.lyrics}
-                          onChange={(event) => savePlanField("lyrics", event.target.value)}
-                        />
-                      </div>
-                      <div className="toggle-row">
-                        <label className="checkbox">
+                        <label className="field-label">
+                          Caption
                           <input
-                            type="checkbox"
-                            checked={detail.plan.instrumental}
-                            onChange={(event) => savePlanField("instrumental", event.target.checked)}
+                            value={detail.plan.caption}
+                            onChange={(event) => savePlanField("caption", event.target.value)}
                           />
-                          Instrumental
                         </label>
-                        <label className="checkbox">
-                          <input
-                            type="checkbox"
-                            checked={detail.plan.caption_rewrite}
-                            onChange={(event) => savePlanField("caption_rewrite", event.target.checked)}
-                          />
-                          Allow caption rewrite (Custom mode LM thinking)
-                        </label>
-                      </div>
-                      <div className="plan-grid">
-                        <label>BPM<input type="number" value={detail.plan.bpm ?? ""} onChange={(event) => savePlanField("bpm", event.target.value === "" ? null : Number(event.target.value))} /></label>
-                        <label>Key<input value={detail.plan.keyscale ?? ""} onChange={(event) => savePlanField("keyscale", event.target.value === "" ? null : event.target.value)} /></label>
-                        <label>Time signature<input value={detail.plan.timesignature} onChange={(event) => savePlanField("timesignature", event.target.value)} /></label>
-                        <label>Duration (sec)<input type="number" value={detail.plan.duration_sec} onChange={(event) => savePlanField("duration_sec", Number(event.target.value))} /></label>
-                        <label>Language<input value={detail.plan.vocal_language} onChange={(event) => savePlanField("vocal_language", event.target.value)} /></label>
-                      </div>
+                        <div className="plan-grid builder-settings-grid">
+                          <label>BPM<input type="number" value={detail.plan.bpm ?? ""} onChange={(event) => savePlanField("bpm", event.target.value === "" ? null : Number(event.target.value))} /></label>
+                          <label>Key<input value={detail.plan.keyscale ?? ""} onChange={(event) => savePlanField("keyscale", event.target.value === "" ? null : event.target.value)} /></label>
+                          <label>Time signature<input value={detail.plan.timesignature} onChange={(event) => savePlanField("timesignature", event.target.value)} /></label>
+                          <label>Duration (sec)<input type="number" value={detail.plan.duration_sec} onChange={(event) => savePlanField("duration_sec", Number(event.target.value))} /></label>
+                          <label>Language<input value={detail.plan.vocal_language} onChange={(event) => savePlanField("vocal_language", event.target.value)} /></label>
+                        </div>
+                        <div className="toggle-row builder-switches">
+                          <label className="checkbox">
+                            <input
+                              type="checkbox"
+                              aria-label="Instrumental"
+                              checked={detail.plan.instrumental}
+                              onChange={(event) => savePlanField("instrumental", event.target.checked)}
+                            />
+                            <span><strong>Instrumental</strong><small>Do not generate vocals or lyrics.</small></span>
+                          </label>
+                          <label className="checkbox">
+                            <input
+                              type="checkbox"
+                              aria-label="Allow caption rewrite (Custom mode LM thinking)"
+                              checked={detail.plan.caption_rewrite}
+                              onChange={(event) => savePlanField("caption_rewrite", event.target.checked)}
+                            />
+                            <span><strong>Allow caption rewrite</strong><small>Let Custom mode rethink the direction.</small></span>
+                          </label>
+                        </div>
+                      </section>
 
-                      <div className="plan-sections">
+                      <section className="builder-section builder-lyrics" aria-labelledby="builder-lyrics-title">
+                        <div className="builder-section-heading">
+                          <span className="builder-index">B</span>
+                          <div>
+                            <span className="eyebrow">Words</span>
+                            <h4 id="builder-lyrics-title">Give it a voice</h4>
+                          </div>
+                        </div>
+                        <div className="field-label lyrics-field">
+                          <div className="lyrics-label-row">
+                            <label htmlFor="plan-lyrics">Lyrics</label>
+                            <span>Optional</span>
+                          </div>
+                          <div className="lyrics-tag-palette" aria-label="Insert song structure tag">
+                            {STRUCTURE_TAGS.map((tag) => (
+                              <button
+                                key={tag}
+                                type="button"
+                                className="lyrics-tag-button"
+                                onMouseDown={(event) => event.preventDefault()}
+                                onClick={() => insertLyricsTag(`[${tag}]`)}
+                              >
+                                [{tag}]
+                              </button>
+                            ))}
+                          </div>
+                          <textarea
+                            id="plan-lyrics"
+                            ref={lyricsTextareaRef}
+                            value={detail.plan.lyrics}
+                            placeholder="A lyric, a hook, or simply leave this open…"
+                            onChange={(event) => savePlanField("lyrics", event.target.value)}
+                          />
+                        </div>
+                      </section>
+
+                      <section className="plan-sections builder-section builder-arrangement" aria-labelledby="builder-arrangement-title">
                         <div className="plan-sections-header">
                           <div>
-                            <span className="plan-sections-title">Sections</span>
-                            <small>{detail.plan.sections.length} mapped</small>
+                            <span className="eyebrow">Map</span>
+                            <span id="builder-arrangement-title" className="plan-sections-title">Cue map</span>
+                            <small>{detail.plan.sections.length} mapped · or draw on the waveform</small>
                           </div>
                           <button type="button" className="button-secondary" onClick={() => addSection()}>
                             <Icon name="add" /> Add section
@@ -2138,16 +2178,57 @@ export default function App() {
                             </li>
                           ))}
                         </ul>
-                      </div>
+                      </section>
                     </div>
+
+                    <OperationDock>
+                      <div className="operation-tabs" role="tablist" aria-label="Studio operations">
+                        {(["create", "transform", "tracks"] as OperationGroup[]).map((group) => (
+                          <button key={group} type="button" role="tab" aria-selected={operationGroup === group} onClick={() => setOperationGroup(group)}>{group}</button>
+                        ))}
+                      </div>
+
+                      <section className={`operation-group create-group ${operationGroup === "create" ? "is-active" : ""}`} aria-label="Create operations">
+                        <div className="operation-heading"><span>01</span><div><strong>Play</strong><small>Turn this idea into a first take</small></div></div>
+                        <div className="operation-controls create-controls">
+                          <label className="lora-select">Style pack<select value={selectedLoraId ?? ""} onChange={(event) => setSelectedLoraId(event.target.value || null)} disabled={busy} title="Applies to Generate/Cover/Repaint below (SPEC.md sec 4.4)"><option value="">None</option>{loras.filter((lora) => !lora.error).map((lora) => <option key={lora.id} value={lora.id}>{lora.name}</option>)}</select></label>
+                          {selectedLora && <span className="lora-active-badge" title={`Generate/Cover/Repaint will run against the studio_ops base model with style pack "${selectedLora.name}" (SPEC.md sec 4.4)`}>Style pack: {selectedLora.name}</span>}
+                          <label className="seed-input">Seed<input type="number" step={1} min={-1} placeholder="-1" value={seedInput} onChange={(event) => setSeedInput(event.target.value)} disabled={busy} title="Fixed seed for Generate/Cover/Repaint; empty or -1 lets the worker pick and record one (SPEC.md sec 7.3)" /></label>
+                          <div className="dit-profile-picker" role="group" aria-label="DiT profile" title="Project default DiT checkpoint for Generate/Cover/Repaint (SPEC.md sec 4.1); a style pack always forces studio_ops">
+                            <span className="dit-profile-caption">DiT</span>
+                            {DIT_PROFILE_OPTIONS.map((profile) => <button key={profile} type="button" className={`dit-profile-option ${detail.project.dit_profile === profile ? "selected" : ""}`} disabled={busy} onClick={() => setDitProfile(profile)} title={profile === "iterate" ? "Fast daily generate/cover/repaint (turbo, 8 steps)" : profile === "polish" ? "More prompt adherence / detail (sft, 50 steps + CFG)" : "XL turbo; the job is rejected if the worker cannot load XL"}>{profile}</button>)}
+                          </div>
+                          <button type="button" className="generate-button" onClick={generate} disabled={busy} title="Shortcuts: g generate · space play/pause · ↑/↓ prev/next take · ctrl/cmd+s save plan"><Icon name="spark" /> Generate</button>
+                        </div>
+                      </section>
+
+                      <section className={`operation-group transform-group ${operationGroup === "transform" ? "is-active" : ""}`} aria-label="Transform operations">
+                        <div className="operation-heading"><span>02</span><div><strong>Bend</strong><small>Reshape the selected sound</small></div></div>
+                        <div className="operation-controls">
+                          <label className="cover-strength">Strength<input type="number" min={0} max={1} step={0.05} value={coverStrength} onChange={(event) => setCoverStrength(Number(event.target.value))} /></label>
+                          <button type="button" onClick={cover} disabled={busy || (!selectedTakeId && !uploadedSourcePath) || !!selectedTake?.error} title={selectedTakeId || uploadedSourcePath ? undefined : "Select a take or drop a file first"}>Cover</button>
+                          <button type="button" onClick={repaint} disabled={busy || (!selectedTakeId && !uploadedSourcePath) || (!!selectedTakeId && !region) || !!selectedTake?.error} title={!selectedTakeId && !uploadedSourcePath ? "Select a take or drop a file first" : selectedTakeId && !region ? "Drag a region on the waveform first" : undefined}>Repaint</button>
+                        </div>
+                      </section>
+
+                      <section className={`operation-group tracks-group ${operationGroup === "tracks" ? "is-active" : ""}`} aria-label="Track operations">
+                        <div className="operation-heading"><span>03</span><div><strong>Pull apart</strong><small>Work with the parts inside a take</small></div></div>
+                        <div className="operation-controls">
+                          <label className="track-name">Track name / classes<input placeholder="vocals, drums, bass..." value={trackName} onChange={(event) => setTrackName(event.target.value)} /></label>
+                          <button type="button" onClick={extract} disabled={busy || !selectedTakeId || !trackName.trim() || !!selectedTake?.error} title={!selectedTakeId ? "Select a take first" : !trackName.trim() ? "Enter a track name first" : undefined}>Extract</button>
+                          <button type="button" onClick={lego} disabled={busy || !selectedTakeId || !trackName.trim() || !!selectedTake?.error} title={!selectedTakeId ? "Select a take first" : !trackName.trim() ? "Enter a track name first" : undefined}>Lego</button>
+                          <button type="button" onClick={complete} disabled={busy || !selectedTakeId || !trackName.trim() || !!selectedTake?.error} title={!selectedTakeId ? "Select a take first" : !trackName.trim() ? "Enter a track name / classes first" : undefined}>Complete</button>
+                        </div>
+                      </section>
+                    </OperationDock>
                   </div>
                 </PlanInspector>
 
                 <StudioStage>
                   <div className="stage-heading">
                     <div>
-                      <span className="eyebrow">Performance surface</span>
-                      <h3>Waveform</h3>
+                      <span className="eyebrow">Sound field</span>
+                      <h3>Listen</h3>
                     </div>
                     {selectedTake ? (
                       <div className="selected-take-summary">
@@ -2274,46 +2355,6 @@ export default function App() {
                     );
                   })()}
 
-                  <OperationDock>
-                    <div className="operation-tabs" role="tablist" aria-label="Studio operations">
-                      {(["create", "transform", "tracks"] as OperationGroup[]).map((group) => (
-                        <button key={group} type="button" role="tab" aria-selected={operationGroup === group} onClick={() => setOperationGroup(group)}>{group}</button>
-                      ))}
-                    </div>
-
-                    <section className={`operation-group create-group ${operationGroup === "create" ? "is-active" : ""}`} aria-label="Create operations">
-                      <div className="operation-heading"><span>01</span><div><strong>Create</strong><small>Render a new take from the plan</small></div></div>
-                      <div className="operation-controls create-controls">
-                        <label className="lora-select">Style pack<select value={selectedLoraId ?? ""} onChange={(event) => setSelectedLoraId(event.target.value || null)} disabled={busy} title="Applies to Generate/Cover/Repaint below (SPEC.md sec 4.4)"><option value="">None</option>{loras.filter((lora) => !lora.error).map((lora) => <option key={lora.id} value={lora.id}>{lora.name}</option>)}</select></label>
-                        {selectedLora && <span className="lora-active-badge" title={`Generate/Cover/Repaint will run against the studio_ops base model with style pack "${selectedLora.name}" (SPEC.md sec 4.4)`}>Style pack: {selectedLora.name}</span>}
-                        <label className="seed-input">Seed<input type="number" step={1} min={-1} placeholder="-1" value={seedInput} onChange={(event) => setSeedInput(event.target.value)} disabled={busy} title="Fixed seed for Generate/Cover/Repaint; empty or -1 lets the worker pick and record one (SPEC.md sec 7.3)" /></label>
-                        <div className="dit-profile-picker" role="group" aria-label="DiT profile" title="Project default DiT checkpoint for Generate/Cover/Repaint (SPEC.md sec 4.1); a style pack always forces studio_ops">
-                          <span className="dit-profile-caption">DiT</span>
-                          {DIT_PROFILE_OPTIONS.map((profile) => <button key={profile} type="button" className={`dit-profile-option ${detail.project.dit_profile === profile ? "selected" : ""}`} disabled={busy} onClick={() => setDitProfile(profile)} title={profile === "iterate" ? "Fast daily generate/cover/repaint (turbo, 8 steps)" : profile === "polish" ? "More prompt adherence / detail (sft, 50 steps + CFG)" : "XL turbo; the job is rejected if the worker cannot load XL"}>{profile}</button>)}
-                        </div>
-                        <button type="button" className="generate-button" onClick={generate} disabled={busy} title="Shortcuts: g generate · space play/pause · ↑/↓ prev/next take · ctrl/cmd+s save plan"><Icon name="spark" /> Generate</button>
-                      </div>
-                    </section>
-
-                    <section className={`operation-group transform-group ${operationGroup === "transform" ? "is-active" : ""}`} aria-label="Transform operations">
-                      <div className="operation-heading"><span>02</span><div><strong>Transform</strong><small>Reshape the selected source</small></div></div>
-                      <div className="operation-controls">
-                        <label className="cover-strength">Strength<input type="number" min={0} max={1} step={0.05} value={coverStrength} onChange={(event) => setCoverStrength(Number(event.target.value))} /></label>
-                        <button type="button" onClick={cover} disabled={busy || (!selectedTakeId && !uploadedSourcePath) || !!selectedTake?.error} title={selectedTakeId || uploadedSourcePath ? undefined : "Select a take or drop a file first"}>Cover</button>
-                        <button type="button" onClick={repaint} disabled={busy || (!selectedTakeId && !uploadedSourcePath) || (!!selectedTakeId && !region) || !!selectedTake?.error} title={!selectedTakeId && !uploadedSourcePath ? "Select a take or drop a file first" : selectedTakeId && !region ? "Drag a region on the waveform first" : undefined}>Repaint</button>
-                      </div>
-                    </section>
-
-                    <section className={`operation-group tracks-group ${operationGroup === "tracks" ? "is-active" : ""}`} aria-label="Track operations">
-                      <div className="operation-heading"><span>03</span><div><strong>Tracks</strong><small>Isolate, add, or complete parts</small></div></div>
-                      <div className="operation-controls">
-                        <label className="track-name">Track name / classes<input placeholder="vocals, drums, bass..." value={trackName} onChange={(event) => setTrackName(event.target.value)} /></label>
-                        <button type="button" onClick={extract} disabled={busy || !selectedTakeId || !trackName.trim() || !!selectedTake?.error} title={!selectedTakeId ? "Select a take first" : !trackName.trim() ? "Enter a track name first" : undefined}>Extract</button>
-                        <button type="button" onClick={lego} disabled={busy || !selectedTakeId || !trackName.trim() || !!selectedTake?.error} title={!selectedTakeId ? "Select a take first" : !trackName.trim() ? "Enter a track name first" : undefined}>Lego</button>
-                        <button type="button" onClick={complete} disabled={busy || !selectedTakeId || !trackName.trim() || !!selectedTake?.error} title={!selectedTakeId ? "Select a take first" : !trackName.trim() ? "Enter a track name / classes first" : undefined}>Complete</button>
-                      </div>
-                    </section>
-                  </OperationDock>
                 </StudioStage>
 
                 <TakesRail open={inspectorOpen}>
