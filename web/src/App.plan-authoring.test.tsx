@@ -22,7 +22,7 @@
 // wavesurfer stack stubbed out like App.sections.test.tsx (jsdom has no
 // canvas/layout for the real library, and the region mock is needed here too
 // for the "add section from region" case).
-import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { RecordedRequest } from "./test/mockServer";
 import { makeTakes } from "./test/mockServer";
@@ -132,7 +132,7 @@ function lastPlanPutBody(server: OpenedProject["server"]): Record<string, unknow
 function lyricsTextarea(): HTMLTextAreaElement {
   const pane = screen.getByRole("heading", { name: "Plan" }).closest("section");
   if (!pane) throw new Error("plan pane not found");
-  const el = pane.querySelector("textarea");
+  const el = within(pane).getByLabelText("Lyrics");
   if (!el) throw new Error("lyrics textarea not found");
   return el as HTMLTextAreaElement;
 }
@@ -233,7 +233,7 @@ it("adds a blank named section, edits its fields, persists each through PUT /pla
     { name: "Intro", start_sec: 1.5, end_sec: 9, lyrics: "la la" },
   ]);
 
-  fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+  fireEvent.click(screen.getByRole("button", { name: /Delete section/ }));
 
   await waitFor(() => {
     expect(lastPlanPutBody(server).sections).toEqual([]);
@@ -245,7 +245,7 @@ it("creates a section from the current waveform selection, using the selected re
   app = await renderOpenedProject({ takes: makeTakes(1) });
   const server = app.server;
 
-  fireEvent.click(screen.getByText("seed 1001"));
+  fireEvent.click(screen.getByRole("listitem", { name: /seed 1001/ }));
   simulateDragRegion(12, 34);
   await screen.findByText(/Region: 12\.0s/);
 

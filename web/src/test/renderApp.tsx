@@ -48,7 +48,7 @@ export async function renderOpenedProject(
 
   const rendered = render(<App />);
   // Wait for the library to load, then open the fixture project.
-  fireEvent.click(await screen.findByRole("button", { name: "Open" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Open Test Song" }));
   const takeCount = server.state.detail.takes.length;
   await waitFor(() => {
     expect(screen.getAllByTitle(LORA_SOURCE_TITLE)).toHaveLength(takeCount);

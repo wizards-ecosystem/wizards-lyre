@@ -15,7 +15,7 @@
 // wavesurfer stack stubbed out like the other App.*.test.tsx files (jsdom
 // has no canvas/layout for the real library) even though these tests never
 // select a take, since App.tsx statically imports the real package.
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import App from "./App";
 import type { RecordedRequest } from "./test/mockServer";
@@ -63,7 +63,7 @@ function planPutRequests(server: MockBardServer): RecordedRequest[] {
 function lyricsTextarea(): HTMLTextAreaElement {
   const pane = screen.getByRole("heading", { name: "Plan" }).closest("section");
   if (!pane) throw new Error("plan pane not found");
-  const el = pane.querySelector("textarea");
+  const el = within(pane).getByLabelText("Lyrics");
   if (!el) throw new Error("lyrics textarea not found");
   return el as HTMLTextAreaElement;
 }
@@ -89,7 +89,7 @@ function clickStealingFocus(el: HTMLElement): void {
 // server per call, which doesn't fit that test's need to unmount and
 // re-render <App/> against the *same* server/state.
 async function openProjectUI(): Promise<void> {
-  fireEvent.click(await screen.findByRole("button", { name: "Open" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Open Test Song" }));
   await screen.findByRole("heading", { name: "Plan" });
 }
 

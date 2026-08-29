@@ -84,29 +84,25 @@ function jobsPost(action?: string) {
   return app.server.jobRequests(action);
 }
 
+function acceptModelSwap(label: string): void {
+  const dialog = screen.getByRole("alertdialog", { name: "Load the studio model?" });
+  fireEvent.click(within(dialog).getByRole("button", { name: label }));
+}
+
+function cancelModelSwap(): void {
+  const dialog = screen.getByRole("alertdialog", { name: "Load the studio model?" });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+}
+
 describe("Extract/Lego/Complete studio-ops actions (SPEC.md sec 4.3)", () => {
-  it("keeps Extract/Lego/Complete disabled until a take is selected and a track name is entered", async () => {
+  it("auto-selects the active take and keeps track actions disabled until a track name is entered", async () => {
     app = await renderOpenedProject();
 
     expect(extractButton().disabled).toBe(true);
     expect(legoButton().disabled).toBe(true);
     expect(completeButton().disabled).toBe(true);
-    expect(extractButton().title).toBe("Select a take first");
-    expect(legoButton().title).toBe("Select a take first");
-    expect(completeButton().title).toBe("Select a take first");
-
-    // A track name alone (no take) is not enough.
-    setTrackName("vocals");
-    expect(extractButton().disabled).toBe(true);
-    expect(legoButton().disabled).toBe(true);
-    expect(completeButton().disabled).toBe(true);
-
-    // Reset the name and select a take first -- a take alone is not enough
-    // either.
-    setTrackName("");
-    selectFirstTake();
-    expect(extractButton().disabled).toBe(true);
     expect(extractButton().title).toBe("Enter a track name first");
+    expect(extractButton().disabled).toBe(true);
     expect(legoButton().disabled).toBe(true);
     expect(completeButton().disabled).toBe(true);
     expect(completeButton().title).toBe("Enter a track name / classes first");
@@ -122,10 +118,9 @@ describe("Extract/Lego/Complete studio-ops actions (SPEC.md sec 4.3)", () => {
     selectFirstTake();
     setTrackName("vocals");
     fireEvent.click(extractButton());
+    acceptModelSwap("Load model & extract");
 
     await waitFor(() => expect(jobsPost("extract")).toHaveLength(1));
-    expect(app.confirm).toHaveBeenCalledTimes(1);
-    expect(String(app.confirm.mock.calls[0][0])).toMatch(/studio_ops base model/);
     expect(jobsPost("extract")[0].url).toBe("/api/projects/proj-1/jobs");
     expect(jobsPost("extract")[0].body).toEqual({
       action: "extract",
@@ -140,10 +135,9 @@ describe("Extract/Lego/Complete studio-ops actions (SPEC.md sec 4.3)", () => {
     app = await renderOpenedProject();
     selectFirstTake();
     setTrackName("vocals");
-    app.confirm.mockReturnValue(false);
     fireEvent.click(extractButton());
+    cancelModelSwap();
 
-    expect(app.confirm).toHaveBeenCalledTimes(1);
     expect(jobsPost("extract")).toHaveLength(0);
   });
 
@@ -152,10 +146,9 @@ describe("Extract/Lego/Complete studio-ops actions (SPEC.md sec 4.3)", () => {
     selectFirstTake();
     setTrackName("drums");
     fireEvent.click(legoButton());
+    acceptModelSwap("Load model & add track");
 
     await waitFor(() => expect(jobsPost("lego")).toHaveLength(1));
-    expect(app.confirm).toHaveBeenCalledTimes(1);
-    expect(String(app.confirm.mock.calls[0][0])).toMatch(/studio_ops base model/);
     expect(jobsPost("lego")[0].body).toEqual({
       action: "lego",
       dit_profile: "studio_ops",
@@ -169,10 +162,9 @@ describe("Extract/Lego/Complete studio-ops actions (SPEC.md sec 4.3)", () => {
     app = await renderOpenedProject();
     selectFirstTake();
     setTrackName("drums");
-    app.confirm.mockReturnValue(false);
     fireEvent.click(legoButton());
+    cancelModelSwap();
 
-    expect(app.confirm).toHaveBeenCalledTimes(1);
     expect(jobsPost("lego")).toHaveLength(0);
   });
 
@@ -194,6 +186,7 @@ describe("Extract/Lego/Complete studio-ops actions (SPEC.md sec 4.3)", () => {
 
     setTrackName("bass");
     fireEvent.click(legoButton());
+    acceptModelSwap("Load model & add track");
 
     await waitFor(() => expect(jobsPost("lego")).toHaveLength(1));
     expect(jobsPost("lego")[0].body).toEqual({
@@ -212,10 +205,9 @@ describe("Extract/Lego/Complete studio-ops actions (SPEC.md sec 4.3)", () => {
     selectFirstTake();
     setTrackName("full mix");
     fireEvent.click(completeButton());
+    acceptModelSwap("Load model & complete");
 
     await waitFor(() => expect(jobsPost("complete")).toHaveLength(1));
-    expect(app.confirm).toHaveBeenCalledTimes(1);
-    expect(String(app.confirm.mock.calls[0][0])).toMatch(/studio_ops base model/);
     expect(jobsPost("complete")[0].body).toEqual({
       action: "complete",
       dit_profile: "studio_ops",
@@ -229,10 +221,9 @@ describe("Extract/Lego/Complete studio-ops actions (SPEC.md sec 4.3)", () => {
     app = await renderOpenedProject();
     selectFirstTake();
     setTrackName("full mix");
-    app.confirm.mockReturnValue(false);
     fireEvent.click(completeButton());
+    cancelModelSwap();
 
-    expect(app.confirm).toHaveBeenCalledTimes(1);
     expect(jobsPost("complete")).toHaveLength(0);
   });
 
@@ -242,6 +233,7 @@ describe("Extract/Lego/Complete studio-ops actions (SPEC.md sec 4.3)", () => {
     selectFirstTake();
     setTrackName("vocals");
     fireEvent.click(extractButton());
+    acceptModelSwap("Load model & extract");
 
     expect(await screen.findByText("CUDA out of memory")).toBeTruthy();
   });

@@ -60,11 +60,13 @@ describe("Takes pane controls", () => {
     app = await renderOpenedProject();
     const row = takeRows()[0];
     const favoriteBtn = within(row).getByTitle("Favorite");
-    expect(within(row).getByText("☆")).toBeTruthy();
+    expect(favoriteBtn.getAttribute("aria-label")).toMatch(/^Favorite take/);
 
     fireEvent.click(favoriteBtn);
 
-    expect(within(row).getByText("★")).toBeTruthy();
+    expect(within(row).getByTitle("Unfavorite").getAttribute("aria-label")).toMatch(
+      /^Unfavorite take/,
+    );
     expect(within(row).getByTitle("Unfavorite")).toBeTruthy();
 
     await waitFor(() => expect(patchTakeRequests()).toHaveLength(1));
@@ -73,7 +75,7 @@ describe("Takes pane controls", () => {
 
     // Clicking again flips it back the other way.
     fireEvent.click(within(row).getByTitle("Unfavorite"));
-    expect(within(row).getByText("☆")).toBeTruthy();
+    expect(within(row).getByTitle("Favorite")).toBeTruthy();
     await waitFor(() => expect(patchTakeRequests()).toHaveLength(2));
     expect(patchTakeRequests()[1].body).toEqual({ favorite: false });
   });
@@ -125,7 +127,7 @@ describe("Takes pane controls", () => {
     );
     expect(exportLink.getAttribute("download")).toBe("Test Song-export.zip");
 
-    fireEvent.click(screen.getByLabelText("Include stems (extract / lego takes)"));
+    fireEvent.click(screen.getByLabelText("Include stems"));
 
     expect(screen.getByRole("link", { name: "Export project (.zip)" }).getAttribute("href")).toBe(
       `/api/projects/${PROJECT_ID}/export?include_stems=false`,

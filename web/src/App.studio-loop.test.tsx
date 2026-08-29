@@ -87,7 +87,7 @@ async function dragRegion(start: number, end: number): Promise<void> {
 }
 
 function dropzone(): HTMLElement {
-  return screen.getByText(/Drag a local WAV\/MP3 here/).parentElement as HTMLElement;
+  return screen.getByText("Drop WAV or MP3").closest(".source-shelf") as HTMLElement;
 }
 
 function dropFile(name: string): File {
@@ -118,7 +118,7 @@ describe("Studio loop: Generate/Cover/Repaint and upload-source (SPEC.md sec 4/7
 
     // Generate stays busy until the queued job's poll reports done, then the
     // resulting take shows up in the Takes list without a manual reload.
-    await waitFor(() => expect(screen.getByText("seed 1002")).toBeTruthy());
+    await waitFor(() => expect(screen.getAllByText("seed 1002").length).toBeGreaterThan(0));
     expect(screen.getByRole("button", { name: "Generate" })).toBeTruthy();
   });
 
@@ -134,7 +134,7 @@ describe("Studio loop: Generate/Cover/Repaint and upload-source (SPEC.md sec 4/7
 
   it("selects a take as the Cover source and forwards the chosen cover strength", async () => {
     app = await renderOpenedProject({ takes: makeTakes(1) });
-    fireEvent.click(screen.getByText("seed 1001"));
+    fireEvent.click(takeRows()[0]);
 
     fireEvent.change(screen.getByLabelText("Strength"), { target: { value: "0.35" } });
     fireEvent.click(screen.getByRole("button", { name: "Cover" }));
@@ -151,7 +151,7 @@ describe("Studio loop: Generate/Cover/Repaint and upload-source (SPEC.md sec 4/7
   it("keeps a failed cover job's error visible and the take selection intact", async () => {
     app = await renderOpenedProject({ takes: makeTakes(1) });
     app.server.scriptNextJob({ statuses: ["error"], error: "cover job crashed" });
-    fireEvent.click(screen.getByText("seed 1001"));
+    fireEvent.click(takeRows()[0]);
     fireEvent.click(screen.getByRole("button", { name: "Cover" }));
 
     expect(await screen.findByText("cover job crashed")).toBeTruthy();
@@ -160,7 +160,7 @@ describe("Studio loop: Generate/Cover/Repaint and upload-source (SPEC.md sec 4/7
 
   it("forwards a dragged waveform region as repainting_start/repainting_end, then clears it on success", async () => {
     app = await renderOpenedProject({ takes: makeTakes(1) });
-    fireEvent.click(screen.getByText("seed 1001"));
+    fireEvent.click(takeRows()[0]);
 
     await dragRegion(4.5, 9.25);
     expect(screen.getByText(/Region: 4\.5s.*9\.3s/)).toBeTruthy();
@@ -182,18 +182,18 @@ describe("Studio loop: Generate/Cover/Repaint and upload-source (SPEC.md sec 4/7
 
   it("clears the region when the selected take changes", async () => {
     app = await renderOpenedProject({ takes: makeTakes(2) });
-    fireEvent.click(screen.getByText("seed 1001"));
+    fireEvent.click(takeRows()[0]);
     await dragRegion(2, 6);
     expect(screen.getByText(/Region: 2\.0s.*6\.0s/)).toBeTruthy();
 
-    fireEvent.click(screen.getByText("seed 1002"));
+    fireEvent.click(takeRows()[1]);
     expect(screen.queryByText(/Region:/)).toBeNull();
   });
 
   it("keeps a failed repaint job's error visible", async () => {
     app = await renderOpenedProject({ takes: makeTakes(1) });
     app.server.scriptNextJob({ statuses: ["error"], error: "repaint job crashed" });
-    fireEvent.click(screen.getByText("seed 1001"));
+    fireEvent.click(takeRows()[0]);
     await dragRegion(1, 3);
     fireEvent.click(screen.getByRole("button", { name: "Repaint" }));
 
@@ -204,11 +204,11 @@ describe("Studio loop: Generate/Cover/Repaint and upload-source (SPEC.md sec 4/7
 
   it("uploads a WAV as an alternate Cover/Repaint source and forwards it instead of a take", async () => {
     app = await renderOpenedProject({ takes: makeTakes(1) });
-    fireEvent.click(screen.getByText("seed 1001")); // starts as the selected source
+    fireEvent.click(takeRows()[0]); // starts as the selected source
 
     fireEvent.drop(dropzone(), { dataTransfer: { files: [dropFile("my-song.wav")] } });
 
-    await screen.findByText(/Source: my-song\.wav/);
+    await screen.findByText("my-song.wav");
     // Uploading a file deselects whatever take was picked (the two are
     // alternative sources, never both).
     expect(takeRows()[0].className).not.toContain("selected");
@@ -225,7 +225,7 @@ describe("Studio loop: Generate/Cover/Repaint and upload-source (SPEC.md sec 4/7
   it("uploads a WAV and forwards it through Repaint as the full-track source", async () => {
     app = await renderOpenedProject({ takes: makeTakes(1) });
     fireEvent.drop(dropzone(), { dataTransfer: { files: [dropFile("alt-source.wav")] } });
-    await screen.findByText(/Source: alt-source\.wav/);
+    await screen.findByText("alt-source.wav");
 
     fireEvent.click(screen.getByRole("button", { name: "Repaint" }));
     await waitFor(() => expect(jobsPost("repaint")).toHaveLength(1));
@@ -246,11 +246,11 @@ describe("Studio loop: Generate/Cover/Repaint and upload-source (SPEC.md sec 4/7
 
     expect(await screen.findByText(/unsupported file type/)).toBeTruthy();
     // The rejected upload never became the active source.
-    expect(screen.queryByText(/Source: bad\.aiff/)).toBeNull();
-    expect(screen.getByText(/Drag a local WAV\/MP3 here/)).toBeTruthy();
+    expect(screen.queryByText("bad.aiff")).toBeNull();
+    expect(screen.getByText("Drop WAV or MP3")).toBeTruthy();
 
     // The dropzone still works for a subsequent, successful upload.
     fireEvent.drop(dropzone(), { dataTransfer: { files: [dropFile("good.wav")] } });
-    await screen.findByText(/Source: good\.wav/);
+    await screen.findByText("good.wav");
   });
 });

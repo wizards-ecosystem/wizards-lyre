@@ -75,11 +75,18 @@ function checkTakes(count: number): void {
   }
 }
 
+function openStylePacks(): void {
+  const tab = screen.getByRole("tab", { name: /Style packs/ });
+  if (tab.getAttribute("aria-selected") !== "true") fireEvent.click(tab);
+}
+
 function trainButton(): HTMLButtonElement {
+  openStylePacks();
   return screen.getByRole("button", { name: /Train style pack/ }) as HTMLButtonElement;
 }
 
 function nameInput(): HTMLInputElement {
+  openStylePacks();
   return screen.getByLabelText("Style pack name") as HTMLInputElement;
 }
 
@@ -100,6 +107,16 @@ function jobsPost(action?: string) {
   return app.server.jobRequests(action);
 }
 
+function acceptModelSwap(label: string): void {
+  const dialog = screen.getByRole("alertdialog", { name: "Load the studio model?" });
+  fireEvent.click(within(dialog).getByRole("button", { name: label }));
+}
+
+function cancelModelSwap(): void {
+  const dialog = screen.getByRole("alertdialog", { name: "Load the studio model?" });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+}
+
 const RECOVERED_JOB_ID = "job-recovered";
 
 // Like renderOpenedProject, but seeds a train_lora job directly into the
@@ -117,12 +134,13 @@ async function renderProjectWithSeededTraining(status: string): Promise<OpenedPr
   window.confirm = confirm as unknown as typeof window.confirm;
 
   const rendered = render(<App />);
-  fireEvent.click(await screen.findByRole("button", { name: "Open" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Open Test Song" }));
   await waitFor(() => {
     expect(screen.getAllByTitle(LORA_SOURCE_TITLE)).toHaveLength(
       server.state.detail.takes.length,
     );
   });
+  openStylePacks();
 
   return {
     server,
@@ -145,14 +163,14 @@ describe("LoRA style packs (SPEC.md sec 4.4)", () => {
     // Toggling the same take twice counts it once (selection is a Set).
     fireEvent.click(loraSourceCheckboxes()[0]);
     fireEvent.click(loraSourceCheckboxes()[0]);
-    expect(screen.getByText(/Selected: 0\/8/)).toBeTruthy();
+    expect(screen.getByText("0/8")).toBeTruthy();
 
     checkTakes(7);
     fireEvent.change(nameInput(), { target: { value: "my-style" } });
     expect(trainButton().disabled).toBe(true);
 
     fireEvent.click(loraSourceCheckboxes()[7]);
-    expect(screen.getByText(/Selected: 8\/8/)).toBeTruthy();
+    expect(screen.getByText("8/8")).toBeTruthy();
     expect(trainButton().disabled).toBe(false);
 
     // The name is required too.
@@ -239,10 +257,9 @@ describe("LoRA style packs (SPEC.md sec 4.4)", () => {
     app = await renderOpenedProject({ loras: [GOOD_LORA] });
     fireEvent.change(loraSelect(), { target: { value: "lora-good" } });
     fireEvent.click(screen.getByRole("button", { name: "Generate" }));
+    acceptModelSwap("Load model & generate");
 
     await waitFor(() => expect(jobsPost("generate")).toHaveLength(1));
-    expect(app.confirm).toHaveBeenCalledTimes(1);
-    expect(String(app.confirm.mock.calls[0][0])).toMatch(/studio_ops base model/);
     expect(jobsPost("generate")[0].body).toEqual({
       action: "generate",
       seed: -1,
@@ -253,9 +270,8 @@ describe("LoRA style packs (SPEC.md sec 4.4)", () => {
   it("enqueues nothing when the base-swap confirmation is declined", async () => {
     app = await renderOpenedProject({ loras: [GOOD_LORA] });
     fireEvent.change(loraSelect(), { target: { value: "lora-good" } });
-    app.confirm.mockReturnValue(false);
     fireEvent.click(screen.getByRole("button", { name: "Generate" }));
-    expect(app.confirm).toHaveBeenCalledTimes(1);
+    cancelModelSwap();
     expect(jobsPost()).toHaveLength(0);
   });
 
@@ -264,6 +280,7 @@ describe("LoRA style packs (SPEC.md sec 4.4)", () => {
     fireEvent.change(loraSelect(), { target: { value: "lora-good" } });
     fireEvent.click(takeRows()[0]); // use the newest take as the cover source
     fireEvent.click(screen.getByRole("button", { name: "Cover" }));
+    acceptModelSwap("Load model & cover");
 
     await waitFor(() => expect(jobsPost("cover")).toHaveLength(1));
     expect(jobsPost("cover")[0].body).toEqual({
@@ -293,6 +310,7 @@ describe("LoRA style packs (SPEC.md sec 4.4)", () => {
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Repaint" }));
+    acceptModelSwap("Load model & repaint");
     await waitFor(() => expect(jobsPost("repaint")).toHaveLength(1));
     expect(jobsPost("repaint")[0].body).toEqual({
       action: "repaint",
@@ -342,6 +360,7 @@ describe("LoRA style packs (SPEC.md sec 4.4)", () => {
     app.server.scriptNextJob({ statuses: ["error"], error: "worker crashed" });
     fireEvent.change(loraSelect(), { target: { value: "lora-good" } });
     fireEvent.click(screen.getByRole("button", { name: "Generate" }));
+    acceptModelSwap("Load model & generate");
 
     expect(await screen.findByText("worker crashed")).toBeTruthy();
   });

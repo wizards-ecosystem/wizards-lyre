@@ -5,14 +5,13 @@
 // src/test/mockServer.ts -- no FastAPI, CUDA, ACE-Step, credentials, or
 // generated audio.
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import App from "./App";
 import type { ProjectSummary } from "./api";
 import { createMockBardServer, makeProjectSummary, type MockBardServer } from "./test/mockServer";
 
 interface LibraryApp {
   server: MockBardServer;
-  confirm: ReturnType<typeof vi.fn>;
   cleanup: () => void;
 }
 
@@ -25,19 +24,13 @@ function renderLibrary(projects: ProjectSummary[]): LibraryApp {
   server.state.projects = projects;
   server.install();
 
-  const originalConfirm = window.confirm;
-  const confirm = vi.fn(() => true);
-  window.confirm = confirm as unknown as typeof window.confirm;
-
   const rendered = render(<App />);
 
   return {
     server,
-    confirm,
     cleanup: () => {
       rendered.unmount();
       server.uninstall();
-      window.confirm = originalConfirm;
     },
   };
 }
@@ -96,7 +89,7 @@ describe("Library pane (SPEC.md sec 9.1)", () => {
     expect(listedTitles()).toEqual(["Alpha", "Beta"]);
 
     const favoriteBtn = within(projectRow("Beta")).getByTitle("Favorite");
-    expect(favoriteBtn.textContent).toBe("☆");
+    expect(favoriteBtn.getAttribute("aria-label")).toBe("Favorite Beta");
     fireEvent.click(favoriteBtn);
 
     await waitFor(() => {
@@ -109,7 +102,7 @@ describe("Library pane (SPEC.md sec 9.1)", () => {
 
     await waitFor(() => {
       const toggled = within(projectRow("Beta")).getByTitle("Unfavorite");
-      expect(toggled.textContent).toBe("★");
+      expect(toggled.getAttribute("aria-label")).toBe("Unfavorite Beta");
     });
 
     // Favoriting Beta moves it above the still-unfavorited Alpha.
@@ -131,7 +124,7 @@ describe("Library pane (SPEC.md sec 9.1)", () => {
     });
   });
 
-  it("deletes a project only after window.confirm is accepted", async () => {
+  it("deletes a project only after the accessible confirmation is accepted", async () => {
     app = renderLibrary([
       makeProjectSummary({ id: "proj-a", title: "Alpha" }),
       makeProjectSummary({ id: "proj-b", title: "Beta" }),
@@ -140,19 +133,23 @@ describe("Library pane (SPEC.md sec 9.1)", () => {
 
     const deleteBtn = within(projectRow("Beta")).getByTitle("Delete project");
 
-    // Declined: window.confirm is asked, but no DELETE fires and the
+    // Declined: the dialog names the project, no DELETE fires, and the
     // project stays listed.
-    app.confirm.mockReturnValueOnce(false);
     fireEvent.click(deleteBtn);
-    expect(app.confirm).toHaveBeenCalledWith(
-      'Delete "Beta"? This permanently removes its takes and cannot be undone.',
-    );
+    const dialog = screen.getByRole("alertdialog", { name: /Delete.*Beta/ });
+    expect(within(dialog).getByText(/permanently removes the project/i)).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
     expect(app.server.requests.some((r) => r.method === "DELETE")).toBe(false);
     expect(screen.getByText("Beta")).toBeTruthy();
 
-    // Accepted (the helper's default confirm mock returns true): DELETE
-    // fires and the project drops out of the rendered list.
+    // Accepted: DELETE fires and the project drops out of the list.
     fireEvent.click(deleteBtn);
+    fireEvent.click(
+      within(screen.getByRole("alertdialog", { name: /Delete.*Beta/ })).getByRole(
+        "button",
+        { name: "Delete project" },
+      ),
+    );
     await waitFor(() => {
       expect(
         app!.server.requests.some(

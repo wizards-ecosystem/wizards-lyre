@@ -8,7 +8,7 @@
 // wavesurfer stack stubbed out like the other App.*.test.tsx files (jsdom
 // has no canvas/layout for the real library) even though these tests never
 // select a take, since App.tsx statically imports the real package.
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import App from "./App";
 import { createMockBardServer } from "./test/mockServer";
@@ -43,6 +43,12 @@ it("creates a project from a title and simple query, and switches to it", async 
 
   // Library loads with just the fixture project until the form is used.
   await screen.findByText("Test Song");
+  fireEvent.click(
+    within(screen.getByRole("complementary", { name: "Project library" })).getByRole(
+      "button",
+      { name: "New project" },
+    ),
+  );
 
   fireEvent.change(screen.getByPlaceholderText("title"), {
     target: { value: "Goblin Ballad" },
@@ -50,7 +56,7 @@ it("creates a project from a title and simple query, and switches to it", async 
   fireEvent.change(screen.getByPlaceholderText("simple query (optional)"), {
     target: { value: "upbeat goblin tavern song" },
   });
-  fireEvent.click(screen.getByRole("button", { name: "New project" }));
+  fireEvent.click(screen.getByRole("button", { name: "Create project" }));
 
   // POSTs the exact body createProject() builds.
   await waitFor(() => {
@@ -74,11 +80,13 @@ it("creates a project from a title and simple query, and switches to it", async 
   });
   expect(screen.getByText("Test Song")).toBeTruthy();
   expect(screen.getByRole("heading", { name: "Goblin Ballad" })).toBeTruthy();
-  const queryInput = screen.getByLabelText("Simple query") as HTMLInputElement;
+  const queryInput = screen.getByPlaceholderText(
+    "Describe the song you want to explore…",
+  ) as HTMLTextAreaElement;
   expect(queryInput.value).toBe("upbeat goblin tavern song");
 
-  // The title input is cleared after a successful create.
-  expect((screen.getByPlaceholderText("title") as HTMLInputElement).value).toBe("");
+  // The compact creation composer closes after a successful create.
+  expect(screen.queryByPlaceholderText("title")).toBeNull();
 
   server.uninstall();
 });
@@ -89,12 +97,18 @@ it("creates a project with a fallback title when the title field is left blank",
 
   render(<App />);
   await screen.findByText("Test Song");
+  fireEvent.click(
+    within(screen.getByRole("complementary", { name: "Project library" })).getByRole(
+      "button",
+      { name: "New project" },
+    ),
+  );
 
   // Title left blank; only a query is provided.
   fireEvent.change(screen.getByPlaceholderText("simple query (optional)"), {
     target: { value: "mock backend created it" },
   });
-  fireEvent.click(screen.getByRole("button", { name: "New project" }));
+  fireEvent.click(screen.getByRole("button", { name: "Create project" }));
 
   await waitFor(() => {
     const posts = server.requests.filter(
@@ -121,11 +135,17 @@ it("opens the new project's workspace with an empty takes pane and no Open click
 
   render(<App />);
   await screen.findByText("Test Song");
+  fireEvent.click(
+    within(screen.getByRole("complementary", { name: "Project library" })).getByRole(
+      "button",
+      { name: "New project" },
+    ),
+  );
 
   fireEvent.change(screen.getByPlaceholderText("title"), {
     target: { value: "Fresh Track" },
   });
-  fireEvent.click(screen.getByRole("button", { name: "New project" }));
+  fireEvent.click(screen.getByRole("button", { name: "Create project" }));
 
   // The workspace pane (Plan/Takes) renders for the new project immediately
   // -- the "Select or create a project." hint that shows when no project is

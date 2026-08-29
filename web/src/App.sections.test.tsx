@@ -122,7 +122,7 @@ it("renders persisted sections as labeled regions that survive the repaint selec
 
   // Selecting a take mounts the waveform, which draws one labeled,
   // non-editable region per persisted section.
-  fireEvent.click(screen.getByText("seed 1001"));
+  fireEvent.click(screen.getByRole("listitem", { name: /seed 1001/ }));
   await waitFor(() => expect(regionHooks.addRegionCalls).toHaveLength(2));
   expect(regionHooks.addRegionCalls[0]).toMatchObject({
     id: "section-label-0",
@@ -159,7 +159,7 @@ it("renders persisted sections as labeled regions that survive the repaint selec
 
 it("re-renders waveform labels when sections are edited in the Plan pane", async () => {
   app = await renderOpenedProject({ takes: makeTakes(2), sections: SECTIONS });
-  fireEvent.click(screen.getByText("seed 1001"));
+  fireEvent.click(screen.getByRole("listitem", { name: /seed 1001/ }));
   await waitFor(() => expect(regionHooks.addRegionCalls).toHaveLength(2));
 
   // Adding a section in the Plan pane draws its label on the waveform.
@@ -177,6 +177,6 @@ it("re-renders waveform labels when sections are edited in the Plan pane", async
   expect(labelRegions()).toHaveLength(3);
 
   // Deleting a section removes its label.
-  fireEvent.click(screen.getAllByRole("button", { name: "Delete" })[0]);
+  fireEvent.click(screen.getAllByRole("button", { name: /Delete section/ })[0]);
   await waitFor(() => expect(labelRegions()).toHaveLength(2));
 });

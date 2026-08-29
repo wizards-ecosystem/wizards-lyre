@@ -61,7 +61,7 @@ describe("Library inline take preview", () => {
     const otherBtn = previewBtn("Has A Take");
     expect(otherBtn.disabled).toBe(false);
     expect(otherBtn.title).toBe("Play last take");
-    expect(otherBtn.textContent).toBe("▶");
+    expect(otherBtn.getAttribute("aria-label")).toBe("Play Has A Take preview");
 
     server.uninstall();
   });
@@ -91,14 +91,14 @@ describe("Library inline take preview", () => {
     fireEvent.click(previewBtn("Song One"));
     expect(playSpy).toHaveBeenCalledTimes(1);
     expect(audio.src).toBe(new URL(api.takeAudioUrl("proj-1", "take-01"), window.location.href).href);
-    expect(previewBtn("Song One").textContent).toBe("⏸");
+    expect(previewBtn("Song One").getAttribute("aria-label")).toBe("Pause Song One preview");
     expect(previewBtn("Song One").title).toBe("Pause preview");
-    expect(previewBtn("Song Two").textContent).toBe("▶");
+    expect(previewBtn("Song Two").getAttribute("aria-label")).toBe("Play Song Two preview");
 
     // Clicking the same project's button again pauses and reverts the glyph.
     fireEvent.click(previewBtn("Song One"));
     expect(pauseSpy).toHaveBeenCalledTimes(1);
-    expect(previewBtn("Song One").textContent).toBe("▶");
+    expect(previewBtn("Song One").getAttribute("aria-label")).toBe("Play Song One preview");
     expect(previewBtn("Song One").title).toBe("Play last take");
 
     // Start project one again, then jukebox-swap to project two while it's
@@ -110,14 +110,14 @@ describe("Library inline take preview", () => {
     expect(playSpy).toHaveBeenCalledTimes(3);
     expect(pauseSpy).toHaveBeenCalledTimes(1);
     expect(audio.src).toBe(new URL(api.takeAudioUrl("proj-2", "take-02"), window.location.href).href);
-    expect(previewBtn("Song One").textContent).toBe("▶");
-    expect(previewBtn("Song Two").textContent).toBe("⏸");
+    expect(previewBtn("Song One").getAttribute("aria-label")).toBe("Play Song One preview");
+    expect(previewBtn("Song Two").getAttribute("aria-label")).toBe("Pause Song Two preview");
     expect(previewBtn("Song Two").title).toBe("Pause preview");
 
     // The shared <audio> element's native 'ended' event resets whichever
     // row was playing back to the play glyph.
     fireEvent(audio, new Event("ended"));
-    expect(previewBtn("Song Two").textContent).toBe("▶");
+    expect(previewBtn("Song Two").getAttribute("aria-label")).toBe("Play Song Two preview");
     expect(previewBtn("Song Two").title).toBe("Play last take");
 
     server.uninstall();

@@ -277,7 +277,7 @@ describe("Restoring an ancestor take (SPEC.md sec 12 Phase 5)", () => {
     installActiveTakeEndpoint(server);
 
     expect(takeRows()[0].className).toMatch(/active-take/);
-    expect(takeRows()[0].className).not.toMatch(/selected/);
+    expect(takeRows()[0].className).toMatch(/selected/);
 
     // Follow the "from take-03" link on the active (child) take -- this only
     // selects the ancestor for inspection, it does not activate it yet.

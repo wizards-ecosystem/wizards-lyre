@@ -149,7 +149,7 @@ describe("Seed control (SPEC.md sec 7.3)", () => {
     // Wait for the job to finish (button text reverts) before the next
     // action -- Generate/Cover/Repaint all gate on the same `busy` flag.
     await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Generate" }).textContent).toBe("Generate"),
+      expect(screen.getByRole("button", { name: "Generate" }).textContent?.trim()).toBe("Generate"),
     );
 
     fireEvent.click(takeRows()[0]);
@@ -170,7 +170,9 @@ describe("Seed control (SPEC.md sec 7.3)", () => {
     await waitFor(() => expect(jobsPost("repaint")).toHaveLength(1));
     expect(jobsPost("repaint")[0].body).toEqual({
       action: "repaint",
-      source_take_id: "take-01",
+      // The newly completed Cover take is automatically selected as the
+      // next operation's source.
+      source_take_id: "take-of-job-2",
       repainting_start: 1,
       repainting_end: 3,
       seed: 42,
@@ -229,7 +231,7 @@ describe("DiT profile picker (SPEC.md sec 4.1)", () => {
     const server = createMockBardServer();
     server.install();
     let rendered = render(<App />);
-    fireEvent.click(await screen.findByRole("button", { name: "Open" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Open Test Song" }));
     await screen.findByRole("group", { name: "DiT profile" });
 
     fireEvent.click(ditButton("quality"));
@@ -241,7 +243,7 @@ describe("DiT profile picker (SPEC.md sec 4.1)", () => {
     // a fresh GET /api/projects/{id} actually returned.
     rendered.unmount();
     rendered = render(<App />);
-    fireEvent.click(await screen.findByRole("button", { name: "Open" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Open Test Song" }));
     await screen.findByRole("group", { name: "DiT profile" });
 
     expect(isSelected(ditButton("quality"))).toBe(true);
@@ -301,10 +303,14 @@ describe("DiT profile picker (SPEC.md sec 4.1)", () => {
 
     fireEvent.change(loraSelect(), { target: { value: "lora-good" } });
     fireEvent.click(screen.getByRole("button", { name: "Generate" }));
+    fireEvent.click(
+      within(screen.getByRole("alertdialog", { name: "Load the studio model?" })).getByRole(
+        "button",
+        { name: "Load model & generate" },
+      ),
+    );
 
     await waitFor(() => expect(jobsPost("generate")).toHaveLength(1));
-    expect(app.confirm).toHaveBeenCalledTimes(1);
-    expect(String(app.confirm.mock.calls[0][0])).toMatch(/studio_ops base model/);
     expect(jobsPost("generate")[0].body).toEqual({
       action: "generate",
       seed: -1,

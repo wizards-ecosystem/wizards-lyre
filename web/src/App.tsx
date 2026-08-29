@@ -1,7 +1,17 @@
-import { DragEvent, useCallback, useEffect, useRef, useState } from "react";
+import { DragEvent, KeyboardEvent as ReactKeyboardEvent, useCallback, useEffect, useRef, useState } from "react";
 import WaveSurfer from "wavesurfer.js";
 import RegionsPlugin from "wavesurfer.js/plugins/regions";
 import { api, Health, Job, Lora, Plan, ProjectDetail, ProjectSummary, Section } from "./api";
+import {
+  AppShell,
+  OperationDock,
+  PlanInspector,
+  ProjectRail,
+  StudioPlayer,
+  StudioStage,
+  StylePackPanel,
+  TakesRail,
+} from "./components/Workbench";
 
 const HEALTH_POLL_INTERVAL_MS = 5000;
 const JOB_POLL_INTERVAL_MS = 1000;
@@ -48,6 +58,132 @@ const DIT_PROFILE_OPTIONS = ["iterate", "polish", "quality"] as const;
 // [Chorus], [Bridge], [Intro], [Outro]" -- the lyrics textarea is a "textarea
 // with structure tags", so the palette below offers exactly this fixed set.
 const STRUCTURE_TAGS = ["Intro", "Verse", "Chorus", "Bridge", "Outro"] as const;
+
+type SaveState = "idle" | "saving" | "saved" | "error";
+type InspectorTab = "takes" | "styles";
+type OperationGroup = "create" | "transform" | "tracks";
+type IconName =
+  | "add"
+  | "back"
+  | "close"
+  | "delete"
+  | "library"
+  | "pause"
+  | "play"
+  | "search"
+  | "settings"
+  | "spark"
+  | "star"
+  | "wave";
+
+interface ConfirmationRequest {
+  title: string;
+  message: string;
+  confirmLabel: string;
+  destructive?: boolean;
+  resolve: (accepted: boolean) => void;
+}
+
+function Icon({ name }: { name: IconName }) {
+  const paths: Record<IconName, JSX.Element> = {
+    add: <path d="M12 5v14M5 12h14" />,
+    back: <path d="m15 18-6-6 6-6" />,
+    close: <path d="m6 6 12 12M18 6 6 18" />,
+    delete: <path d="M5 7h14M9 7V4h6v3m2 0-1 13H8L7 7m3 4v5m4-5v5" />,
+    library: <path d="M5 4h5v16H5zM14 4h5v16h-5z" />,
+    pause: <path d="M8 6h3v12H8zM14 6h3v12h-3z" />,
+    play: <path d="m8 5 11 7-11 7z" />,
+    search: <path d="m20 20-4.5-4.5m2.5-5A7.5 7.5 0 1 1 3 10.5a7.5 7.5 0 0 1 15 0Z" />,
+    settings: <path d="M4 7h10m4 0h2M4 17h2m4 0h10M14 4v6M6 14v6" />,
+    spark: <path d="m12 3 1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z" />,
+    star: <path d="m12 3 2.7 5.5 6.1.9-4.4 4.3 1 6.1-5.4-2.9-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z" />,
+    wave: <path d="M3 12h3l2-6 3 12 3-9 2 6h5" />,
+  };
+  return (
+    <svg className="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      {paths[name]}
+    </svg>
+  );
+}
+
+function formatClock(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 0) return "0:00";
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.floor(seconds % 60);
+  return `${mins}:${String(secs).padStart(2, "0")}`;
+}
+
+function ConfirmationDialog({
+  request,
+  onDecision,
+}: {
+  request: ConfirmationRequest | null;
+  onDecision: (accepted: boolean) => void;
+}) {
+  const cancelRef = useRef<HTMLButtonElement | null>(null);
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!request) return;
+    cancelRef.current?.focus();
+
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onDecision(false);
+        return;
+      }
+      if (event.key !== "Tab" || !dialogRef.current) return;
+      const focusable = Array.from(
+        dialogRef.current.querySelectorAll<HTMLElement>("button:not([disabled])"),
+      );
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [request, onDecision]);
+
+  if (!request) return null;
+  return (
+    <div className="dialog-backdrop" role="presentation" onMouseDown={() => onDecision(false)}>
+      <div
+        ref={dialogRef}
+        className="confirm-dialog"
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="confirm-title"
+        aria-describedby="confirm-message"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <span className="eyebrow">Confirm action</span>
+        <h2 id="confirm-title">{request.title}</h2>
+        <p id="confirm-message">{request.message}</p>
+        <div className="dialog-actions">
+          <button ref={cancelRef} type="button" className="button-secondary" onClick={() => onDecision(false)}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className={request.destructive ? "button-danger" : "button-primary"}
+            onClick={() => onDecision(true)}
+          >
+            {request.confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -193,12 +329,17 @@ function TakeAudioPlayer({
   projectId,
   takeId,
   registerRef,
+  onSelect,
 }: {
   projectId: string;
   takeId: string;
   registerRef: (id: string, el: HTMLAudioElement | null) => void;
+  onSelect: () => void;
 }) {
   const [audioEl, setAudioEl] = useState<HTMLAudioElement | null>(null);
+  const [playing, setPlaying] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
 
   const setRef = useCallback(
     (el: HTMLAudioElement | null) => {
@@ -210,7 +351,50 @@ function TakeAudioPlayer({
 
   return (
     <span className="take-audio-player">
-      <audio controls src={api.takeAudioUrl(projectId, takeId)} ref={setRef} />
+      <button
+        type="button"
+        className="transport-button transport-button-small"
+        aria-label={`${playing ? "Pause" : "Play"} take ${takeId}`}
+        onClick={(event) => {
+          event.stopPropagation();
+          onSelect();
+          if (!audioEl) return;
+          if (audioEl.paused) audioEl.play().catch(() => {});
+          else audioEl.pause();
+        }}
+      >
+        <Icon name={playing ? "pause" : "play"} />
+      </button>
+      <audio
+        src={api.takeAudioUrl(projectId, takeId)}
+        ref={setRef}
+        preload="metadata"
+        onPlay={() => setPlaying(true)}
+        onPause={() => setPlaying(false)}
+        onEnded={() => setPlaying(false)}
+        onTimeUpdate={(event) => setCurrentTime(event.currentTarget.currentTime)}
+        onDurationChange={(event) => setDuration(event.currentTarget.duration || 0)}
+      />
+      <span className="transport-time" aria-label={`${formatClock(currentTime)} elapsed`}>
+        {formatClock(currentTime)}
+      </span>
+      <input
+        className="take-scrubber"
+        type="range"
+        min={0}
+        max={Math.max(duration, 0.01)}
+        step={0.1}
+        value={Math.min(currentTime, Math.max(duration, 0.01))}
+        aria-label={`Seek take ${takeId}`}
+        onClick={(event) => event.stopPropagation()}
+        onChange={(event) => {
+          event.stopPropagation();
+          if (!audioEl) return;
+          const next = Number(event.currentTarget.value);
+          audioEl.currentTime = next;
+          setCurrentTime(next);
+        }}
+      />
       <LoudnessMeter audioEl={audioEl} />
     </span>
   );
@@ -228,11 +412,23 @@ export default function App() {
   const [detail, setDetail] = useState<ProjectDetail | null>(null);
   const [newTitle, setNewTitle] = useState("");
   const [newQuery, setNewQuery] = useState("");
+  const [creatingProject, setCreatingProject] = useState(false);
   const [busy, setBusy] = useState(false);
   const [busyStatus, setBusyStatus] = useState<string | null>(null);
+  const [activeJobAction, setActiveJobAction] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [saveState, setSaveState] = useState<SaveState>("idle");
   const [selectedTakeId, setSelectedTakeId] = useState<string | null>(null);
   const [compareTakeId, setCompareTakeId] = useState<string | null>(null);
+  const [inspectorTab, setInspectorTab] = useState<InspectorTab>("takes");
+  const [operationGroup, setOperationGroup] = useState<OperationGroup>("create");
+  const [libraryOpen, setLibraryOpen] = useState(false);
+  const [planOpen, setPlanOpen] = useState(false);
+  const [inspectorOpen, setInspectorOpen] = useState(false);
+  const [planDetailsOpen, setPlanDetailsOpen] = useState(true);
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState("");
+  const [confirmation, setConfirmation] = useState<ConfirmationRequest | null>(null);
   // A dropped local file (SPEC.md sec 12 Phase 6) is an alternative
   // cover/repaint source to a selected take -- server.jobs
   // _resolve_source_audio only ever accepts one or the other. uploadedSourceName
@@ -268,6 +464,10 @@ export default function App() {
   // queue is not, so the Style Packs pane can keep showing its status and
   // refresh the pack list the moment it finishes (no second reload needed).
   const [trainingJobs, setTrainingJobs] = useState<Job[]>([]);
+  const [waveformPlaying, setWaveformPlaying] = useState(false);
+  const [waveformCurrentTime, setWaveformCurrentTime] = useState(0);
+  const [waveformDuration, setWaveformDuration] = useState(0);
+  const [waveformMediaEl, setWaveformMediaEl] = useState<HTMLAudioElement | null>(null);
 
   // Plan saves are debounced and serialized: at most one PUT /plan in
   // flight at a time, always carrying the latest edit. Without this, one
@@ -309,10 +509,28 @@ export default function App() {
   const activeIdRef = useRef<string | null>(null);
 
   const lyricsTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const confirmationFocusRef = useRef<HTMLElement | null>(null);
 
   const waveformContainerRef = useRef<HTMLDivElement | null>(null);
   const wavesurferRef = useRef<WaveSurfer | null>(null);
   const regionsPluginRef = useRef<RegionsPlugin | null>(null);
+
+  const requestConfirmation = useCallback(
+    (request: Omit<ConfirmationRequest, "resolve">): Promise<boolean> => {
+      confirmationFocusRef.current = document.activeElement as HTMLElement | null;
+      return new Promise((resolve) => setConfirmation({ ...request, resolve }));
+    },
+    [],
+  );
+
+  const resolveConfirmation = useCallback((accepted: boolean) => {
+    setConfirmation((current) => {
+      current?.resolve(accepted);
+      return null;
+    });
+    requestAnimationFrame(() => confirmationFocusRef.current?.focus());
+  }, []);
 
   // Keyed by take id rather than a single ref, since every take in the list
   // renders its own <audio> (and a future compare panel could show two at
@@ -354,7 +572,9 @@ export default function App() {
       // a fresh slot instead of being clobbered when this save resolves.
       pendingSaveRef.current = null;
       try {
+        setSaveState("saving");
         await api.savePlan(pending.projectId, pending.plan);
+        if (pendingSaveRef.current === null) setSaveState("saved");
       } catch (err) {
         // Put the failed edit back so a later flush can retry it -- but
         // only if nothing newer has already claimed the slot, otherwise
@@ -362,6 +582,7 @@ export default function App() {
         if (pendingSaveRef.current === null) {
           pendingSaveRef.current = pending;
         }
+        setSaveState("error");
         throw err;
       }
     });
@@ -470,11 +691,17 @@ export default function App() {
     }
   }
 
-  // SPEC.md sec 9.1 "Delete (confirm)". window.confirm is the explicit
-  // confirmation gate -- deletion is irreversible (server.storage.delete_project
-  // rmtrees the project dir), so there's no undo to fall back on.
+  // SPEC.md sec 9.1 "Delete (confirm)". The workbench owns the confirmation
+  // surface so the irreversible action remains keyboard accessible and
+  // visually consistent with the rest of the local tool.
   async function deleteProject(p: ProjectSummary): Promise<void> {
-    if (!window.confirm(`Delete "${p.title}"? This permanently removes its takes and cannot be undone.`)) {
+    const accepted = await requestConfirmation({
+      title: `Delete “${p.title}”?`,
+      message: "This permanently removes the project, every take, and its local files. This cannot be undone.",
+      confirmLabel: "Delete project",
+      destructive: true,
+    });
+    if (!accepted) {
       return;
     }
     try {
@@ -601,7 +828,17 @@ export default function App() {
     // fetch and generate()'s post-job refresh completing after the user
     // has since switched away from the project the job ran in.
     if (activeIdRef.current !== id) return;
+    const openingProject = detail?.project.id !== id;
     setDetail(data);
+    setSelectedTakeId((current) => {
+      if (current && data.takes.some((take) => take.id === current)) return current;
+      return data.project.active_take_id ?? data.takes[0]?.id ?? null;
+    });
+    if (openingProject) {
+      setTitleDraft(data.project.title);
+      setPlanDetailsOpen(Boolean(data.plan.caption || data.plan.lyrics));
+      setSaveState("idle");
+    }
   }
 
   async function refreshLoras(id: string) {
@@ -805,14 +1042,29 @@ export default function App() {
     const wavesurfer = WaveSurfer.create({
       container: waveformContainerRef.current,
       url: api.takeAudioUrl(projectId, selectedTakeId),
-      waveColor: "#7c8cff",
-      progressColor: "#4fd67a",
-      cursorColor: "#e4e6ec",
-      height: 96,
+      waveColor: "#565d5a",
+      progressColor: "#e6b85c",
+      cursorColor: "#f2f0e8",
+      height: 164,
+      normalize: true,
       plugins: [regions],
     });
     wavesurferRef.current = wavesurfer;
     regionsPluginRef.current = regions;
+    setWaveformPlaying(false);
+    setWaveformCurrentTime(0);
+    setWaveformDuration(0);
+    setWaveformMediaEl(
+      typeof wavesurfer.getMediaElement === "function"
+        ? (wavesurfer.getMediaElement() as HTMLAudioElement)
+        : null,
+    );
+
+    wavesurfer.on("ready", (duration) => setWaveformDuration(duration));
+    wavesurfer.on("timeupdate", (time) => setWaveformCurrentTime(time));
+    wavesurfer.on("play", () => setWaveformPlaying(true));
+    wavesurfer.on("pause", () => setWaveformPlaying(false));
+    wavesurfer.on("finish", () => setWaveformPlaying(false));
 
     // A missing/corrupt/unsupported take would otherwise just leave a blank
     // waveform with no indication anything went wrong.
@@ -843,6 +1095,8 @@ export default function App() {
       wavesurfer.destroy();
       wavesurferRef.current = null;
       regionsPluginRef.current = null;
+      setWaveformMediaEl(null);
+      setWaveformPlaying(false);
     };
   }, [selectedTakeId]);
 
@@ -872,7 +1126,7 @@ export default function App() {
         // Accent tint so labels are visually distinct from the repaint
         // selection's default gray; drag/resize off -- these are labels,
         // edited via the Plan pane, not on the waveform.
-        color: "rgba(124, 140, 255, 0.15)",
+        color: "rgba(230, 184, 92, 0.16)",
         drag: false,
         resize: false,
       });
@@ -894,12 +1148,9 @@ export default function App() {
     setUploadError(null);
   }
 
-  async function handleDropAudio(event: DragEvent<HTMLDivElement>) {
-    event.preventDefault();
+  async function uploadSourceFile(file: File) {
     if (!activeId) return;
     const projectId = activeId;
-    const file = event.dataTransfer.files[0];
-    if (!file) return;
     setUploadError(null);
     try {
       const { upload_path } = await api.uploadAudio(projectId, file);
@@ -920,16 +1171,55 @@ export default function App() {
     }
   }
 
+  async function handleDropAudio(event: DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    const file = event.dataTransfer.files[0];
+    if (file) await uploadSourceFile(file);
+  }
+
+  function toggleWaveformPlayback(): void {
+    const wavesurfer = wavesurferRef.current;
+    if (!wavesurfer) return;
+    for (const audio of Object.values(audioRefs.current)) {
+      audio?.pause();
+    }
+    if (typeof wavesurfer.playPause !== "function") return;
+    wavesurfer.playPause().catch((err) => setErrorMsg(`playback failed: ${String(err)}`));
+  }
+
   async function createProject() {
     setErrorMsg(null);
     try {
       const project = await api.createProject(newTitle || "Untitled", newQuery);
       setNewTitle("");
       setNewQuery("");
+      setCreatingProject(false);
       await refreshProjects();
       await switchActiveProject(project.id);
     } catch (err) {
       setErrorMsg(String(err));
+    }
+  }
+
+  async function commitProjectTitle(): Promise<void> {
+    if (!activeId || !detail) return;
+    const nextTitle = titleDraft.trim() || "Untitled";
+    if (nextTitle === detail.project.title) {
+      setEditingTitle(false);
+      setTitleDraft(detail.project.title);
+      return;
+    }
+    try {
+      const project = await api.patchProject(activeId, { title: nextTitle });
+      setDetail((current) =>
+        current ? { ...current, project: { ...current.project, title: project.title } } : current,
+      );
+      setTitleDraft(project.title);
+      setEditingTitle(false);
+      await refreshProjects();
+    } catch (err) {
+      setErrorMsg(String(err));
+      setTitleDraft(detail.project.title);
     }
   }
 
@@ -939,6 +1229,7 @@ export default function App() {
     setDetail({ ...detail, plan });
 
     pendingSaveRef.current = { projectId: activeId, plan };
+    setSaveState("saving");
     if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
     saveTimeoutRef.current = setTimeout(() => {
       saveTimeoutRef.current = null;
@@ -1015,16 +1306,17 @@ export default function App() {
     // checkpoint, so selecting one forces the same swap those already gate
     // behind confirmation. Only shown when a lora is actually selected; a
     // plain generate never prompts.
-    if (
-      selectedLoraId &&
-      !window.confirm(
-        "Generate swaps the loaded model to the studio_ops base model to use this style pack (slower, SPEC sec 4.3). Continue?"
-      )
-    ) {
-      return;
+    if (selectedLoraId) {
+      const accepted = await requestConfirmation({
+        title: "Load the studio model?",
+        message: "Generate needs the studio_ops base model for this style pack. Lyre will unload the current model before the job starts.",
+        confirmLabel: "Load model & generate",
+      });
+      if (!accepted) return;
     }
     setBusy(true);
     setBusyStatus("queued");
+    setActiveJobAction("generate");
     setErrorMsg(null);
     try {
       // The plan can still be mid-debounce (or an earlier save still in
@@ -1036,29 +1328,34 @@ export default function App() {
       const job = await pollJob(queued.id, (update) => setBusyStatus(update.status));
       if (job.status === "error") {
         setErrorMsg(job.error ?? "generate job failed");
+        setBusyStatus("error");
+      } else {
+        setBusyStatus("done");
       }
       await refreshDetail(activeId);
+      if (job.status === "done" && job.take_id) setSelectedTakeId(job.take_id);
     } catch (err) {
       setErrorMsg(String(err));
+      setBusyStatus("error");
     } finally {
       setBusy(false);
-      setBusyStatus(null);
     }
   }
 
   async function cover() {
     if (!activeId || (!selectedTakeId && !uploadedSourcePath)) return;
     // Same base-model-swap gate as generate() above.
-    if (
-      selectedLoraId &&
-      !window.confirm(
-        "Cover swaps the loaded model to the studio_ops base model to use this style pack (slower, SPEC sec 4.3). Continue?"
-      )
-    ) {
-      return;
+    if (selectedLoraId) {
+      const accepted = await requestConfirmation({
+        title: "Load the studio model?",
+        message: "Cover needs the studio_ops base model for this style pack. Lyre will unload the current model before the job starts.",
+        confirmLabel: "Load model & cover",
+      });
+      if (!accepted) return;
     }
     setBusy(true);
     setBusyStatus("queued");
+    setActiveJobAction("cover");
     setErrorMsg(null);
     try {
       // Same race as generate(): the plan can still be mid-debounce (or an
@@ -1073,13 +1370,17 @@ export default function App() {
       const job = await pollJob(queued.id, (update) => setBusyStatus(update.status));
       if (job.status === "error") {
         setErrorMsg(job.error ?? "cover job failed");
+        setBusyStatus("error");
+      } else {
+        setBusyStatus("done");
       }
       await refreshDetail(activeId);
+      if (job.status === "done" && job.take_id) setSelectedTakeId(job.take_id);
     } catch (err) {
       setErrorMsg(String(err));
+      setBusyStatus("error");
     } finally {
       setBusy(false);
-      setBusyStatus(null);
     }
   }
 
@@ -1095,16 +1396,17 @@ export default function App() {
       return;
     }
     // Same base-model-swap gate as generate() above.
-    if (
-      selectedLoraId &&
-      !window.confirm(
-        "Repaint swaps the loaded model to the studio_ops base model to use this style pack (slower, SPEC sec 4.3). Continue?"
-      )
-    ) {
-      return;
+    if (selectedLoraId) {
+      const accepted = await requestConfirmation({
+        title: "Load the studio model?",
+        message: "Repaint needs the studio_ops base model for this style pack. Lyre will unload the current model before the job starts.",
+        confirmLabel: "Load model & repaint",
+      });
+      if (!accepted) return;
     }
     setBusy(true);
     setBusyStatus("queued");
+    setActiveJobAction("repaint");
     setErrorMsg(null);
     try {
       // Same race as generate()/cover(): flush any in-flight plan edit before
@@ -1119,15 +1421,20 @@ export default function App() {
       const job = await pollJob(queued.id, (update) => setBusyStatus(update.status));
       if (job.status === "error") {
         setErrorMsg(job.error ?? "repaint job failed");
+        setBusyStatus("error");
       } else if (selectedTakeId) {
         clearRegion();
+        setBusyStatus("done");
+      } else {
+        setBusyStatus("done");
       }
       await refreshDetail(activeId);
+      if (job.status === "done" && job.take_id) setSelectedTakeId(job.take_id);
     } catch (err) {
       setErrorMsg(String(err));
+      setBusyStatus("error");
     } finally {
       setBusy(false);
-      setBusyStatus(null);
     }
   }
 
@@ -1136,15 +1443,15 @@ export default function App() {
     // SPEC.md sec 4.3: one GPU occupant -- swapping between the iterate and
     // studio_ops base models unloads/reloads the DiT, so this must be a
     // deliberate, confirmed action, not a side effect of a stray click.
-    if (
-      !window.confirm(
-        "Extract swaps the loaded model to the studio_ops base model (slower, SPEC sec 4.3). Continue?"
-      )
-    ) {
-      return;
-    }
+    const accepted = await requestConfirmation({
+      title: "Load the studio model?",
+      message: "Extract uses the studio_ops base model. Lyre will unload the current model before isolating this track.",
+      confirmLabel: "Load model & extract",
+    });
+    if (!accepted) return;
     setBusy(true);
     setBusyStatus("queued");
+    setActiveJobAction("extract");
     setErrorMsg(null);
     try {
       // Same race as cover()/repaint(): flush any in-flight plan edit before
@@ -1154,28 +1461,32 @@ export default function App() {
       const job = await pollJob(queued.id, (update) => setBusyStatus(update.status));
       if (job.status === "error") {
         setErrorMsg(job.error ?? "extract job failed");
+        setBusyStatus("error");
+      } else {
+        setBusyStatus("done");
       }
       await refreshDetail(activeId);
+      if (job.status === "done" && job.take_id) setSelectedTakeId(job.take_id);
     } catch (err) {
       setErrorMsg(String(err));
+      setBusyStatus("error");
     } finally {
       setBusy(false);
-      setBusyStatus(null);
     }
   }
 
   async function lego() {
     if (!activeId || !selectedTakeId || !trackName.trim()) return;
     // Same base-model-swap gate as extract() (SPEC.md sec 4.3).
-    if (
-      !window.confirm(
-        "Lego swaps the loaded model to the studio_ops base model (slower, SPEC sec 4.3). Continue?"
-      )
-    ) {
-      return;
-    }
+    const accepted = await requestConfirmation({
+      title: "Load the studio model?",
+      message: "Lego uses the studio_ops base model. Lyre will unload the current model before adding or replacing the track.",
+      confirmLabel: "Load model & add track",
+    });
+    if (!accepted) return;
     setBusy(true);
     setBusyStatus("queued");
+    setActiveJobAction("lego");
     setErrorMsg(null);
     try {
       // Same race as cover()/repaint()/extract(): flush any in-flight plan
@@ -1185,30 +1496,33 @@ export default function App() {
       const job = await pollJob(queued.id, (update) => setBusyStatus(update.status));
       if (job.status === "error") {
         setErrorMsg(job.error ?? "lego job failed");
+        setBusyStatus("error");
       } else {
         clearRegion();
+        setBusyStatus("done");
       }
       await refreshDetail(activeId);
+      if (job.status === "done" && job.take_id) setSelectedTakeId(job.take_id);
     } catch (err) {
       setErrorMsg(String(err));
+      setBusyStatus("error");
     } finally {
       setBusy(false);
-      setBusyStatus(null);
     }
   }
 
   async function complete() {
     if (!activeId || !selectedTakeId || !trackName.trim()) return;
     // Same base-model-swap gate as extract() (SPEC.md sec 4.3).
-    if (
-      !window.confirm(
-        "Complete swaps the loaded model to the studio_ops base model (slower, SPEC sec 4.3). Continue?"
-      )
-    ) {
-      return;
-    }
+    const accepted = await requestConfirmation({
+      title: "Load the studio model?",
+      message: "Complete uses the studio_ops base model. Lyre will unload the current model before filling the arrangement.",
+      confirmLabel: "Load model & complete",
+    });
+    if (!accepted) return;
     setBusy(true);
     setBusyStatus("queued");
+    setActiveJobAction("complete");
     setErrorMsg(null);
     try {
       await flushPendingPlanSave();
@@ -1216,13 +1530,17 @@ export default function App() {
       const job = await pollJob(queued.id, (update) => setBusyStatus(update.status));
       if (job.status === "error") {
         setErrorMsg(job.error ?? "complete job failed");
+        setBusyStatus("error");
+      } else {
+        setBusyStatus("done");
       }
       await refreshDetail(activeId);
+      if (job.status === "done" && job.take_id) setSelectedTakeId(job.take_id);
     } catch (err) {
       setErrorMsg(String(err));
+      setBusyStatus("error");
     } finally {
       setBusy(false);
-      setBusyStatus(null);
     }
   }
 
@@ -1256,6 +1574,7 @@ export default function App() {
     const name = loraName.trim();
     setBusy(true);
     setBusyStatus("queued");
+    setActiveJobAction("style pack training");
     setErrorMsg(null);
     try {
       const queued = await api.trainLora(projectId, sourceIds, name);
@@ -1277,17 +1596,21 @@ export default function App() {
       if (activeIdRef.current === projectId) {
         if (job.status === "error") {
           setErrorMsg(job.error ?? "train_lora job failed");
+          setBusyStatus("error");
         } else {
           setLoraSourceIds(new Set());
           setLoraName("");
+          setBusyStatus("done");
         }
       }
       await refreshLoras(projectId);
     } catch (err) {
-      if (activeIdRef.current === projectId) setErrorMsg(String(err));
+      if (activeIdRef.current === projectId) {
+        setErrorMsg(String(err));
+        setBusyStatus("error");
+      }
     } finally {
       setBusy(false);
-      setBusyStatus(null);
       // Re-sync the recovered-training view with the queue. On success this
       // just clears any entry; on a poll-timeout (the catch above) the job
       // is still running server-side, and this is what hands it over to the
@@ -1306,7 +1629,10 @@ export default function App() {
   // profile for the entire job and this would say "loading base model…"
   // throughout the actual extraction too. Falls back to the normal
   // "<verb>ing… (status)" text once the worker reports studio_ops loaded.
-  const studioOpsLoading = busy && health?.dit_loaded !== "studio_ops";
+  const studioOpsActivity =
+    Boolean(selectedLoraId) ||
+    ["extract", "lego", "complete", "style pack training"].includes(activeJobAction ?? "");
+  const studioOpsLoading = busy && studioOpsActivity && health?.dit_loaded !== "studio_ops";
 
   // The pack the load-half selection (SPEC.md sec 4.4) currently points at,
   // resolved against the project's pack list so the indicator next to
@@ -1352,6 +1678,11 @@ export default function App() {
         event.preventDefault();
         const take = detail.takes.find((t) => t.id === selectedTakeId);
         if (!take || take.error) return;
+        if (typeof wavesurferRef.current?.playPause === "function") {
+          toggleWaveformPlayback();
+          return;
+        }
+        // Test/legacy fallback for a waveform adapter without playPause.
         const audio = audioRefs.current[take.id];
         if (!audio) return;
         if (audio.paused) audio.play();
@@ -1384,824 +1715,696 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [activeId, detail, selectedTakeId, busy]);
 
+  const filteredProjects = projects
+    .filter((project) => project.title.toLowerCase().includes(librarySearch.toLowerCase()))
+    .sort((a, b) => Number(b.favorite) - Number(a.favorite));
+  const selectedTake = detail?.takes.find((take) => take.id === selectedTakeId) ?? null;
+  const jobStatusLabel = activeJobAction
+    ? busyStatus === "queued"
+      ? `Waiting for GPU · ${activeJobAction}`
+      : busyStatus === "running" && studioOpsLoading
+        ? `Loading base model · ${activeJobAction}`
+        : busyStatus === "running"
+          ? `Running · ${activeJobAction}`
+          : busyStatus === "done"
+            ? `Complete · ${activeJobAction}`
+            : busyStatus === "error"
+              ? `Interrupted · ${activeJobAction}`
+              : activeJobAction
+    : null;
+  const saveStateLabel =
+    saveState === "saving"
+      ? "Saving…"
+      : saveState === "saved"
+        ? "Saved"
+        : saveState === "error"
+          ? "Couldn’t save"
+          : "Local plan";
+
   return (
-    <div className="app">
+    <AppShell>
       <header className="topbar">
-        <h1>Wizard's Lyre</h1>
-        <div className={`health ${health?.ok ? "ok" : "down"}`} title={healthError ?? undefined}>
-          <span className="dot" />
-          {health ? `${health.gpu}${health.dit_loaded ? ` · ${health.dit_loaded}` : ""}` : "server offline"}
+        <div className="brand-cluster">
+          <button
+            type="button"
+            className="icon-button panel-toggle"
+            aria-label="Projects"
+            aria-controls="project-library"
+            aria-expanded={libraryOpen}
+            onClick={() => setLibraryOpen((open) => !open)}
+          >
+            <Icon name="library" />
+          </button>
+          <span className="brand-mark"><Icon name="wave" /></span>
+          <div>
+            <h1>Wizard's Lyre</h1>
+            <span className="brand-subtitle">Local generative studio</span>
+          </div>
+        </div>
+        <div className="topbar-tools">
+          <details className="shortcut-help">
+            <summary>Keys</summary>
+            <div className="shortcut-popover">
+              <span><kbd>G</kbd> Generate</span>
+              <span><kbd>Space</kbd> Play / pause</span>
+              <span><kbd>↑</kbd><kbd>↓</kbd> Previous / next take</span>
+              <span><kbd>Ctrl</kbd><kbd>S</kbd> Save plan</span>
+            </div>
+          </details>
+          <div
+            className={`health ${health?.ok ? "ok" : "down"}`}
+            title={healthError ?? undefined}
+            role="status"
+          >
+            <span className="dot" />
+            <span className="health-copy">
+              <strong>{health ? health.gpu : "Server offline"}</strong>
+              <small>{health?.dit_loaded ? `${health.dit_loaded} loaded` : "local engine"}</small>
+            </span>
+          </div>
         </div>
       </header>
 
       <div className="body">
-        <aside className="library">
-          <h2>Library</h2>
-          <div className="new-project">
-            <input
-              placeholder="title"
-              value={newTitle}
-              onChange={(e) => setNewTitle(e.target.value)}
-            />
-            <input
-              placeholder="simple query (optional)"
-              value={newQuery}
-              onChange={(e) => setNewQuery(e.target.value)}
-            />
-            <button onClick={createProject}>New project</button>
+        <ProjectRail open={libraryOpen}>
+          <div className="rail-heading">
+            <div>
+              <span className="eyebrow">Projects</span>
+              <h2>Library</h2>
+            </div>
+            <button
+              type="button"
+              className="icon-button drawer-close"
+              aria-label="Close projects"
+              onClick={() => setLibraryOpen(false)}
+            >
+              <Icon name="close" />
+            </button>
           </div>
-          <input
-            className="library-search"
-            placeholder="Search projects"
-            value={librarySearch}
-            onChange={(e) => setLibrarySearch(e.target.value)}
-          />
+
+          {!creatingProject ? (
+            <button type="button" className="new-project-trigger" onClick={() => setCreatingProject(true)}>
+              <Icon name="add" />
+              New project
+            </button>
+          ) : (
+            <form
+              className="new-project"
+              onSubmit={(event) => {
+                event.preventDefault();
+                createProject();
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") setCreatingProject(false);
+              }}
+            >
+              <div className="composer-heading">
+                <span>New composition</span>
+                <button type="button" className="icon-button" aria-label="Cancel new project" onClick={() => setCreatingProject(false)}>
+                  <Icon name="close" />
+                </button>
+              </div>
+              <label>
+                Title
+                <input
+                  autoFocus
+                  placeholder="title"
+                  value={newTitle}
+                  onChange={(event) => setNewTitle(event.target.value)}
+                />
+              </label>
+              <label>
+                Starting idea <span className="optional">optional</span>
+                <textarea
+                  placeholder="simple query (optional)"
+                  value={newQuery}
+                  onChange={(event) => setNewQuery(event.target.value)}
+                />
+              </label>
+              <button type="submit" className="button-primary">Create project</button>
+            </form>
+          )}
+
+          <label className="search-field">
+            <Icon name="search" />
+            <span className="sr-only">Search projects</span>
+            <input
+              className="library-search"
+              placeholder="Search projects"
+              value={librarySearch}
+              onChange={(event) => setLibrarySearch(event.target.value)}
+            />
+          </label>
+
           <ul className="project-list">
-            {projects
-              .filter((p) => p.title.toLowerCase().includes(librarySearch.toLowerCase()))
-              .sort((a, b) => Number(b.favorite) - Number(a.favorite))
-              .map((p) => (
-                <li key={p.id} className={p.id === activeId ? "active" : ""}>
-                  <div className="project-row" onClick={() => switchActiveProject(p.id)}>
-                    <span className="project-title">{p.title}</span>
-                    <span className="project-updated">
-                      {p.updated_at ? new Date(p.updated_at).toLocaleString() : ""}
-                    </span>
-                  </div>
+            {filteredProjects.map((project) => (
+              <li key={project.id} className={project.id === activeId ? "active" : ""}>
+                <button
+                  type="button"
+                  className="project-row"
+                  aria-label={`Open ${project.title}`}
+                  onClick={() => {
+                    switchActiveProject(project.id);
+                    setLibraryOpen(false);
+                  }}
+                >
+                  <span className="project-title">{project.title}</span>
+                  <span className="project-updated">
+                    {project.updated_at ? new Date(project.updated_at).toLocaleDateString() : ""}
+                  </span>
+                </button>
+                <div className="project-actions">
                   <button
-                    className={`favorite-btn ${p.favorite ? "favorited" : ""}`}
-                    title={p.favorite ? "Unfavorite" : "Favorite"}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      toggleFavorite(p);
-                    }}
+                    type="button"
+                    className={`icon-button favorite-btn ${project.favorite ? "favorited" : ""}`}
+                    title={project.favorite ? "Unfavorite" : "Favorite"}
+                    aria-label={`${project.favorite ? "Unfavorite" : "Favorite"} ${project.title}`}
+                    onClick={() => toggleFavorite(project)}
                   >
-                    {p.favorite ? "★" : "☆"}
+                    <Icon name="star" />
                   </button>
                   <button
-                    className="preview-btn"
+                    type="button"
+                    className="icon-button preview-btn"
                     title={
-                      p.active_take_id
-                        ? previewProjectId === p.id
+                      project.active_take_id
+                        ? previewProjectId === project.id
                           ? "Pause preview"
                           : "Play last take"
                         : "No takes yet"
                     }
-                    disabled={!p.active_take_id}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      togglePreview(p);
-                    }}
+                    aria-label={`${previewProjectId === project.id ? "Pause" : "Play"} ${project.title} preview`}
+                    disabled={!project.active_take_id}
+                    onClick={() => togglePreview(project)}
                   >
-                    {previewProjectId === p.id ? "⏸" : "▶"}
-                  </button>
-                  <button className="open-btn" onClick={() => switchActiveProject(p.id)}>
-                    Open
+                    <Icon name={previewProjectId === project.id ? "pause" : "play"} />
                   </button>
                   <button
-                    className="delete-btn"
+                    type="button"
+                    className="icon-button delete-btn"
                     title="Delete project"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      deleteProject(p);
-                    }}
+                    aria-label={`Delete ${project.title}`}
+                    onClick={() => deleteProject(project)}
                   >
-                    ✕
+                    <Icon name="delete" />
                   </button>
-                </li>
-              ))}
+                </div>
+              </li>
+            ))}
           </ul>
-          <audio
-            ref={previewAudioRef}
-            onEnded={() => setPreviewProjectId(null)}
-            style={{ display: "none" }}
-          />
-        </aside>
+          {filteredProjects.length === 0 && (
+            <p className="empty-copy">{projects.length === 0 ? "No projects yet." : "No projects match this search."}</p>
+          )}
+          <audio ref={previewAudioRef} onEnded={() => setPreviewProjectId(null)} hidden />
+        </ProjectRail>
 
         <main className="workspace">
-          {errorMsg && <div className="error">{errorMsg}</div>}
-          {!detail && <p className="hint">Select or create a project.</p>}
+          {errorMsg && (
+            <div className="error" role="alert">
+              <span>{errorMsg}</span>
+              <button type="button" className="icon-button" aria-label="Dismiss error" onClick={() => setErrorMsg(null)}>
+                <Icon name="close" />
+              </button>
+            </div>
+          )}
+
+          {!detail && (
+            <section className="workspace-empty" aria-labelledby="empty-title">
+              <span className="empty-mark"><Icon name="wave" /></span>
+              <span className="eyebrow">The workbench is ready</span>
+              <h2 id="empty-title">Choose a project or begin a new composition.</h2>
+              <p>Your plan, waveform, and take history stay together here.</p>
+              <button type="button" className="button-primary" onClick={() => { setCreatingProject(true); setLibraryOpen(true); }}>
+                <Icon name="add" /> New project
+              </button>
+            </section>
+          )}
+
           {detail && (
-            <>
-              <h2>{detail.project.title}</h2>
+            <div className="project-workspace">
+              <header className="workspace-header">
+                <div className="project-heading">
+                  <span className="eyebrow">Composition</span>
+                  {editingTitle ? (
+                    <input
+                      className="project-title-input"
+                      aria-label="Project title"
+                      value={titleDraft}
+                      autoFocus
+                      onChange={(event) => setTitleDraft(event.target.value)}
+                      onBlur={() => commitProjectTitle()}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") commitProjectTitle();
+                        if (event.key === "Escape") {
+                          setTitleDraft(detail.project.title);
+                          setEditingTitle(false);
+                        }
+                      }}
+                    />
+                  ) : (
+                    <h2>
+                      <button
+                        type="button"
+                        className="title-edit-button"
+                        title="Edit project title"
+                        onClick={() => {
+                          setTitleDraft(detail.project.title);
+                          setEditingTitle(true);
+                        }}
+                      >
+                        {detail.project.title}
+                      </button>
+                    </h2>
+                  )}
+                  <span className="project-context">
+                    {detail.takes.length} {detail.takes.length === 1 ? "take" : "takes"}
+                    <i />
+                    {detail.project.dit_profile}
+                  </span>
+                </div>
+                <div className="workspace-actions">
+                  <button type="button" className="panel-action" aria-controls="composition-plan" aria-expanded={planOpen} onClick={() => setPlanOpen(true)}>
+                    <Icon name="settings" /> Plan
+                  </button>
+                  <button type="button" className="panel-action" aria-controls="studio-inspector" aria-expanded={inspectorOpen} onClick={() => { setInspectorTab("takes"); setInspectorOpen(true); }}>
+                    <Icon name="wave" /> Takes
+                  </button>
+                  <label className="include-stems">
+                    <input
+                      type="checkbox"
+                      checked={includeStems}
+                      onChange={(event) => setIncludeStems(event.target.checked)}
+                    />
+                    Include stems
+                  </label>
+                  <a
+                    className="export-link"
+                    href={`${api.exportUrl(detail.project.id)}?include_stems=${includeStems}`}
+                    download={`${detail.project.title}-export.zip`}
+                  >
+                    Export project (.zip)
+                  </a>
+                </div>
+              </header>
+
+              {jobStatusLabel && (
+                <div className={`job-strip status-${busyStatus ?? "idle"}`} aria-live="polite">
+                  <span className="job-pulse" />
+                  <strong>{jobStatusLabel}</strong>
+                  <span className="job-model">{health?.dit_loaded ?? "worker"}</span>
+                </div>
+              )}
 
               <div className="panes">
-                <section className="pane plan">
-                  <h3>Plan</h3>
-                  <label>
-                    Simple query
-                    <input
-                      value={detail.plan.query}
-                      onChange={(e) => savePlanField("query", e.target.value)}
-                    />
-                  </label>
-                  <label>
-                    Caption
-                    <input
-                      value={detail.plan.caption}
-                      onChange={(e) => savePlanField("caption", e.target.value)}
-                    />
-                  </label>
-                  <label>
-                    Lyrics
-                    <div className="lyrics-tag-palette">
-                      {STRUCTURE_TAGS.map((tag) => (
-                        <button
-                          key={tag}
-                          type="button"
-                          className="lyrics-tag-button"
-                          // Pointer-down on a button steals focus from the
-                          // textarea *before* onClick fires -- without this,
-                          // insertLyricsTag would always see
-                          // document.activeElement !== textarea and fall
-                          // back to appending instead of honoring the
-                          // cursor/selection the user actually clicked with.
-                          onMouseDown={(e) => e.preventDefault()}
-                          onClick={() => insertLyricsTag(`[${tag}]`)}
-                        >
-                          [{tag}]
-                        </button>
-                      ))}
+                <PlanInspector open={planOpen}>
+                  <div className="pane-heading">
+                    <div>
+                      <span className="eyebrow">Score</span>
+                      <h3>Plan</h3>
                     </div>
-                    <textarea
-                      ref={lyricsTextareaRef}
-                      value={detail.plan.lyrics}
-                      onChange={(e) => savePlanField("lyrics", e.target.value)}
-                    />
-                  </label>
-                  <label className="checkbox">
-                    <input
-                      type="checkbox"
-                      checked={detail.plan.instrumental}
-                      onChange={(e) => savePlanField("instrumental", e.target.checked)}
-                    />
-                    Instrumental
-                  </label>
-                  <label className="checkbox">
-                    <input
-                      type="checkbox"
-                      checked={detail.plan.caption_rewrite}
-                      onChange={(e) => savePlanField("caption_rewrite", e.target.checked)}
-                    />
-                    Allow caption rewrite (Custom mode LM thinking)
-                  </label>
-                  <div className="plan-grid">
-                    <label>
-                      BPM
-                      <input
-                        type="number"
-                        value={detail.plan.bpm ?? ""}
-                        onChange={(e) =>
-                          savePlanField("bpm", e.target.value === "" ? null : Number(e.target.value))
-                        }
-                      />
-                    </label>
-                    <label>
-                      Key
-                      <input
-                        value={detail.plan.keyscale ?? ""}
-                        onChange={(e) =>
-                          savePlanField("keyscale", e.target.value === "" ? null : e.target.value)
-                        }
-                      />
-                    </label>
-                    <label>
-                      Time signature
-                      <input
-                        value={detail.plan.timesignature}
-                        onChange={(e) => savePlanField("timesignature", e.target.value)}
-                      />
-                    </label>
-                    <label>
-                      Duration (sec)
-                      <input
-                        type="number"
-                        value={detail.plan.duration_sec}
-                        onChange={(e) => savePlanField("duration_sec", Number(e.target.value))}
-                      />
-                    </label>
-                    <label>
-                      Language
-                      <input
-                        value={detail.plan.vocal_language}
-                        onChange={(e) => savePlanField("vocal_language", e.target.value)}
-                      />
-                    </label>
-                  </div>
-
-                  <div className="plan-sections">
-                    <div className="plan-sections-header">
-                      <span className="plan-sections-title">Sections</span>
-                      <button type="button" onClick={() => addSection()}>
-                        Add section
-                      </button>
+                    <div className={`save-state save-${saveState}`} role="status" aria-live="polite">
+                      <span />{saveStateLabel}
                     </div>
-                    {detail.plan.sections.length === 0 && (
-                      <p className="hint">
-                        No sections. Add one here, or drag a waveform region and use “Add
-                        section from region”.
-                      </p>
-                    )}
-                    <ul className="section-list">
-                      {detail.plan.sections.map((section, index) => (
-                        <li key={index} className="section-row">
-                          <input
-                            className="section-name"
-                            placeholder="name"
-                            value={section.name}
-                            onChange={(e) => updateSection(index, { name: e.target.value })}
-                          />
-                          <input
-                            className="section-time"
-                            type="number"
-                            min={0}
-                            step={0.1}
-                            title="start (sec)"
-                            value={section.start_sec}
-                            onChange={(e) =>
-                              updateSection(index, { start_sec: Number(e.target.value) })
-                            }
-                          />
-                          <span className="section-sep">–</span>
-                          <input
-                            className="section-time"
-                            type="number"
-                            min={0}
-                            step={0.1}
-                            title="end (sec)"
-                            value={section.end_sec}
-                            onChange={(e) =>
-                              updateSection(index, { end_sec: Number(e.target.value) })
-                            }
-                          />
-                          <input
-                            className="section-lyrics"
-                            placeholder="lyrics snippet"
-                            value={section.lyrics}
-                            onChange={(e) => updateSection(index, { lyrics: e.target.value })}
-                          />
-                          <button type="button" onClick={() => removeSection(index)}>
-                            Delete
-                          </button>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                </section>
-
-                <section className="pane takes">
-                  <h3>Takes</h3>
-                  {detail.takes.length === 0 && <p className="hint">No takes yet.</p>}
-                  <ul>
-                    {detail.takes.map((take) => (
-                      <li
-                        key={take.id}
-                        className={[
-                          take.id === selectedTakeId ? "selected" : "",
-                          take.id === detail.project.active_take_id ? "active-take" : "",
-                        ]
-                          .filter(Boolean)
-                          .join(" ")}
-                        onClick={() => setSelectedTakeId(take.id)}
-                      >
-                        <div className="take-meta">
-                          <input
-                            type="checkbox"
-                            className="lora-source-checkbox"
-                            title="Include in style pack training source"
-                            checked={loraSourceIds.has(take.id)}
-                            onClick={(e) => e.stopPropagation()}
-                            onChange={() => toggleLoraSource(take.id)}
-                          />
-                          <span>{take.task_type}</span>
-                          <span>seed {take.seed}</span>
-                          <span>
-                            {take.duration_sec != null ? `${take.duration_sec.toFixed(1)}s` : "—"}
-                          </span>
-                          <span>score {take.score ?? "—"}</span>
-                          {take.id === detail.project.active_take_id && (
-                            <span className="active-take-badge">active</span>
-                          )}
-                          {/* LoRA provenance (SPEC.md sec 4.4): which style
-                              pack this take was generated with, so a styled
-                              result can be reproduced -- resolved to the
-                              pack's name, falling back to the stable pack id
-                              when the meta no longer resolves. Clicking a
-                              still-loadable pack selects it for the next
-                              Generate/Cover/Repaint. */}
-                          {take.lora_id &&
-                            (() => {
-                              const pack = loras.find((l) => l.id === take.lora_id);
-                              if (pack && !pack.error) {
-                                return (
-                                  <button
-                                    type="button"
-                                    className="take-lora-badge"
-                                    title={`Generated with style pack "${pack.name}" — click to select it for the next Generate/Cover/Repaint`}
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      setSelectedLoraId(pack.id);
-                                    }}
-                                  >
-                                    style: {pack.name}
-                                  </button>
-                                );
-                              }
-                              return (
-                                <span
-                                  className="take-lora-badge"
-                                  title={
-                                    pack
-                                      ? `Generated with style pack "${pack.name}" (${take.lora_id}) — it failed training and cannot be loaded`
-                                      : `Generated with style pack ${take.lora_id} (not found in this project)`
-                                  }
-                                >
-                                  style: {pack ? pack.name : take.lora_id.slice(0, 8)}
-                                </span>
-                              );
-                            })()}
-                          <button
-                            type="button"
-                            className={`favorite-btn ${take.favorite ? "favorited" : ""}`}
-                            title={take.favorite ? "Unfavorite" : "Favorite"}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              toggleTakeFavorite(take);
-                            }}
-                          >
-                            {take.favorite ? "★" : "☆"}
-                          </button>
-                        </div>
-                        <textarea
-                          className="take-notes"
-                          placeholder="Notes..."
-                          value={take.notes}
-                          onClick={(e) => e.stopPropagation()}
-                          onChange={(e) => saveTakeNotes(take.id, e.target.value)}
-                          onBlur={() => flushTakeNotes(take.id).catch((err) => setErrorMsg(String(err)))}
-                        />
-                        <div className="take-actions">
-                          <button
-                            type="button"
-                            disabled={take.id === detail.project.active_take_id || !!take.error}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setActiveTake(take.id);
-                            }}
-                          >
-                            Set active
-                          </button>
-                          <button
-                            type="button"
-                            disabled={!!take.error || take.id === selectedTakeId}
-                            title={
-                              take.id === selectedTakeId
-                                ? "Already selected as A -- pick a different take to compare"
-                                : undefined
-                            }
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setCompareTakeId((prev) => (prev === take.id ? null : take.id));
-                            }}
-                          >
-                            {take.id === compareTakeId ? "Comparing" : "Compare"}
-                          </button>
-                          {take.parent_take_id &&
-                            (detail.takes.find((t) => t.id === take.parent_take_id) ? (
-                              <button
-                                type="button"
-                                className="parent-take-link"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setSelectedTakeId(take.parent_take_id);
-                                }}
-                              >
-                                from {take.parent_take_id.slice(0, 8)}
-                              </button>
-                            ) : (
-                              <span className="parent-take-id">
-                                from {take.parent_take_id.slice(0, 8)}
-                              </span>
-                            ))}
-                        </div>
-                        {take.error ? (
-                          // A take whose generation failed has no audio file
-                          // (SPEC.md sec 10 point 5) -- show the error instead
-                          // of an <audio> that would just 404.
-                          <span className="take-error">failed: {take.error}</span>
-                        ) : (
-                          <>
-                            <TakeAudioPlayer
-                              projectId={detail.project.id}
-                              takeId={take.id}
-                              registerRef={registerAudioRef}
-                            />
-                            <a
-                              href={api.takeAudioUrl(detail.project.id, take.id)}
-                              download={`${take.id}.wav`}
-                            >
-                              download
-                            </a>
-                            {take.has_lrc && (
-                              <a
-                                href={api.takeLrcUrl(detail.project.id, take.id)}
-                                download={`${take.id}.lrc`}
-                              >
-                                lyrics (.lrc)
-                              </a>
-                            )}
-                          </>
-                        )}
-                      </li>
-                    ))}
-                  </ul>
-                  <div className="export-panel">
-                    <label className="include-stems">
-                      <input
-                        type="checkbox"
-                        checked={includeStems}
-                        onChange={(e) => setIncludeStems(e.target.checked)}
-                      />
-                      Include stems (extract / lego takes)
-                    </label>
-                    <a
-                      className="export-link"
-                      href={`${api.exportUrl(detail.project.id)}?include_stems=${includeStems}`}
-                      download={`${detail.project.title}-export.zip`}
-                    >
-                      Export project (.zip)
-                    </a>
-                  </div>
-                </section>
-
-                <section className="pane style-packs">
-                  <h3>Style packs</h3>
-                  {loras.length === 0 && trainingJobs.length === 0 && (
-                    <p className="hint">No style packs trained yet.</p>
-                  )}
-                  <ul className="lora-list">
-                    {/* Trainings recovered from the job queue (GET /api/jobs)
-                        -- still queued/running, so no pack meta exists yet
-                        (it is written only when training finishes). Shown
-                        here, not just as this session's busy state, so a
-                        refresh mid-training restores visible progress. */}
-                    {trainingJobs.map((job) => (
-                      <li key={job.id} className="lora-training">
-                        <span className="lora-name">Training style pack…</span>
-                        <span className="lora-status">
-                          {job.status === "queued"
-                            ? "queued — waiting for the GPU"
-                            : "running"}
-                        </span>
-                      </li>
-                    ))}
-                    {loras.map((lora) => (
-                      <li key={lora.id} className={lora.error ? "lora-error" : ""}>
-                        <span className="lora-name">{lora.name}</span>
-                        <span className="lora-status">{lora.error ? `error: ${lora.error}` : lora.status ?? "—"}</span>
-                        <span className="lora-loss">
-                          {lora.final_loss != null ? `loss ${lora.final_loss.toFixed(4)}` : ""}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                  <div className="lora-train-panel">
-                    <p className="hint">
-                      Check {MIN_LORA_SOURCE_TAKES}+ takes above, name the pack, then train.
-                      Selected: {loraSourceIds.size}/{MIN_LORA_SOURCE_TAKES}
-                    </p>
-                    <label>
-                      Style pack name
-                      <input
-                        placeholder="my-style"
-                        value={loraName}
-                        onChange={(e) => setLoraName(e.target.value)}
-                      />
-                    </label>
-                    <button
-                      onClick={trainLora}
-                      disabled={
-                        busy ||
-                        trainingJobs.length > 0 ||
-                        loraSourceIds.size < MIN_LORA_SOURCE_TAKES ||
-                        !loraName.trim()
-                      }
-                      title={
-                        trainingJobs.length > 0
-                          ? "A style pack is already training for this project"
-                          : loraSourceIds.size < MIN_LORA_SOURCE_TAKES
-                            ? `Select at least ${MIN_LORA_SOURCE_TAKES} takes first`
-                            : !loraName.trim()
-                              ? "Enter a style pack name first"
-                              : undefined
-                      }
-                    >
-                      {busy
-                        ? `Training… (${busyStatus ?? "queued"})`
-                        : trainingJobs.length > 0
-                          ? `Training… (${trainingJobs[0].status})`
-                          : "Train style pack"}
+                    <button type="button" className="icon-button drawer-close" aria-label="Close plan" onClick={() => setPlanOpen(false)}>
+                      <Icon name="close" />
                     </button>
                   </div>
-                </section>
 
-                {compareTakeId &&
-                  (() => {
-                    const compareTake = detail.takes.find((t) => t.id === compareTakeId);
-                    if (!compareTake || compareTake.error) return null;
-                    const selectedTake = selectedTakeId
-                      ? detail.takes.find((t) => t.id === selectedTakeId)
-                      : undefined;
-                    return (
-                    <section className="pane compare">
-                      <h3>Compare</h3>
-                      <div className="compare-panel">
-                        <div className="compare-slot">
-                          <span className="compare-label">A: selected</span>
-                          {selectedTake && !selectedTake.error ? (
-                            <audio controls src={api.takeAudioUrl(detail.project.id, selectedTakeId!)} />
-                          ) : (
-                            <p className="hint">Select a take to fill A too.</p>
-                          )}
+                  <div className="plan-scroll">
+                    <label className="field-label intent-field">
+                      Starting idea
+                      <textarea
+                        value={detail.plan.query}
+                        placeholder="Describe the song you want to explore…"
+                        onChange={(event) => savePlanField("query", event.target.value)}
+                      />
+                      <small>Leave the details open for precise authorship, or let ACE-Step complete the plan.</small>
+                    </label>
+
+                    <button
+                      type="button"
+                      className="disclosure-button"
+                      aria-expanded={planDetailsOpen}
+                      aria-controls="composition-details"
+                      onClick={() => setPlanDetailsOpen((open) => !open)}
+                    >
+                      <span>Composition details</span>
+                      <span>{planDetailsOpen ? "Hide" : "Author"}</span>
+                    </button>
+
+                    <div id="composition-details" className="plan-details" hidden={!planDetailsOpen}>
+                      <label className="field-label">
+                        Caption
+                        <input
+                          value={detail.plan.caption}
+                          onChange={(event) => savePlanField("caption", event.target.value)}
+                        />
+                      </label>
+                      <div className="field-label lyrics-field">
+                        <label htmlFor="plan-lyrics">Lyrics</label>
+                        <div className="lyrics-tag-palette">
+                          {STRUCTURE_TAGS.map((tag) => (
+                            <button
+                              key={tag}
+                              type="button"
+                              className="lyrics-tag-button"
+                              onMouseDown={(event) => event.preventDefault()}
+                              onClick={() => insertLyricsTag(`[${tag}]`)}
+                            >
+                              [{tag}]
+                            </button>
+                          ))}
                         </div>
-                        <button
-                          type="button"
-                          className="swap-compare"
-                          disabled={!selectedTakeId}
-                          onClick={swapCompare}
-                        >
-                          Swap A/B
-                        </button>
-                        <div className="compare-slot">
-                          <span className="compare-label">B: comparing</span>
-                          <audio controls src={api.takeAudioUrl(detail.project.id, compareTakeId)} />
-                        </div>
-                        <button
-                          type="button"
-                          className="close-compare"
-                          onClick={() => setCompareTakeId(null)}
-                        >
-                          Close compare
-                        </button>
+                        <textarea
+                          id="plan-lyrics"
+                          ref={lyricsTextareaRef}
+                          value={detail.plan.lyrics}
+                          onChange={(event) => savePlanField("lyrics", event.target.value)}
+                        />
                       </div>
-                    </section>
-                    );
-                  })()}
+                      <div className="toggle-row">
+                        <label className="checkbox">
+                          <input
+                            type="checkbox"
+                            checked={detail.plan.instrumental}
+                            onChange={(event) => savePlanField("instrumental", event.target.checked)}
+                          />
+                          Instrumental
+                        </label>
+                        <label className="checkbox">
+                          <input
+                            type="checkbox"
+                            checked={detail.plan.caption_rewrite}
+                            onChange={(event) => savePlanField("caption_rewrite", event.target.checked)}
+                          />
+                          Allow caption rewrite (Custom mode LM thinking)
+                        </label>
+                      </div>
+                      <div className="plan-grid">
+                        <label>BPM<input type="number" value={detail.plan.bpm ?? ""} onChange={(event) => savePlanField("bpm", event.target.value === "" ? null : Number(event.target.value))} /></label>
+                        <label>Key<input value={detail.plan.keyscale ?? ""} onChange={(event) => savePlanField("keyscale", event.target.value === "" ? null : event.target.value)} /></label>
+                        <label>Time signature<input value={detail.plan.timesignature} onChange={(event) => savePlanField("timesignature", event.target.value)} /></label>
+                        <label>Duration (sec)<input type="number" value={detail.plan.duration_sec} onChange={(event) => savePlanField("duration_sec", Number(event.target.value))} /></label>
+                        <label>Language<input value={detail.plan.vocal_language} onChange={(event) => savePlanField("vocal_language", event.target.value)} /></label>
+                      </div>
 
-                <section className="pane waveform">
-                  <h3>Waveform</h3>
+                      <div className="plan-sections">
+                        <div className="plan-sections-header">
+                          <div>
+                            <span className="plan-sections-title">Sections</span>
+                            <small>{detail.plan.sections.length} mapped</small>
+                          </div>
+                          <button type="button" className="button-secondary" onClick={() => addSection()}>
+                            <Icon name="add" /> Add section
+                          </button>
+                        </div>
+                        {detail.plan.sections.length === 0 && (
+                          <p className="empty-copy">No sections yet. Add one here or draw a region on the waveform.</p>
+                        )}
+                        <ul className="section-list">
+                          {detail.plan.sections.map((section, index) => (
+                            <li key={index} className="section-row">
+                              <span className="section-index">{String(index + 1).padStart(2, "0")}</span>
+                              <input className="section-name" placeholder="name" value={section.name} onChange={(event) => updateSection(index, { name: event.target.value })} />
+                              <div className="section-range">
+                                <input className="section-time" type="number" min={0} step={0.1} title="start (sec)" value={section.start_sec} onChange={(event) => updateSection(index, { start_sec: Number(event.target.value) })} />
+                                <span className="section-sep">–</span>
+                                <input className="section-time" type="number" min={0} step={0.1} title="end (sec)" value={section.end_sec} onChange={(event) => updateSection(index, { end_sec: Number(event.target.value) })} />
+                              </div>
+                              <input className="section-lyrics" placeholder="lyrics snippet" value={section.lyrics} onChange={(event) => updateSection(index, { lyrics: event.target.value })} />
+                              <button type="button" className="icon-button" aria-label={`Delete section ${index + 1}`} onClick={() => removeSection(index)}>
+                                <Icon name="delete" /><span className="delete-text">Delete</span>
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    </div>
+                  </div>
+                </PlanInspector>
+
+                <StudioStage>
+                  <div className="stage-heading">
+                    <div>
+                      <span className="eyebrow">Performance surface</span>
+                      <h3>Waveform</h3>
+                    </div>
+                    {selectedTake ? (
+                      <div className="selected-take-summary">
+                        <span>{selectedTake.task_type}</span>
+                        <code>seed {selectedTake.seed}</code>
+                        <code>{selectedTake.duration_sec != null ? `${selectedTake.duration_sec.toFixed(1)}s` : "—"}</code>
+                      </div>
+                    ) : (
+                      <span className="stage-empty-label">No take selected</span>
+                    )}
+                  </div>
+
                   <div
-                    className="upload-dropzone"
-                    onDragOver={(e) => e.preventDefault()}
+                    className={`source-shelf ${uploadedSourcePath ? "has-source" : ""}`}
+                    onDragOver={(event) => event.preventDefault()}
                     onDrop={handleDropAudio}
                   >
+                    <Icon name="wave" />
                     {uploadedSourcePath ? (
                       <span className="upload-dropzone-file">
-                        Source: {uploadedSourceName ?? uploadedSourcePath}
-                        <button type="button" onClick={clearUploadedSource}>
-                          Clear
-                        </button>
+                        <span><small>External source</small>{uploadedSourceName ?? uploadedSourcePath}</span>
+                        <button type="button" className="button-secondary" onClick={clearUploadedSource}>Clear</button>
                       </span>
                     ) : (
-                      <p className="hint">
-                        Drag a local WAV/MP3 here to use it as a Cover/Repaint source
-                      </p>
+                      <span className="source-copy">
+                        <strong>Drop WAV or MP3</strong>
+                        <small>Use local audio for Cover or Repaint</small>
+                      </span>
+                    )}
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept="audio/wav,audio/mpeg,.wav,.mp3"
+                      className="sr-only"
+                      aria-label="Choose audio source"
+                      onChange={(event) => {
+                        const file = event.target.files?.[0];
+                        if (file) uploadSourceFile(file);
+                        event.target.value = "";
+                      }}
+                    />
+                    {!uploadedSourcePath && (
+                      <button type="button" className="button-secondary" onClick={() => fileInputRef.current?.click()}>
+                        Choose audio
+                      </button>
                     )}
                     {uploadError && <p className="upload-error">{uploadError}</p>}
                   </div>
+
                   <div className="waveform-canvas">
-                    {selectedTakeId &&
-                    !detail.takes.find((t) => t.id === selectedTakeId)?.error ? (
+                    {selectedTakeId && !selectedTake?.error ? (
                       <div ref={waveformContainerRef} className="waveform-wavesurfer" />
                     ) : (
-                      <p className="hint">no active take</p>
+                      <div className="waveform-empty">
+                        <Icon name="wave" />
+                        <p>{selectedTake?.error ? "This take did not produce playable audio." : "Select a take to inspect its waveform."}</p>
+                      </div>
                     )}
                   </div>
-                  <div className="region-actions">
+
+                  <StudioPlayer>
                     <button
                       type="button"
-                      onClick={addSectionFromRegion}
-                      disabled={!region}
-                      title={
-                        region
-                          ? "Append this region as a named section in the Plan"
-                          : "Drag a region on the waveform first"
-                      }
+                      className="transport-button"
+                      aria-label={waveformPlaying ? "Pause selected take" : "Play selected take"}
+                      disabled={!selectedTake || !!selectedTake.error}
+                      onClick={toggleWaveformPlayback}
                     >
-                      Add section from region
+                      <Icon name={waveformPlaying ? "pause" : "play"} />
                     </button>
-                  </div>
-                  {region && (
-                    <div className="region-info">
-                      <span>
-                        Region: {region.start.toFixed(1)}s – {region.end.toFixed(1)}s
-                      </span>
-                      <button onClick={clearRegion}>Clear region</button>
+                    <span className="transport-time">{formatClock(waveformCurrentTime)}</span>
+                    <input
+                      className="stage-scrubber"
+                      type="range"
+                      min={0}
+                      max={Math.max(waveformDuration, 0.01)}
+                      step={0.1}
+                      value={Math.min(waveformCurrentTime, Math.max(waveformDuration, 0.01))}
+                      disabled={!selectedTake}
+                      aria-label="Seek selected take"
+                      onChange={(event) => {
+                        const next = Number(event.target.value);
+                        if (waveformDuration > 0) wavesurferRef.current?.seekTo(next / waveformDuration);
+                        setWaveformCurrentTime(next);
+                      }}
+                    />
+                    <span className="transport-time">{formatClock(waveformDuration || selectedTake?.duration_sec || 0)}</span>
+                    <LoudnessMeter audioEl={waveformMediaEl} />
+                  </StudioPlayer>
+
+                  <div className={`region-bar ${region ? "has-region" : ""}`}>
+                    <span>
+                      {region ? `Region: ${region.start.toFixed(1)}s – ${region.end.toFixed(1)}s` : "Drag across the waveform to select a repaint region."}
+                    </span>
+                    <div>
+                      <button type="button" className="button-secondary" onClick={addSectionFromRegion} disabled={!region} title={region ? "Append this region as a named section in the Plan" : "Drag a region on the waveform first"}>
+                        Add section from region
+                      </button>
+                      {region && <button type="button" className="text-button" onClick={clearRegion}>Clear region</button>}
                     </div>
-                  )}
-                  <div className="waveform-actions">
-                    <label className="lora-select">
-                      Style pack
-                      <select
-                        value={selectedLoraId ?? ""}
-                        onChange={(e) => setSelectedLoraId(e.target.value || null)}
-                        disabled={busy}
-                        title="Applies to Generate/Cover/Repaint below (SPEC.md sec 4.4)"
-                      >
-                        <option value="">None</option>
-                        {loras
-                          .filter((lora) => !lora.error)
-                          .map((lora) => (
-                            <option key={lora.id} value={lora.id}>
-                              {lora.name}
-                            </option>
-                          ))}
-                      </select>
-                    </label>
-                    {/* Makes the load-half choice impossible to miss next to
-                        the buttons it affects: the plain <select> above can
-                        read as just another form field. */}
-                    {selectedLora && (
-                      <span
-                        className="lora-active-badge"
-                        title={`Generate/Cover/Repaint will run against the studio_ops base model with style pack "${selectedLora.name}" (SPEC.md sec 4.4)`}
-                      >
-                        Style pack: {selectedLora.name}
-                      </span>
-                    )}
-                    <label className="seed-input">
-                      Seed
-                      <input
-                        type="number"
-                        step={1}
-                        min={-1}
-                        placeholder="-1"
-                        value={seedInput}
-                        onChange={(e) => setSeedInput(e.target.value)}
-                        disabled={busy}
-                        title="Fixed seed for Generate/Cover/Repaint; empty or -1 lets the worker pick and record one (SPEC.md sec 7.3)"
-                      />
-                    </label>
-                    <div
-                      className="dit-profile-picker"
-                      role="group"
-                      aria-label="DiT profile"
-                      title="Project default DiT checkpoint for Generate/Cover/Repaint (SPEC.md sec 4.1); a style pack always forces studio_ops"
-                    >
-                      <span className="dit-profile-caption">DiT</span>
-                      {DIT_PROFILE_OPTIONS.map((profile) => (
-                        <button
-                          key={profile}
-                          type="button"
-                          className={`dit-profile-option ${
-                            detail.project.dit_profile === profile ? "selected" : ""
-                          }`}
-                          disabled={busy}
-                          onClick={() => setDitProfile(profile)}
-                          title={
-                            profile === "iterate"
-                              ? "Fast daily generate/cover/repaint (turbo, 8 steps)"
-                              : profile === "polish"
-                                ? "More prompt adherence / detail (sft, 50 steps + CFG)"
-                                : "XL turbo; the job is rejected if the worker cannot load XL"
-                          }
-                        >
-                          {profile}
-                        </button>
+                  </div>
+
+                  {compareTakeId && (() => {
+                    const compareTake = detail.takes.find((take) => take.id === compareTakeId);
+                    if (!compareTake || compareTake.error) return null;
+                    return (
+                      <section className="compare" aria-label="A/B comparison">
+                        <div className="compare-heading">
+                          <div><span className="eyebrow">Instant audition</span><h3>Compare</h3></div>
+                          <button type="button" className="icon-button" aria-label="Close compare" onClick={() => setCompareTakeId(null)}><Icon name="close" /></button>
+                        </div>
+                        <div className="compare-panel">
+                          <div className="compare-slot">
+                            <span className="compare-label">A · selected</span>
+                            {selectedTake && !selectedTake.error ? <audio controls src={api.takeAudioUrl(detail.project.id, selectedTake.id)} /> : <p className="hint">Select a take to fill A too.</p>}
+                          </div>
+                          <button type="button" className="swap-compare" disabled={!selectedTakeId} onClick={swapCompare}>Swap A/B</button>
+                          <div className="compare-slot">
+                            <span className="compare-label">B · comparing</span>
+                            <audio controls src={api.takeAudioUrl(detail.project.id, compareTakeId)} />
+                          </div>
+                        </div>
+                      </section>
+                    );
+                  })()}
+
+                  <OperationDock>
+                    <div className="operation-tabs" role="tablist" aria-label="Studio operations">
+                      {(["create", "transform", "tracks"] as OperationGroup[]).map((group) => (
+                        <button key={group} type="button" role="tab" aria-selected={operationGroup === group} onClick={() => setOperationGroup(group)}>{group}</button>
                       ))}
                     </div>
-                    <button
-                      onClick={generate}
-                      disabled={busy}
-                      title="Shortcuts: g generate · space play/pause · ↑/↓ prev/next take · ctrl/cmd+s save plan"
-                    >
-                      {busy ? `Generating… (${busyStatus ?? "queued"})` : "Generate"}
-                    </button>
-                    <label className="cover-strength">
-                      Strength
-                      <input
-                        type="number"
-                        min={0}
-                        max={1}
-                        step={0.05}
-                        value={coverStrength}
-                        onChange={(e) => setCoverStrength(Number(e.target.value))}
-                      />
-                    </label>
-                    <button
-                      onClick={cover}
-                      disabled={
-                        busy ||
-                        (!selectedTakeId && !uploadedSourcePath) ||
-                        !!detail.takes.find((t) => t.id === selectedTakeId)?.error
-                      }
-                      title={
-                        selectedTakeId || uploadedSourcePath
-                          ? undefined
-                          : "Select a take or drop a file first"
-                      }
-                    >
-                      {busy ? `Covering… (${busyStatus ?? "queued"})` : "Cover"}
-                    </button>
-                    <button
-                      onClick={repaint}
-                      disabled={
-                        busy ||
-                        (!selectedTakeId && !uploadedSourcePath) ||
-                        (!!selectedTakeId && !region) ||
-                        !!detail.takes.find((t) => t.id === selectedTakeId)?.error
-                      }
-                      title={
-                        !selectedTakeId && !uploadedSourcePath
-                          ? "Select a take or drop a file first"
-                          : selectedTakeId && !region
-                            ? "Drag a region on the waveform first"
-                            : undefined
-                      }
-                    >
-                      {busy ? `Repainting… (${busyStatus ?? "queued"})` : "Repaint"}
-                    </button>
-                    <label className="track-name">
-                      Track name / classes
-                      <input
-                        placeholder="vocals, drums, bass..."
-                        value={trackName}
-                        onChange={(e) => setTrackName(e.target.value)}
-                      />
-                    </label>
-                    <button
-                      onClick={extract}
-                      disabled={
-                        busy ||
-                        !selectedTakeId ||
-                        !trackName.trim() ||
-                        !!detail.takes.find((t) => t.id === selectedTakeId)?.error
-                      }
-                      title={
-                        !selectedTakeId
-                          ? "Select a take first"
-                          : !trackName.trim()
-                            ? "Enter a track name first"
-                            : undefined
-                      }
-                    >
-                      {busy
-                        ? studioOpsLoading
-                          ? "loading base model…"
-                          : `Extracting… (${busyStatus ?? "queued"})`
-                        : "Extract"}
-                    </button>
-                    <button
-                      onClick={lego}
-                      disabled={
-                        busy ||
-                        !selectedTakeId ||
-                        !trackName.trim() ||
-                        !!detail.takes.find((t) => t.id === selectedTakeId)?.error
-                      }
-                      title={
-                        !selectedTakeId
-                          ? "Select a take first"
-                          : !trackName.trim()
-                            ? "Enter a track name first"
-                            : undefined
-                      }
-                    >
-                      {busy
-                        ? studioOpsLoading
-                          ? "loading base model…"
-                          : `Adding track… (${busyStatus ?? "queued"})`
-                        : "Lego"}
-                    </button>
-                    <button
-                      onClick={complete}
-                      disabled={
-                        busy ||
-                        !selectedTakeId ||
-                        !trackName.trim() ||
-                        !!detail.takes.find((t) => t.id === selectedTakeId)?.error
-                      }
-                      title={
-                        !selectedTakeId
-                          ? "Select a take first"
-                          : !trackName.trim()
-                            ? "Enter a track name / classes first"
-                            : undefined
-                      }
-                    >
-                      {busy
-                        ? studioOpsLoading
-                          ? "loading base model…"
-                          : `Completing… (${busyStatus ?? "queued"})`
-                        : "Complete"}
-                    </button>
+
+                    <section className={`operation-group create-group ${operationGroup === "create" ? "is-active" : ""}`} aria-label="Create operations">
+                      <div className="operation-heading"><span>01</span><div><strong>Create</strong><small>Render a new take from the plan</small></div></div>
+                      <div className="operation-controls create-controls">
+                        <label className="lora-select">Style pack<select value={selectedLoraId ?? ""} onChange={(event) => setSelectedLoraId(event.target.value || null)} disabled={busy} title="Applies to Generate/Cover/Repaint below (SPEC.md sec 4.4)"><option value="">None</option>{loras.filter((lora) => !lora.error).map((lora) => <option key={lora.id} value={lora.id}>{lora.name}</option>)}</select></label>
+                        {selectedLora && <span className="lora-active-badge" title={`Generate/Cover/Repaint will run against the studio_ops base model with style pack "${selectedLora.name}" (SPEC.md sec 4.4)`}>Style pack: {selectedLora.name}</span>}
+                        <label className="seed-input">Seed<input type="number" step={1} min={-1} placeholder="-1" value={seedInput} onChange={(event) => setSeedInput(event.target.value)} disabled={busy} title="Fixed seed for Generate/Cover/Repaint; empty or -1 lets the worker pick and record one (SPEC.md sec 7.3)" /></label>
+                        <div className="dit-profile-picker" role="group" aria-label="DiT profile" title="Project default DiT checkpoint for Generate/Cover/Repaint (SPEC.md sec 4.1); a style pack always forces studio_ops">
+                          <span className="dit-profile-caption">DiT</span>
+                          {DIT_PROFILE_OPTIONS.map((profile) => <button key={profile} type="button" className={`dit-profile-option ${detail.project.dit_profile === profile ? "selected" : ""}`} disabled={busy} onClick={() => setDitProfile(profile)} title={profile === "iterate" ? "Fast daily generate/cover/repaint (turbo, 8 steps)" : profile === "polish" ? "More prompt adherence / detail (sft, 50 steps + CFG)" : "XL turbo; the job is rejected if the worker cannot load XL"}>{profile}</button>)}
+                        </div>
+                        <button type="button" className="generate-button" onClick={generate} disabled={busy} title="Shortcuts: g generate · space play/pause · ↑/↓ prev/next take · ctrl/cmd+s save plan"><Icon name="spark" /> Generate</button>
+                      </div>
+                    </section>
+
+                    <section className={`operation-group transform-group ${operationGroup === "transform" ? "is-active" : ""}`} aria-label="Transform operations">
+                      <div className="operation-heading"><span>02</span><div><strong>Transform</strong><small>Reshape the selected source</small></div></div>
+                      <div className="operation-controls">
+                        <label className="cover-strength">Strength<input type="number" min={0} max={1} step={0.05} value={coverStrength} onChange={(event) => setCoverStrength(Number(event.target.value))} /></label>
+                        <button type="button" onClick={cover} disabled={busy || (!selectedTakeId && !uploadedSourcePath) || !!selectedTake?.error} title={selectedTakeId || uploadedSourcePath ? undefined : "Select a take or drop a file first"}>Cover</button>
+                        <button type="button" onClick={repaint} disabled={busy || (!selectedTakeId && !uploadedSourcePath) || (!!selectedTakeId && !region) || !!selectedTake?.error} title={!selectedTakeId && !uploadedSourcePath ? "Select a take or drop a file first" : selectedTakeId && !region ? "Drag a region on the waveform first" : undefined}>Repaint</button>
+                      </div>
+                    </section>
+
+                    <section className={`operation-group tracks-group ${operationGroup === "tracks" ? "is-active" : ""}`} aria-label="Track operations">
+                      <div className="operation-heading"><span>03</span><div><strong>Tracks</strong><small>Isolate, add, or complete parts</small></div></div>
+                      <div className="operation-controls">
+                        <label className="track-name">Track name / classes<input placeholder="vocals, drums, bass..." value={trackName} onChange={(event) => setTrackName(event.target.value)} /></label>
+                        <button type="button" onClick={extract} disabled={busy || !selectedTakeId || !trackName.trim() || !!selectedTake?.error} title={!selectedTakeId ? "Select a take first" : !trackName.trim() ? "Enter a track name first" : undefined}>Extract</button>
+                        <button type="button" onClick={lego} disabled={busy || !selectedTakeId || !trackName.trim() || !!selectedTake?.error} title={!selectedTakeId ? "Select a take first" : !trackName.trim() ? "Enter a track name first" : undefined}>Lego</button>
+                        <button type="button" onClick={complete} disabled={busy || !selectedTakeId || !trackName.trim() || !!selectedTake?.error} title={!selectedTakeId ? "Select a take first" : !trackName.trim() ? "Enter a track name / classes first" : undefined}>Complete</button>
+                      </div>
+                    </section>
+                  </OperationDock>
+                </StudioStage>
+
+                <TakesRail open={inspectorOpen}>
+                  <div className="inspector-tabs" role="tablist" aria-label="Inspector">
+                    <button type="button" role="tab" aria-selected={inspectorTab === "takes"} onClick={() => setInspectorTab("takes")}>Takes <span>{detail.takes.length}</span></button>
+                    <button type="button" role="tab" aria-selected={inspectorTab === "styles"} onClick={() => setInspectorTab("styles")}>Style packs <span>{loras.length}</span></button>
+                    <button type="button" className="icon-button drawer-close" aria-label="Close inspector" onClick={() => setInspectorOpen(false)}><Icon name="close" /></button>
                   </div>
-                </section>
+
+                  <section className="takes" hidden={inspectorTab !== "takes"}>
+                    <div className="sr-only"><h3>Takes</h3></div>
+                    {detail.takes.length === 0 && <div className="inspector-empty"><Icon name="wave" /><p>No takes yet.</p><span>Your first generation will appear here.</span></div>}
+                    <ul className="take-list">
+                      {detail.takes.map((take, index) => (
+                        <li
+                          key={take.id}
+                          className={[take.id === selectedTakeId ? "selected" : "", take.id === detail.project.active_take_id ? "active-take" : ""].filter(Boolean).join(" ")}
+                          tabIndex={0}
+                          aria-label={`Take ${detail.takes.length - index}, ${take.task_type}, seed ${take.seed}`}
+                          onClick={() => setSelectedTakeId(take.id)}
+                          onKeyDown={(event: ReactKeyboardEvent<HTMLLIElement>) => {
+                            if ((event.key === "Enter" || event.key === " ") && event.target === event.currentTarget) {
+                              event.preventDefault();
+                              setSelectedTakeId(take.id);
+                            }
+                          }}
+                        >
+                          <div className="take-header">
+                            <span className="take-number">{String(detail.takes.length - index).padStart(2, "0")}</span>
+                            <div className="take-identity"><strong>{take.task_type}</strong><span>seed {take.seed}</span></div>
+                            <div className="take-statuses">
+                              {take.id === detail.project.active_take_id && <span className="active-take-badge">active</span>}
+                              {take.id === selectedTakeId && <span className="source-take-badge">source</span>}
+                            </div>
+                            <button type="button" className={`icon-button favorite-btn ${take.favorite ? "favorited" : ""}`} title={take.favorite ? "Unfavorite" : "Favorite"} aria-label={`${take.favorite ? "Unfavorite" : "Favorite"} take ${take.id}`} onClick={(event) => { event.stopPropagation(); toggleTakeFavorite(take); }}><Icon name="star" /></button>
+                          </div>
+                          <div className="take-facts"><span>{take.duration_sec != null ? `${take.duration_sec.toFixed(1)}s` : "—"}</span><span>score {take.score ?? "—"}</span><span>{take.dit_profile}</span></div>
+                          {take.lora_id && (() => {
+                            const pack = loras.find((lora) => lora.id === take.lora_id);
+                            return pack && !pack.error ? <button type="button" className="take-lora-badge" title={`Generated with style pack "${pack.name}" — click to select it for the next Generate/Cover/Repaint`} onClick={(event) => { event.stopPropagation(); setSelectedLoraId(pack.id); }}>style: {pack.name}</button> : <span className="take-lora-badge" title={pack ? `Generated with style pack "${pack.name}" (${take.lora_id}) — it failed training and cannot be loaded` : `Generated with style pack ${take.lora_id} (not found in this project)`}>style: {pack ? pack.name : take.lora_id.slice(0, 8)}</span>;
+                          })()}
+                          <textarea className="take-notes" placeholder="Notes..." value={take.notes} onClick={(event) => event.stopPropagation()} onChange={(event) => saveTakeNotes(take.id, event.target.value)} onBlur={() => flushTakeNotes(take.id).catch((err) => setErrorMsg(String(err)))} />
+                          <div className="take-player-row">
+                            {take.error ? <span className="take-error">failed: {take.error}</span> : <TakeAudioPlayer projectId={detail.project.id} takeId={take.id} registerRef={registerAudioRef} onSelect={() => setSelectedTakeId(take.id)} />}
+                          </div>
+                          <div className="take-actions">
+                            <button type="button" disabled={take.id === detail.project.active_take_id || !!take.error} onClick={(event) => { event.stopPropagation(); setActiveTake(take.id); }}>Set active</button>
+                            <button type="button" disabled={!!take.error || take.id === selectedTakeId} title={take.id === selectedTakeId ? "Already selected as A -- pick a different take to compare" : undefined} onClick={(event) => { event.stopPropagation(); setCompareTakeId((current) => current === take.id ? null : take.id); }}>{take.id === compareTakeId ? "Comparing" : "Compare"}</button>
+                            {take.parent_take_id && (detail.takes.find((candidate) => candidate.id === take.parent_take_id) ? <button type="button" className="parent-take-link" onClick={(event) => { event.stopPropagation(); setSelectedTakeId(take.parent_take_id); }}>from {take.parent_take_id.slice(0, 8)}</button> : <span className="parent-take-id">from {take.parent_take_id.slice(0, 8)}</span>)}
+                            {!take.error && <><a href={api.takeAudioUrl(detail.project.id, take.id)} download={`${take.id}.wav`}>download</a>{take.has_lrc && <a href={api.takeLrcUrl(detail.project.id, take.id)} download={`${take.id}.lrc`}>lyrics (.lrc)</a>}</>}
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  </section>
+
+                  <StylePackPanel active={inspectorTab === "styles"}>
+                    <div className="style-heading"><div><span className="eyebrow">Training room</span><h3>Style packs</h3></div><p>Build a local style from eight or more successful takes.</p></div>
+                    {loras.length === 0 && trainingJobs.length === 0 && <p className="hint">No style packs trained yet.</p>}
+                    <ul className="lora-list">
+                      {trainingJobs.map((job) => <li key={job.id} className="lora-training"><span className="lora-name">Training style pack…</span><span className="lora-status">{job.status === "queued" ? "queued — waiting for the GPU" : "running"}</span></li>)}
+                      {loras.map((lora) => <li key={lora.id} className={lora.error ? "lora-error" : ""}><span className="lora-name">{lora.name}</span><span className="lora-status">{lora.error ? `error: ${lora.error}` : lora.status ?? "—"}</span><span className="lora-loss">{lora.final_loss != null ? `loss ${lora.final_loss.toFixed(4)}` : ""}</span></li>)}
+                    </ul>
+                    <div className="style-source-heading"><strong>Training sources</strong><span>{loraSourceIds.size}/{MIN_LORA_SOURCE_TAKES}</span></div>
+                    <ul className="style-source-list">
+                      {detail.takes.map((take) => (
+                        <li key={take.id}>
+                          <label>
+                            <input type="checkbox" className="lora-source-checkbox" title="Include in style pack training source" checked={loraSourceIds.has(take.id)} onChange={() => toggleLoraSource(take.id)} />
+                            <span><strong>{take.task_type}</strong><small>seed {take.seed} · {take.duration_sec != null ? `${take.duration_sec.toFixed(1)}s` : "—"}</small></span>
+                          </label>
+                        </li>
+                      ))}
+                    </ul>
+                    <div className="lora-train-panel">
+                      <label>Style pack name<input placeholder="my-style" value={loraName} onChange={(event) => setLoraName(event.target.value)} /></label>
+                      <button type="button" onClick={trainLora} disabled={busy || trainingJobs.length > 0 || loraSourceIds.size < MIN_LORA_SOURCE_TAKES || !loraName.trim()} title={trainingJobs.length > 0 ? "A style pack is already training for this project" : loraSourceIds.size < MIN_LORA_SOURCE_TAKES ? `Select at least ${MIN_LORA_SOURCE_TAKES} takes first` : !loraName.trim() ? "Enter a style pack name first" : undefined}>{busy && activeJobAction === "style pack training" ? "Training…" : trainingJobs.length > 0 ? `Training… (${trainingJobs[0].status})` : "Train style pack"}</button>
+                    </div>
+                  </StylePackPanel>
+                </TakesRail>
               </div>
-            </>
+            </div>
           )}
         </main>
+
+        {(libraryOpen || planOpen || inspectorOpen) && (
+          <button type="button" className="drawer-scrim" aria-label="Close open panel" onClick={() => { setLibraryOpen(false); setPlanOpen(false); setInspectorOpen(false); }} />
+        )}
       </div>
-    </div>
+
+      <ConfirmationDialog request={confirmation} onDecision={resolveConfirmation} />
+    </AppShell>
   );
 }

@@ -772,14 +772,23 @@ def test_cover_rejects_out_of_range_audio_cover_strength(client: TestClient) -> 
         )
         assert resp.status_code == 422, bad_strength
 
-    for bad_strength in (float("nan"), float("inf"), float("-inf")):
+    # HTTPX 0.28+ deliberately rejects non-finite floats while encoding a
+    # `json=` body, before TestClient can deliver it to FastAPI. Send the
+    # equivalent JSON tokens as raw request content so this remains an API
+    # validation test rather than an HTTPX encoder test.
+    for bad_strength, json_token in (
+        (float("nan"), "NaN"),
+        (float("inf"), "Infinity"),
+        (float("-inf"), "-Infinity"),
+    ):
         resp = client.post(
             f"/api/projects/{project_id}/jobs",
-            json={
-                "action": "cover",
-                "source_take_id": source_take_id,
-                "audio_cover_strength": bad_strength,
-            },
+            content=(
+                '{"action":"cover","source_take_id":"'
+                f'{source_take_id}","audio_cover_strength":{json_token}'
+                "}"
+            ),
+            headers={"content-type": "application/json"},
         )
         # ge/le still rejects these (any comparison with NaN/inf against 0/1
         # is False/out-of-bounds), but FastAPI's 422 body echoes back the
