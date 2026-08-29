@@ -7,6 +7,11 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.cache/
+.config/
+.data/
+.tmp/
+.tools/
 
 # Node
 web/node_modules/
@@ -15,6 +20,10 @@ web/.vite/
 web/*.tsbuildinfo
 web/.dev-vendor/
 web/.dev-vendor-src/
+
+# Downloaded third-party source (pinned by ACE_STEP_REVISION and bootstrapped
+# by scripts/lyre; its environment and metadata stay inside vendor/).
+vendor/
 
 # Runtime audio and weights (never commit)
 projects/

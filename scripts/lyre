@@ -1,0 +1,220 @@
+#!/usr/bin/env bash
+# Wizard's Lyre local launcher. Run this instead of invoking Python, npm, or
+# ACE-Step directly so all writable state stays under this checkout.
+set -euo pipefail
+
+ROOT="$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+VENV="$ROOT/.venv"
+ACE_DIR="$ROOT/vendor/ACE-Step-1.5"
+ACE_REPOSITORY="https://github.com/ACE-Step/ACE-Step-1.5.git"
+ACE_REVISION="$(tr -d '\n' < "$ROOT/ACE_STEP_REVISION")"
+
+if [[ ! "$ACE_REVISION" =~ ^[0-9a-f]{40}$ ]]; then
+  echo "ACE_STEP_REVISION must contain one 40-character Git commit ID." >&2
+  exit 1
+fi
+
+prepare_environment() {
+  mkdir -p \
+    "$ROOT/.cache/uv" "$ROOT/.cache/npm" "$ROOT/.cache/huggingface" \
+    "$ROOT/.cache/modelscope" "$ROOT/.cache/torch" "$ROOT/.cache/cuda" \
+    "$ROOT/.cache/triton" "$ROOT/.cache/numba" "$ROOT/.cache/pycache" \
+    "$ROOT/.config" "$ROOT/.data" "$ROOT/.tmp" "$ROOT/.tools/python" \
+    "$ROOT/checkpoints" "$ROOT/projects" "$ROOT/output"
+
+  # Package managers, model libraries, compilers, and Python bytecode.
+  export UV_CACHE_DIR="$ROOT/.cache/uv"
+  export UV_PYTHON_INSTALL_DIR="$ROOT/.tools/python"
+  export PIP_CACHE_DIR="$ROOT/.cache/pip"
+  export npm_config_cache="$ROOT/.cache/npm"
+  export NPM_CONFIG_USERCONFIG="$ROOT/.config/npmrc"
+  export XDG_CACHE_HOME="$ROOT/.cache"
+  export XDG_CONFIG_HOME="$ROOT/.config"
+  export XDG_DATA_HOME="$ROOT/.data"
+  export HF_HOME="$ROOT/.cache/huggingface"
+  export HUGGINGFACE_HUB_CACHE="$ROOT/.cache/huggingface/hub"
+  export HF_ASSETS_CACHE="$ROOT/.cache/huggingface/assets"
+  export MODELSCOPE_CACHE="$ROOT/.cache/modelscope"
+  export TORCH_HOME="$ROOT/.cache/torch"
+  export CUDA_CACHE_PATH="$ROOT/.cache/cuda"
+  export TRITON_CACHE_DIR="$ROOT/.cache/triton"
+  export TORCHINDUCTOR_CACHE_DIR="$ROOT/.cache/torchinductor"
+  export TORCH_EXTENSIONS_DIR="$ROOT/.cache/torch-extensions"
+  export NUMBA_CACHE_DIR="$ROOT/.cache/numba"
+  export MPLCONFIGDIR="$ROOT/.cache/matplotlib"
+  export PYTHONPYCACHEPREFIX="$ROOT/.cache/pycache"
+  export TMPDIR="$ROOT/.tmp"
+  export TMP="$ROOT/.tmp"
+  export TEMP="$ROOT/.tmp"
+
+  # Lyre and ACE-Step model/runtime state. The two checkpoint variables serve
+  # Lyre's worker and ACE-Step's downloader/handlers, respectively.
+  export BARD_PROJECTS_DIR="$ROOT/projects"
+  export BARD_OUTPUT_DIR="$ROOT/output"
+  export BARD_DB_PATH="$ROOT/projects/bard.db"
+  export BARD_CHECKPOINTS_DIR="$ROOT/checkpoints"
+  export ACESTEP_PROJECT_ROOT="$ROOT"
+  export ACESTEP_CHECKPOINTS_DIR="$ROOT/checkpoints"
+
+  # Ignore a user's npm configuration without making a new global config.
+  touch "$NPM_CONFIG_USERCONFIG"
+}
+
+need_command() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    echo "Missing required system tool: $1" >&2
+    exit 1
+  fi
+}
+
+ensure_venv() {
+  need_command uv
+  if [[ ! -x "$VENV/bin/python" ]]; then
+    # uv downloads a managed Python into .tools/python if necessary.
+    uv venv --python 3.12 "$VENV"
+  fi
+}
+
+ensure_ace_source() {
+  need_command git
+  if [[ ! -d "$ACE_DIR/.git" ]]; then
+    mkdir -p "$(dirname -- "$ACE_DIR")"
+    git clone "$ACE_REPOSITORY" "$ACE_DIR"
+  fi
+  if ! git -C "$ACE_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    echo "ACE-Step source at $ACE_DIR is not a Git checkout." >&2
+    exit 1
+  fi
+  if [[ "$(git -C "$ACE_DIR" rev-parse HEAD)" != "$ACE_REVISION" ]]; then
+    # Ignore untracked upstream cache files but never overwrite a tracked
+    # source modification the user made under vendor/.
+    if [[ -n "$(git -C "$ACE_DIR" status --porcelain --untracked-files=no)" ]]; then
+      echo "ACE-Step source at $ACE_DIR has local changes; refusing to overwrite it." >&2
+      exit 1
+    fi
+    git -C "$ACE_DIR" fetch --depth=1 origin "$ACE_REVISION"
+    git -C "$ACE_DIR" checkout --detach "$ACE_REVISION"
+  fi
+}
+
+install_dependencies() {
+  ensure_venv
+  # Lyre runs straight from this checkout, so it is deliberately not installed
+  # as an editable package and no root-level *.egg-info is generated.
+  (
+    cd "$ROOT"
+    # shellcheck disable=SC1091
+    # This path is created by ensure_venv above.
+    source "$VENV/bin/activate"
+    uv sync --active --extra dev --no-install-project --locked
+    # Keep Lyre's test dependencies while adding ACE-Step to this same local
+    # environment. ACE-Step's own checked-in lock controls its dependencies.
+    uv sync --project "$ACE_DIR" --active --inexact --locked
+  )
+}
+
+install_web() {
+  need_command npm
+  npm --prefix "$ROOT/web" ci
+  npm --prefix "$ROOT/web" run build
+}
+
+download_models() {
+  if [[ ! -x "$VENV/bin/acestep-download" ]]; then
+    echo "ACE-Step is not installed. Run '$0 bootstrap' first." >&2
+    exit 1
+  fi
+  # Core includes Turbo, VAE, text encoder, and the 1.7B planner. The extra
+  # profiles make every Lyre action available: polish, studio ops, and XL.
+  "$VENV/bin/acestep-download" --dir "$ROOT/checkpoints"
+  "$VENV/bin/acestep-download" --dir "$ROOT/checkpoints" --model acestep-v15-sft --skip-main
+  "$VENV/bin/acestep-download" --dir "$ROOT/checkpoints" --model acestep-v15-base --skip-main
+  "$VENV/bin/acestep-download" --dir "$ROOT/checkpoints" --model acestep-v15-xl-turbo --skip-main
+}
+
+usage() {
+  cat <<EOF
+Usage: ./scripts/lyre <command>
+
+Commands:
+  bootstrap  Install dependencies, build the web app, and download every
+             ACE-Step model profile Lyre exposes into this checkout.
+  install    Install dependencies and build the web app, without model files.
+  models     Download or resume ACE-Step model downloads only.
+  server     Start Lyre's HTTP server on 127.0.0.1:8421.
+  worker     Start Lyre's local GPU worker.
+  web        Start the frontend development server.
+  build-web  Build the frontend bundle served by the HTTP server.
+  test       Run the Python test suite.
+  test-web   Run the frontend test suite.
+  smoke-gpu  Run the manual ACE-Step GPU smoke test.
+  paths      Print the project-local writable paths.
+EOF
+}
+
+prepare_environment
+cd "$ROOT"
+
+case "${1:-}" in
+  bootstrap)
+    ensure_ace_source
+    install_dependencies
+    install_web
+    download_models
+    ;;
+  install)
+    ensure_ace_source
+    install_dependencies
+    install_web
+    ;;
+  models)
+    download_models
+    ;;
+  server)
+    ensure_venv
+    exec "$VENV/bin/python" -m server.app
+    ;;
+  worker)
+    ensure_venv
+    exec "$VENV/bin/python" -m worker.run_worker
+    ;;
+  web)
+    need_command npm
+    exec npm --prefix "$ROOT/web" run dev
+    ;;
+  build-web)
+    install_web
+    ;;
+  test)
+    ensure_venv
+    exec "$VENV/bin/python" -m pytest
+    ;;
+  test-web)
+    need_command npm
+    exec npm --prefix "$ROOT/web" test
+    ;;
+  smoke-gpu)
+    ensure_venv
+    exec "$VENV/bin/python" scripts/smoke-gpu.py
+    ;;
+  paths)
+    cat <<EOF
+root:        $ROOT
+venv:        $VENV
+ACE-Step:    $ACE_DIR
+models:      $ROOT/checkpoints
+projects:    $ROOT/projects
+output:      $ROOT/output
+caches:      $ROOT/.cache
+config:      $ROOT/.config
+temporary:   $ROOT/.tmp
+EOF
+    ;;
+  -h|--help|help|"")
+    usage
+    ;;
+  *)
+    usage >&2
+    exit 2
+    ;;
+esac

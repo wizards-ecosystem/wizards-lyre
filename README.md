@@ -46,49 +46,37 @@ Default: ACE-Step 2B turbo + 1.7B LM. Bind `127.0.0.1:8421`.
 | `worker/` | `run_worker.py` (dedicated process entry point), `acestep_worker.py` (real backend), test-only `mock_worker.py` |
 | `web/` | Vite + React studio |
 | `tests/` | pytest, mocked worker, no GPU |
+| `scripts/lyre` | portable setup, launch, and test commands |
 | `scripts/smoke-gpu.py` | Real ACE-Step turbo smoke (manual, not part of pytest) |
 
-## Setup
+## One-folder setup
+
+Install the small system prerequisites (`git`, `uv`, and Node.js/npm), clone this repository, then
+run one command from its root:
 
 ```bash
-uv venv --python 3.12 .venv
-source .venv/bin/activate
-uv pip install -e ".[dev]"
+./scripts/lyre bootstrap
 ```
 
-`pip install -e ".[dev]"` above only installs this repo's own dependencies (FastAPI, uvicorn,
-pytest) -- it does **not** install ACE-Step itself. ACE-Step 1.5 is a separate package (SPEC.md
-sec 4, sec 13) that `worker/acestep_worker.py` imports lazily, so it's only required on the
-machine that runs `worker.run_worker`, not on a server-only box. Install it before downloading
-weights:
+It pins and downloads ACE-Step 1.5 into `vendor/ACE-Step-1.5`, creates the Python environment in
+`.venv`, installs frontend dependencies in `web/node_modules`, builds the SPA, and downloads every
+ACE-Step profile Lyre exposes into `checkpoints/` (Turbo, SFT, base, and XL Turbo). It is resumable:
+re-running it reuses files already present in this checkout.
 
-```bash
-git clone https://github.com/ace-step/ACE-Step-1.5 ../ACE-Step-1.5
-( cd ../ACE-Step-1.5 && uv pip install -e . )  # follow docs/en/INSTALL.md there if this has drifted
-```
+If you only need the web/API shell or want to defer the large model downloads, use
+`./scripts/lyre install` first and `./scripts/lyre models` when ready.
 
-Once `acestep` is importable and its download entry point is on PATH, pull the turbo checkpoint +
-the default 1.7B 5Hz LM once. The exact command name comes from
-`ACE-Step-1.5/docs/en/INSTALL.md`; if you installed ACE-Step with `uv` instead of `pip`, run it as
-`uv run acestep-download` there instead. Run it from **this repo's root** (not the `ACE-Step-1.5`
-checkout) -- `worker/acestep_worker.py`'s `CHECKPOINTS_ROOT` resolves the relative default
-`checkpoints/` from wherever `worker.run_worker` is launched, and `acestep-download` writes to a
-`checkpoints/` under its own current directory the same way, so the two must be run from the same
-place or the worker won't find what was downloaded:
+The launcher redirects package-manager, Hugging Face, ModelScope, PyTorch/CUDA, compiler, and
+temporary-file caches to this project. Runtime data remains under `projects/` and `output/`; no
+Lyre-owned state needs to be stored in a home-directory cache. The NVIDIA driver and CUDA runtime
+remain normal system prerequisites.
 
-```bash
-acestep-download
-```
+Use `./scripts/lyre paths` to show the exact locations. `vendor/`, models, environments, caches,
+and generated music are intentionally ignored by Git. The `ACE_STEP_REVISION` file records the
+pinned upstream source revision used by the installer.
 
-Weights land under `checkpoints/` by default, relative to the directory `acestep-download` above
-was run from (override the worker's read side with `BARD_CHECKPOINTS_DIR` if you'd rather point it
-at weights downloaded elsewhere, e.g. the `ACE-Step-1.5` checkout's own `checkpoints/`) -- see
-`worker/acestep_worker.py`'s `CHECKPOINTS_ROOT`.
-
-Without ACE-Step installed, the server still runs; job types that need it (`generate`, `cover`,
-`repaint`, `extract`, `lego`, `complete` -- see Status above) will fail with a clear "acestep is
-not installed" error instead of crashing. Set `BARD_WORKER=mock` to force the mocked worker
-(silent WAV, no GPU) for local UI/API poking without a GPU.
+For a GPU-free UI/API development session, set `BARD_WORKER=mock` before starting
+`./scripts/lyre worker`; it writes silent WAVs and never loads CUDA.
 
 ## Run the server + worker
 
@@ -97,8 +85,8 @@ disk; the worker is where CUDA and ACE-Step actually load, so a GPU crash can't 
 and a long generation never blocks a request.
 
 ```bash
-python -m server.app          # terminal 1: HTTP API + (if built) the SPA
-python -m worker.run_worker   # terminal 2: claims `queued` jobs, runs them one at a time
+./scripts/lyre server  # terminal 1: HTTP API + built SPA
+./scripts/lyre worker  # terminal 2: claims queued jobs one at a time
 ```
 
 `server.app` binds `127.0.0.1:8421` by default; override with `BARD_PORT`. If `web/dist` exists,
@@ -109,28 +97,26 @@ server. Jobs posted to `/api/projects/{id}/jobs` sit as `queued` until `worker.r
 ## Frontend
 
 ```bash
-cd web
-npm install
-npm run build     # writes web/dist, served by the FastAPI app above
-npm run dev        # Vite dev server with a /api proxy to BARD_PORT (default 8421)
+./scripts/lyre build-web  # writes web/dist, served by FastAPI
+./scripts/lyre web        # Vite dev server with a /api proxy to BARD_PORT
 ```
 
 ## Tests
 
 ```bash
-pytest
+./scripts/lyre test
 ```
 
 Default pytest must not load CUDA or ACE-Step weights (it pins `BARD_WORKER=mock`).
 
-Frontend regression tests: `cd web && npm test` (Vitest + React Testing
+Frontend regression tests: `./scripts/lyre test-web` (Vitest + React Testing
 Library against a mocked backend, no FastAPI/CUDA/ACE-Step required) — see
 web/README.md's Tests section for details.
 
 ## GPU smoke (manual)
 
 ```bash
-python scripts/smoke-gpu.py
+./scripts/lyre smoke-gpu
 ```
 
 Loads ACE-Step turbo, generates ~10s of instrumental `text2music`, prints the output path, exits

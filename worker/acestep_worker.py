@@ -228,7 +228,12 @@ LM_BACKEND = "pt"
 # LLMHandler.initialize's `checkpoint_dir`, by contrast, *is* used directly
 # as CHECKPOINTS_ROOT with no extra nesting -- only the DiT handler has this
 # project_root/checkpoints/ indirection.
-CHECKPOINTS_ROOT = Path(os.environ.get("BARD_CHECKPOINTS_DIR", "checkpoints"))
+# Resolve the default from this source tree, not the caller's working
+# directory. That keeps the model store in one portable Lyre checkout even
+# if the worker is launched through an absolute module path elsewhere.
+CHECKPOINTS_ROOT = Path(
+    os.environ.get("BARD_CHECKPOINTS_DIR", Path(__file__).resolve().parent.parent / "checkpoints")
+).resolve()
 DEVICE = os.environ.get("BARD_DEVICE", "cuda")
 
 # SPEC.md sec 4.1: XL turbo (`quality`) needs CPU offload on a 16 GB card;

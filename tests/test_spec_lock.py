@@ -49,7 +49,23 @@ FORBIDDEN_KEYWORDS = (
 FORBIDDEN_BIND_HOSTS = ("0.0.0.0",)
 
 CODE_GLOBS = ("**/*.py", "**/*.ts", "**/*.tsx", "**/*.js", "**/*.mjs")
-SKIP_PARTS = {".venv", "node_modules", ".git"}
+# This check locks down Lyre-owned code, not dependencies or mutable runtime
+# data. In particular, portable setup places ACE-Step under vendor/; upstream
+# contains its own demo/UI code, which Lyre neither imports nor ships.
+SKIP_PARTS = {
+    ".venv",
+    "node_modules",
+    ".git",
+    "vendor",
+    "checkpoints",
+    "projects",
+    "output",
+    ".cache",
+    ".config",
+    ".data",
+    ".tmp",
+    ".tools",
+}
 
 
 def _iter_source(*, skip_tests: bool = False) -> list[Path]:

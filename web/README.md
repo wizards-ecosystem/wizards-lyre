@@ -7,14 +7,16 @@ local-tool aesthetic — a project library plus a three-pane project workspace
 ## Setup
 
 ```
-cd web
-npm install
+./scripts/lyre bootstrap
 ```
+
+Run this once from the repository root. It installs `web/node_modules` locally
+and keeps npm's cache inside the repository.
 
 ## Dev server
 
 ```
-npm run dev
+./scripts/lyre web
 ```
 
 Starts a Vite dev server on `http://localhost:5173`. Requests to `/api/*`
@@ -26,7 +28,7 @@ banners in the UI) until `server/` is up.
 ## Build
 
 ```
-npm run build
+./scripts/lyre build-web
 ```
 
 Type-checks with `tsc -b` and produces a production bundle in `web/dist/`,
@@ -35,7 +37,7 @@ which FastAPI serves directly in prod (SPEC.md §5).
 ## Tests
 
 ```
-npm test
+./scripts/lyre test-web
 ```
 
 Frontend regression tests (Vitest + React Testing Library + jsdom), covering
