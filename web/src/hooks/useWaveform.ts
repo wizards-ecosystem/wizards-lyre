@@ -47,6 +47,9 @@ export function useWaveform({
   // the previous one instead of showing a stale start/end that no longer
   // corresponds to anything on screen.
   useEffect(() => {
+    // Deliberate: a newly selected take has no region, so a stale start/end
+    // must not survive the switch.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setRegion(null);
   }, [selectedTakeId]);
 
@@ -72,6 +75,9 @@ export function useWaveform({
     });
     wavesurferRef.current = wavesurfer;
     regionsPluginRef.current = regions;
+    // Deliberate: transport state is reset as the new WaveSurfer instance is
+    // constructed, so the UI never shows the previous take's position.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setWaveformPlaying(false);
     setWaveformCurrentTime(0);
     setWaveformDuration(0);
@@ -119,6 +125,9 @@ export function useWaveform({
       setWaveformMediaEl(null);
       setWaveformPlaying(false);
     };
+    // The instance is remounted per selected take only. detail/activeIdRef are
+    // read at mount; remounting on every detail change would restart playback.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedTakeId]);
 
   // Renders plan.sections as labeled, non-editable regions on the waveform

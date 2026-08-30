@@ -190,6 +190,9 @@ export default function App() {
   // as the page is torn down instead of aborting it mid-flight.
   useEffect(() => {
     function flushTakeNotesOnUnload() {
+      // flushAllPendingTakeNotes is a hoisted function declaration, only called
+      // from this listener long after the module has evaluated -- not a real TDZ access.
+      // eslint-disable-next-line react-hooks/immutability
       flushAllPendingTakeNotes({ keepalive: true }).catch(() => {});
     }
     window.addEventListener("pagehide", flushTakeNotesOnUnload);
@@ -200,6 +203,10 @@ export default function App() {
       if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
       flushTakeNotesOnUnload();
     };
+    // Mount-only by design: this registers the unload listeners once. Adding
+    // flushAllPendingTakeNotes (redefined every render) would tear down and
+    // re-register them on every keystroke.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   function enqueueSave(): Promise<void> {
@@ -505,10 +512,17 @@ export default function App() {
   }
 
   useEffect(() => {
+    // The setState is inside an async rejection handler, not the effect body,
+    // so it cannot cascade renders; this is the initial project-list load.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     refreshProjects().catch((err) => setErrorMsg(String(err)));
   }, []);
 
   useEffect(() => {
+    // Deliberate: switching projects must clear the previous project's
+    // selection, comparison, upload, and style-pack state in one synchronous
+    // pass, before any of it can be rendered against the new project.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setSelectedTakeId(null);
     setCompareTakeId(null);
     setUploadedSourcePath(null);
@@ -528,6 +542,9 @@ export default function App() {
       setDetail(null);
       setLoras([]);
     }
+    // Keyed on activeId alone. The refresh* helpers are redefined every render;
+    // listing them would refetch the whole project on every state change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeId]);
 
   // Recovery poll for the train_lora jobs above: while any are active,
@@ -613,6 +630,9 @@ export default function App() {
   // file deselects the take) happens directly in the drop handler.
   useEffect(() => {
     if (selectedTakeId) {
+      // Deliberate: a take and an uploaded file are mutually exclusive sources,
+      // so selecting one must clear the other.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setUploadedSourcePath(null);
       setUploadedSourceName(null);
     }
@@ -624,6 +644,9 @@ export default function App() {
   // showing two identical players and a no-op swap.
   useEffect(() => {
     if (compareTakeId && compareTakeId === selectedTakeId) {
+      // Deliberate: A and B must never be the same take, so picking A as B's
+      // current value clears the comparison.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setCompareTakeId(null);
     }
   }, [selectedTakeId, compareTakeId]);

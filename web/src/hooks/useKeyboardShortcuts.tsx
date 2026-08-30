@@ -105,5 +105,9 @@ export function useKeyboardShortcuts({
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
+    // The handler is re-created whenever the state it reads changes. The
+    // callbacks and refs omitted here are stable for a given render and adding
+    // them would re-bind the window listener on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeId, detail, selectedTakeId, busy]);
 }

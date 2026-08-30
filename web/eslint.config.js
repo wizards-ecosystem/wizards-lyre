@@ -20,23 +20,10 @@ export default tseslint.config(
     rules: {
       ...reactHooks.configs.recommended.rules,
       "react-refresh/only-export-components": ["warn", { allowConstantExport: true }],
-
-      // The two rules below ship as errors in the React Compiler-era plugin.
-      // This app does not use the compiler, and every current report is a
-      // false positive against working, tested code, so they are advisory
-      // here rather than CI-blocking:
-      //
-      // - set-state-in-effect fires on the deliberate "reset derived UI state
-      //   when the selected take or project changes" effects. That is the
-      //   intended behavior, not a cascading-render bug.
-      // - immutability fires on `audioEl.currentTime = next` (assigning to a
-      //   DOM element property is correct) and on a hoisted function
-      //   declaration referenced from a closure that only runs later.
-      //
-      // They are kept on as warnings because a genuinely new violation is
-      // still worth seeing.
-      "react-hooks/set-state-in-effect": "warn",
-      "react-hooks/immutability": "warn",
+      // The react-hooks rules stay at error strength. Every suppression in
+      // this codebase is a targeted per-line disable written at the site,
+      // with its reason above it, so a genuinely new violation still fails
+      // the build rather than being pre-approved here.
     },
   },
   {

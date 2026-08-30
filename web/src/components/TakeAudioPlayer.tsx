@@ -75,6 +75,9 @@ export function TakeAudioPlayer({
           event.stopPropagation();
           if (!audioEl) return;
           const next = Number(event.currentTarget.value);
+          // audioEl is a DOM element, not React state. Assigning currentTime is how
+          // seeking works.
+          // eslint-disable-next-line react-hooks/immutability
           audioEl.currentTime = next;
           setCurrentTime(next);
         }}
