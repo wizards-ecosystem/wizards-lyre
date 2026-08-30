@@ -9,16 +9,16 @@ import {
 import { api, Job, Lora, Plan, ProjectDetail, ProjectSummary, Section } from "./api";
 import { ConfirmationDialog } from "./components/ConfirmationDialog";
 import { Icon } from "./components/Icon";
+import { LibraryPane } from "./components/LibraryPane";
+import { StylePackPanel } from "./components/StylePackPanel";
 import { LoudnessMeter } from "./components/LoudnessMeter";
 import { TakeAudioPlayer } from "./components/TakeAudioPlayer";
 import {
   AppShell,
   OperationDock,
   PlanInspector,
-  ProjectRail,
   StudioPlayer,
   StudioStage,
-  StylePackPanel,
   TakesRail,
 } from "./components/Workbench";
 import {
@@ -1263,150 +1263,30 @@ export default function App() {
       </header>
 
       <div className="body">
-        <ProjectRail open={libraryOpen}>
-          <div className="rail-heading">
-            <div>
-              <span className="eyebrow">Projects</span>
-              <h2>Library</h2>
-            </div>
-            <button
-              type="button"
-              className="icon-button drawer-close"
-              aria-label="Close projects"
-              onClick={() => setLibraryOpen(false)}
-            >
-              <Icon name="close" />
-            </button>
-          </div>
-
-          {!creatingProject ? (
-            <button
-              type="button"
-              className="new-project-trigger"
-              onClick={() => setCreatingProject(true)}
-            >
-              <Icon name="add" />
-              New project
-            </button>
-          ) : (
-            <form
-              className="new-project"
-              onSubmit={(event) => {
-                event.preventDefault();
-                createProject();
-              }}
-              onKeyDown={(event) => {
-                if (event.key === "Escape") setCreatingProject(false);
-              }}
-            >
-              <div className="composer-heading">
-                <span>New composition</span>
-                <button
-                  type="button"
-                  className="icon-button"
-                  aria-label="Cancel new project"
-                  onClick={() => setCreatingProject(false)}
-                >
-                  <Icon name="close" />
-                </button>
-              </div>
-              <label>
-                Title
-                <input
-                  autoFocus
-                  placeholder="title"
-                  value={newTitle}
-                  onChange={(event) => setNewTitle(event.target.value)}
-                />
-              </label>
-              <label>
-                Starting idea <span className="optional">optional</span>
-                <textarea
-                  placeholder="simple query (optional)"
-                  value={newQuery}
-                  onChange={(event) => setNewQuery(event.target.value)}
-                />
-              </label>
-              <button type="submit" className="button-primary">
-                Create project
-              </button>
-            </form>
-          )}
-
-          <label className="search-field">
-            <Icon name="search" />
-            <span className="sr-only">Search projects</span>
-            <input
-              className="library-search"
-              placeholder="Search projects"
-              value={librarySearch}
-              onChange={(event) => setLibrarySearch(event.target.value)}
-            />
-          </label>
-
-          <ul className="project-list">
-            {filteredProjects.map((project) => (
-              <li key={project.id} className={project.id === activeId ? "active" : ""}>
-                <button
-                  type="button"
-                  className="project-row"
-                  aria-label={`Open ${project.title}`}
-                  onClick={() => {
-                    switchActiveProject(project.id);
-                    setLibraryOpen(false);
-                  }}
-                >
-                  <span className="project-title">{project.title}</span>
-                  <span className="project-updated">
-                    {project.updated_at ? new Date(project.updated_at).toLocaleDateString() : ""}
-                  </span>
-                </button>
-                <div className="project-actions">
-                  <button
-                    type="button"
-                    className={`icon-button favorite-btn ${project.favorite ? "favorited" : ""}`}
-                    title={project.favorite ? "Unfavorite" : "Favorite"}
-                    aria-label={`${project.favorite ? "Unfavorite" : "Favorite"} ${project.title}`}
-                    onClick={() => toggleFavorite(project)}
-                  >
-                    <Icon name="star" />
-                  </button>
-                  <button
-                    type="button"
-                    className="icon-button preview-btn"
-                    title={
-                      project.active_take_id
-                        ? previewProjectId === project.id
-                          ? "Pause preview"
-                          : "Play last take"
-                        : "No takes yet"
-                    }
-                    aria-label={`${previewProjectId === project.id ? "Pause" : "Play"} ${project.title} preview`}
-                    disabled={!project.active_take_id}
-                    onClick={() => togglePreview(project)}
-                  >
-                    <Icon name={previewProjectId === project.id ? "pause" : "play"} />
-                  </button>
-                  <button
-                    type="button"
-                    className="icon-button delete-btn"
-                    title="Delete project"
-                    aria-label={`Delete ${project.title}`}
-                    onClick={() => deleteProject(project)}
-                  >
-                    <Icon name="delete" />
-                  </button>
-                </div>
-              </li>
-            ))}
-          </ul>
-          {filteredProjects.length === 0 && (
-            <p className="empty-copy">
-              {projects.length === 0 ? "No projects yet." : "No projects match this search."}
-            </p>
-          )}
-          <audio ref={previewAudioRef} onEnded={() => setPreviewProjectId(null)} hidden />
-        </ProjectRail>
+        <LibraryPane
+          open={libraryOpen}
+          onClose={() => setLibraryOpen(false)}
+          projects={projects}
+          filteredProjects={filteredProjects}
+          librarySearch={librarySearch}
+          onSearchChange={setLibrarySearch}
+          activeId={activeId}
+          onOpenProject={switchActiveProject}
+          onToggleFavorite={toggleFavorite}
+          onDeleteProject={deleteProject}
+          creatingProject={creatingProject}
+          onStartCreating={() => setCreatingProject(true)}
+          onCancelCreating={() => setCreatingProject(false)}
+          onCreateProject={createProject}
+          newTitle={newTitle}
+          onNewTitleChange={setNewTitle}
+          newQuery={newQuery}
+          onNewQueryChange={setNewQuery}
+          previewProjectId={previewProjectId}
+          onTogglePreview={togglePreview}
+          previewAudioRef={previewAudioRef}
+          onPreviewEnded={() => setPreviewProjectId(null)}
+        />
 
         <main className="workspace">
           {errorMsg && (
@@ -2502,104 +2382,19 @@ export default function App() {
                     </ul>
                   </section>
 
-                  <StylePackPanel active={inspectorTab === "styles"}>
-                    <div className="style-heading">
-                      <div>
-                        <span className="eyebrow">Training room</span>
-                        <h3>Style packs</h3>
-                      </div>
-                      <p>Build a local style from eight or more successful takes.</p>
-                    </div>
-                    {loras.length === 0 && trainingJobs.length === 0 && (
-                      <p className="hint">No style packs trained yet.</p>
-                    )}
-                    <ul className="lora-list">
-                      {trainingJobs.map((job) => (
-                        <li key={job.id} className="lora-training">
-                          <span className="lora-name">Training style pack…</span>
-                          <span className="lora-status">
-                            {job.status === "queued" ? "queued — waiting for the GPU" : "running"}
-                          </span>
-                        </li>
-                      ))}
-                      {loras.map((lora) => (
-                        <li key={lora.id} className={lora.error ? "lora-error" : ""}>
-                          <span className="lora-name">{lora.name}</span>
-                          <span className="lora-status">
-                            {lora.error ? `error: ${lora.error}` : (lora.status ?? "—")}
-                          </span>
-                          <span className="lora-loss">
-                            {lora.final_loss != null ? `loss ${lora.final_loss.toFixed(4)}` : ""}
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
-                    <div className="style-source-heading">
-                      <strong>Training sources</strong>
-                      <span>
-                        {loraSourceIds.size}/{MIN_LORA_SOURCE_TAKES}
-                      </span>
-                    </div>
-                    <ul className="style-source-list">
-                      {detail.takes.map((take) => (
-                        <li key={take.id}>
-                          <label>
-                            <input
-                              type="checkbox"
-                              className="lora-source-checkbox"
-                              title="Include in style pack training source"
-                              checked={loraSourceIds.has(take.id)}
-                              onChange={() => toggleLoraSource(take.id)}
-                            />
-                            <span>
-                              <strong>{take.task_type}</strong>
-                              <small>
-                                seed {take.seed} ·{" "}
-                                {take.duration_sec != null
-                                  ? `${take.duration_sec.toFixed(1)}s`
-                                  : "—"}
-                              </small>
-                            </span>
-                          </label>
-                        </li>
-                      ))}
-                    </ul>
-                    <div className="lora-train-panel">
-                      <label>
-                        Style pack name
-                        <input
-                          placeholder="my-style"
-                          value={loraName}
-                          onChange={(event) => setLoraName(event.target.value)}
-                        />
-                      </label>
-                      <button
-                        type="button"
-                        onClick={trainLora}
-                        disabled={
-                          busy ||
-                          trainingJobs.length > 0 ||
-                          loraSourceIds.size < MIN_LORA_SOURCE_TAKES ||
-                          !loraName.trim()
-                        }
-                        title={
-                          trainingJobs.length > 0
-                            ? "A style pack is already training for this project"
-                            : loraSourceIds.size < MIN_LORA_SOURCE_TAKES
-                              ? `Select at least ${MIN_LORA_SOURCE_TAKES} takes first`
-                              : !loraName.trim()
-                                ? "Enter a style pack name first"
-                                : undefined
-                        }
-                      >
-                        {busy && activeJobAction === "style pack training"
-                          ? "Training…"
-                          : trainingJobs.length > 0
-                            ? `Training… (${trainingJobs[0].status})`
-                            : "Train style pack"}
-                      </button>
-                    </div>
-                  </StylePackPanel>
+                  <StylePackPanel
+                    active={inspectorTab === "styles"}
+                    loras={loras}
+                    trainingJobs={trainingJobs}
+                    takes={detail.takes}
+                    loraSourceIds={loraSourceIds}
+                    onToggleSource={toggleLoraSource}
+                    loraName={loraName}
+                    onNameChange={setLoraName}
+                    onTrain={trainLora}
+                    busy={busy}
+                    activeJobAction={activeJobAction}
+                  />
                 </TakesRail>
               </div>
             </div>
