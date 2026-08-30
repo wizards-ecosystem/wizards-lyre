@@ -56,11 +56,15 @@ warn_redundant_casts = true
 warn_unreachable = true
 
 [[tool.mypy.overrides]]
-# Upstream ACE-Step ships no type information. The worker adapter imports it
-# lazily inside functions and wraps every call, so a signature drift surfaces
-# as WorkerUnavailable naming the failed step -- see
-# tests/test_acestep_worker_adapter.py, which pins the real call shapes.
-module = ["acestep.*"]
+# The GPU stack is deliberately absent from a contributor setup and from CI
+# (`./scripts/lyre install` skips the weights; CI installs neither ACE-Step nor
+# torch), and upstream ACE-Step ships no type information even when present.
+# Both are imported lazily inside functions and every call is wrapped, so a
+# signature drift surfaces as WorkerUnavailable naming the failed step -- see
+# tests/test_acestep_worker_adapter.py, which pins the real call shapes against
+# fake modules. Type-checking must therefore behave identically whether or not
+# the GPU stack happens to be installed.
+module = ["acestep.*", "torch.*"]
 ignore_missing_imports = true
 
 [tool.coverage.run]
