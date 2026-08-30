@@ -196,8 +196,8 @@ def test_resolve_lora_rejects_missing_failed_or_unfinished(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Direct unit coverage for _resolve_lora."""
-    monkeypatch.setenv("BARD_PROJECTS_DIR", str(tmp_path / "projects"))
-    monkeypatch.setenv("BARD_DB_PATH", str(tmp_path / "bard.db"))
+    monkeypatch.setenv("LYRE_PROJECTS_DIR", str(tmp_path / "projects"))
+    monkeypatch.setenv("LYRE_DB_PATH", str(tmp_path / "lyre.db"))
 
     project = storage.create_project(title="Unit Test")
     project_id = project["id"]

@@ -704,7 +704,7 @@ def test_checkpoints_project_root_matches_ace_step_resolution(
     flagged): AceStepHandler.initialize_service resolves the checkpoint at
     <project_root>/checkpoints/<config_path>, so project_root must be
     CHECKPOINTS_ROOT's parent for that to land on CHECKPOINTS_ROOT itself --
-    and a BARD_CHECKPOINTS_DIR that isn't literally named 'checkpoints' can
+    and a LYRE_CHECKPOINTS_DIR that isn't literally named 'checkpoints' can
     never satisfy that upstream convention, so it must fail clearly instead
     of silently resolving to the wrong directory."""
     monkeypatch.setattr(acestep_worker, "CHECKPOINTS_ROOT", Path("some/where/checkpoints"))

@@ -49,15 +49,40 @@ prepare_environment() {
 
   # Lyre and ACE-Step model/runtime state. The two checkpoint variables serve
   # Lyre's worker and ACE-Step's downloader/handlers, respectively.
-  export BARD_PROJECTS_DIR="$ROOT/projects"
-  export BARD_OUTPUT_DIR="$ROOT/output"
-  export BARD_DB_PATH="$ROOT/projects/bard.db"
-  export BARD_CHECKPOINTS_DIR="$ROOT/checkpoints"
+  export LYRE_PROJECTS_DIR="$ROOT/projects"
+  export LYRE_OUTPUT_DIR="$ROOT/output"
+  export LYRE_DB_PATH="$ROOT/projects/lyre.db"
+  export LYRE_CHECKPOINTS_DIR="$ROOT/checkpoints"
   export ACESTEP_PROJECT_ROOT="$ROOT"
   export ACESTEP_CHECKPOINTS_DIR="$ROOT/checkpoints"
 
   # Ignore a user's npm configuration without making a new global config.
   touch "$NPM_CONFIG_USERCONFIG"
+
+  migrate_legacy_database
+}
+
+# Wizard's Lyre was called "Bard" before 0.1.0 and stored its queue in
+# projects/bard.db. Move a pre-rename database (and its SQLite sidecars and
+# worker lock) into place the first time this launcher runs, so an existing
+# checkout keeps its projects instead of silently starting from an empty
+# library. Only ever renames *into* an absent lyre.db; never overwrites one.
+migrate_legacy_database() {
+  local legacy="$ROOT/projects/bard.db"
+  local current="$ROOT/projects/lyre.db"
+
+  if [[ ! -f "$legacy" || -e "$current" ]]; then
+    return 0
+  fi
+
+  echo "Migrating pre-0.1.0 database: projects/bard.db -> projects/lyre.db" >&2
+  mv -- "$legacy" "$current"
+  local suffix
+  for suffix in -wal -shm .worker.lock; do
+    if [[ -e "$legacy$suffix" ]]; then
+      mv -- "$legacy$suffix" "$current$suffix"
+    fi
+  done
 }
 
 need_command() {

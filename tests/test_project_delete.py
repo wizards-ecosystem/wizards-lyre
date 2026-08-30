@@ -258,9 +258,9 @@ def test_filesystem_failure_rolls_back_job_cancellation(
     # back as a real 500 response to inspect, the way a production ASGI
     # server's ServerErrorMiddleware would return it, instead of TestClient
     # re-raising it into the test for debugging.
-    monkeypatch.setenv("BARD_PROJECTS_DIR", str(tmp_path / "projects"))
-    monkeypatch.setenv("BARD_DB_PATH", str(tmp_path / "bard.db"))
-    monkeypatch.setenv("BARD_WORKER", "mock")
+    monkeypatch.setenv("LYRE_PROJECTS_DIR", str(tmp_path / "projects"))
+    monkeypatch.setenv("LYRE_DB_PATH", str(tmp_path / "lyre.db"))
+    monkeypatch.setenv("LYRE_WORKER", "mock")
     with TestClient(app, raise_server_exceptions=False) as api_client:
         project = api_client.post("/api/projects", json={"title": "Rmtree Fails"}).json()
         job = api_client.post(

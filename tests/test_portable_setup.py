@@ -38,10 +38,58 @@ def test_portable_setup_pins_ace_step_and_downloads_all_lyre_profiles() -> None:
 
     source = LAUNCHER.read_text(encoding="utf-8")
     assert 'ACESTEP_CHECKPOINTS_DIR="$ROOT/checkpoints"' in source
-    assert 'BARD_CHECKPOINTS_DIR="$ROOT/checkpoints"' in source
+    assert 'LYRE_CHECKPOINTS_DIR="$ROOT/checkpoints"' in source
     for model in (
         "acestep-v15-sft",
         "acestep-v15-base",
         "acestep-v15-xl-turbo",
     ):
         assert f"--model {model} --skip-main" in source
+
+
+def test_portable_setup_migrates_the_pre_rename_database() -> None:
+    """The 0.1.0 rename moved projects/bard.db to projects/lyre.db. An
+    existing checkout must keep its library, so the launcher renames the
+    legacy file (plus its SQLite sidecars and worker lock) once, and never
+    over an existing lyre.db.
+    """
+    source = LAUNCHER.read_text(encoding="utf-8")
+    assert "migrate_legacy_database" in source
+    assert 'legacy="$ROOT/projects/bard.db"' in source
+    assert 'current="$ROOT/projects/lyre.db"' in source
+    assert 'if [[ ! -f "$legacy" || -e "$current" ]]; then' in source
+    for suffix in ("-wal", "-shm", ".worker.lock"):
+        assert suffix in source
+
+
+def test_no_pre_rename_environment_variables_survive() -> None:
+    """Lyre's runtime contract is LYRE_* (SPEC.md sec 5); the pre-0.1.0
+    BARD_* names were dropped outright, with no fallback. A half-finished
+    rename is easy to miss by eye and produces a silently ignored setting,
+    so fail loudly on any surviving token in tracked source.
+    """
+    tracked = subprocess.run(
+        ["git", "ls-files"], cwd=ROOT, capture_output=True, text=True, check=True
+    ).stdout.split()
+
+    # vendor/ is upstream ACE-Step, not Lyre's to rename. The launcher owns
+    # the one-time bard.db migration and this module tests it, so both
+    # legitimately name the old file. Prose docs may recount the history.
+    exempt = {
+        "scripts/lyre",
+        "tests/test_portable_setup.py",
+        "SPEC.md",
+        "README.md",
+        "CHANGELOG.md",
+    }
+
+    hits: list[str] = []
+    for name in tracked:
+        path = ROOT / name
+        if name.startswith("vendor/") or name in exempt or not path.is_file():
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        for token in ("BARD_", "bard.db"):
+            if token in text:
+                hits.append(f"{name}: {token!r}")
+    assert hits == []

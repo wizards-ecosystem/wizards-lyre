@@ -21,7 +21,7 @@ and keeps npm's cache inside the repository.
 
 Starts a Vite dev server on `http://localhost:5173`. Requests to `/api/*`
 are proxied to the FastAPI backend at `http://127.0.0.1:8421` (override with
-`BARD_PORT`). The dev server works standalone even if the backend isn't
+`LYRE_PORT`). The dev server works standalone even if the backend isn't
 running yet — API calls will just fail (shown as "server offline" / error
 banners in the UI) until `server/` is up.
 

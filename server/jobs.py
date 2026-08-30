@@ -226,14 +226,14 @@ def resolve_worker_module():
     lazily imports acestep/CUDA) -- callers must be the dedicated worker
     process (`worker/run_worker.py`) or code that only runs there, never the
     FastAPI server (SPEC.md sec 10 point 4 / worker-server isolation)."""
-    backend = os.environ.get("BARD_WORKER", "acestep")
+    backend = os.environ.get("LYRE_WORKER", "acestep")
     if backend == "mock":
         return mock_worker
     if backend == "acestep":
         from worker import acestep_worker
 
         return acestep_worker
-    raise JobError(f"unknown BARD_WORKER backend: {backend}")
+    raise JobError(f"unknown LYRE_WORKER backend: {backend}")
 
 
 def acquire_worker_lease(

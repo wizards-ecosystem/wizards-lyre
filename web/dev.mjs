@@ -8,7 +8,7 @@ import react from "@vitejs/plugin-react";
 import { buildDevVendor, VENDOR_SPECIFIERS } from "./dev-vendor.mjs";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
-const bardPort = process.env.BARD_PORT ?? "8421";
+const lyrePort = process.env.LYRE_PORT ?? "8421";
 
 // See dev-vendor.mjs for why react/react-dom/jsx-runtime are pre-bundled
 // up front here instead of going through Vite's normal (esbuild-based)
@@ -58,7 +58,7 @@ const server = await createServer({
   server: {
     proxy: {
       "/api": {
-        target: `http://127.0.0.1:${bardPort}`,
+        target: `http://127.0.0.1:${lyrePort}`,
         changeOrigin: true,
       },
     },

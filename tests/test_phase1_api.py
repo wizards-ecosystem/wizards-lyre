@@ -59,9 +59,9 @@ def test_health_before_any_worker_reports_in(
 ) -> None:
     """No worker process has published status yet -- health must say so
     plainly instead of implying a worker is ready."""
-    monkeypatch.setenv("BARD_PROJECTS_DIR", str(tmp_path / "projects"))
-    monkeypatch.setenv("BARD_DB_PATH", str(tmp_path / "bard.db"))
-    monkeypatch.setenv("BARD_WORKER", "mock")
+    monkeypatch.setenv("LYRE_PROJECTS_DIR", str(tmp_path / "projects"))
+    monkeypatch.setenv("LYRE_DB_PATH", str(tmp_path / "lyre.db"))
+    monkeypatch.setenv("LYRE_WORKER", "mock")
 
     with TestClient(app) as c:
         resp = c.get("/api/health")
@@ -77,9 +77,9 @@ def test_health_reports_unavailable_when_worker_startup_fails(
 ) -> None:
     """A worker that fails to start (missing ACE-Step/CUDA/weights) must
     show up as an unavailable/error state, not a silent null."""
-    monkeypatch.setenv("BARD_PROJECTS_DIR", str(tmp_path / "projects"))
-    monkeypatch.setenv("BARD_DB_PATH", str(tmp_path / "bard.db"))
-    monkeypatch.setenv("BARD_WORKER", "mock")
+    monkeypatch.setenv("LYRE_PROJECTS_DIR", str(tmp_path / "projects"))
+    monkeypatch.setenv("LYRE_DB_PATH", str(tmp_path / "lyre.db"))
+    monkeypatch.setenv("LYRE_WORKER", "mock")
 
     from server import jobs as jobs_module
 
@@ -103,9 +103,9 @@ def test_worker_republishes_status_after_recovering_from_startup_failure(
     queued job must have its published readiness/loaded-profile/
     capabilities updated to reflect that recovery -- not stay stuck
     reporting unavailable (and rejecting new jobs) forever."""
-    monkeypatch.setenv("BARD_PROJECTS_DIR", str(tmp_path / "projects"))
-    monkeypatch.setenv("BARD_DB_PATH", str(tmp_path / "bard.db"))
-    monkeypatch.setenv("BARD_WORKER", "mock")
+    monkeypatch.setenv("LYRE_PROJECTS_DIR", str(tmp_path / "projects"))
+    monkeypatch.setenv("LYRE_DB_PATH", str(tmp_path / "lyre.db"))
+    monkeypatch.setenv("LYRE_WORKER", "mock")
 
     import worker.mock_worker as mock_worker_module
 
@@ -335,9 +335,9 @@ def test_plan_patch_merge_preserves_concurrent_edits(
     the job's plan_patch is a delta merged onto the *current* on-disk plan
     when the job finishes, not a full-plan overwrite of the stale snapshot
     loaded when the job started."""
-    monkeypatch.setenv("BARD_PROJECTS_DIR", str(tmp_path / "projects"))
-    monkeypatch.setenv("BARD_DB_PATH", str(tmp_path / "bard.db"))
-    monkeypatch.setenv("BARD_WORKER", "mock")
+    monkeypatch.setenv("LYRE_PROJECTS_DIR", str(tmp_path / "projects"))
+    monkeypatch.setenv("LYRE_DB_PATH", str(tmp_path / "lyre.db"))
+    monkeypatch.setenv("LYRE_WORKER", "mock")
 
     from server import jobs as jobs_module
 
@@ -386,7 +386,7 @@ def test_project_json_updates_are_serialized_across_threads(
     active_take_id. This forces a genuine interleaving window (one writer
     is paused mid-critical-section while the other attempts its own
     update) and asserts neither update is lost."""
-    monkeypatch.setenv("BARD_PROJECTS_DIR", str(tmp_path / "projects"))
+    monkeypatch.setenv("LYRE_PROJECTS_DIR", str(tmp_path / "projects"))
 
     project = storage.create_project(title="Race")
     project_id = project["id"]
@@ -451,7 +451,7 @@ def test_plan_json_updates_are_serialized_across_threads(
     merged result back. This forces a genuine interleaving window (one
     writer is paused mid-critical-section while the other attempts its own
     update) and asserts neither update is lost."""
-    monkeypatch.setenv("BARD_PROJECTS_DIR", str(tmp_path / "projects"))
+    monkeypatch.setenv("LYRE_PROJECTS_DIR", str(tmp_path / "projects"))
 
     project = storage.create_project(title="PlanRace")
     project_id = project["id"]
@@ -520,9 +520,9 @@ def test_active_take_not_promoted_when_plan_patch_merge_fails(
     set_active_take, so a merge failure -- e.g. a lock timeout or disk
     error -- left active_take_id pointing at a take whose meta.json says
     `error`)."""
-    monkeypatch.setenv("BARD_PROJECTS_DIR", str(tmp_path / "projects"))
-    monkeypatch.setenv("BARD_DB_PATH", str(tmp_path / "bard.db"))
-    monkeypatch.setenv("BARD_WORKER", "mock")
+    monkeypatch.setenv("LYRE_PROJECTS_DIR", str(tmp_path / "projects"))
+    monkeypatch.setenv("LYRE_DB_PATH", str(tmp_path / "lyre.db"))
+    monkeypatch.setenv("LYRE_WORKER", "mock")
 
     from server import jobs as jobs_module
 
@@ -596,8 +596,8 @@ def test_worker_failure_writes_error_take_meta(
 
 
 def test_path_jail_rejects_escape(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("BARD_PROJECTS_DIR", str(tmp_path / "projects"))
-    monkeypatch.setenv("BARD_DB_PATH", str(tmp_path / "bard.db"))
+    monkeypatch.setenv("LYRE_PROJECTS_DIR", str(tmp_path / "projects"))
+    monkeypatch.setenv("LYRE_DB_PATH", str(tmp_path / "lyre.db"))
 
     with pytest.raises(storage.PathJailError):
         storage.jailed_path("..", "evil.txt")
@@ -618,9 +618,9 @@ def test_path_jail_rejects_escape_via_api(client: TestClient) -> None:
 def test_jailed_output_path_rejects_escape(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """scripts/smoke-gpu.py writes under output/, not a bare OS temp dir --
     same jail mechanism as projects/, just rooted at output_dir()."""
-    monkeypatch.setenv("BARD_PROJECTS_DIR", str(tmp_path / "projects"))
-    monkeypatch.setenv("BARD_OUTPUT_DIR", str(tmp_path / "output"))
-    monkeypatch.setenv("BARD_DB_PATH", str(tmp_path / "bard.db"))
+    monkeypatch.setenv("LYRE_PROJECTS_DIR", str(tmp_path / "projects"))
+    monkeypatch.setenv("LYRE_OUTPUT_DIR", str(tmp_path / "output"))
+    monkeypatch.setenv("LYRE_DB_PATH", str(tmp_path / "lyre.db"))
 
     with pytest.raises(storage.PathJailError):
         storage.jailed_output_path("..", "evil.txt")
@@ -640,14 +640,14 @@ def test_smoke_gpu_script_writes_under_output_dir(
     which is outside both -- this drives the real script end to end (with a
     faked run_job so it needs no GPU) and checks the file actually lands
     under output_dir()."""
-    monkeypatch.setenv("BARD_PROJECTS_DIR", str(tmp_path / "projects"))
-    monkeypatch.setenv("BARD_OUTPUT_DIR", str(tmp_path / "output"))
-    monkeypatch.setenv("BARD_DB_PATH", str(tmp_path / "bard.db"))
+    monkeypatch.setenv("LYRE_PROJECTS_DIR", str(tmp_path / "projects"))
+    monkeypatch.setenv("LYRE_OUTPUT_DIR", str(tmp_path / "output"))
+    monkeypatch.setenv("LYRE_DB_PATH", str(tmp_path / "lyre.db"))
 
     import importlib.util
 
     script_path = Path(__file__).resolve().parents[1] / "scripts" / "smoke-gpu.py"
-    spec = importlib.util.spec_from_file_location("bard_smoke_gpu_script", script_path)
+    spec = importlib.util.spec_from_file_location("smoke_gpu_script", script_path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
 
@@ -793,8 +793,8 @@ def test_resolve_source_audio_requires_a_real_source(
     """Direct unit coverage for _resolve_source_audio's source validation
     (SPEC.md sec 8.1/11) -- see test_resolve_dit_profile_studio_ops_enforcement
     for why this is tested below enqueue_job rather than through it."""
-    monkeypatch.setenv("BARD_PROJECTS_DIR", str(tmp_path / "projects"))
-    monkeypatch.setenv("BARD_DB_PATH", str(tmp_path / "bard.db"))
+    monkeypatch.setenv("LYRE_PROJECTS_DIR", str(tmp_path / "projects"))
+    monkeypatch.setenv("LYRE_DB_PATH", str(tmp_path / "lyre.db"))
 
     from server import jobs as jobs_module
 
@@ -1006,9 +1006,9 @@ def test_quality_profile_allowed_when_worker_has_not_reported(
     """No worker has published capability yet (e.g. it hasn't started) --
     enqueue must fail open rather than block the user forever; the worker's
     own guard still enforces this when the job actually runs."""
-    monkeypatch.setenv("BARD_PROJECTS_DIR", str(tmp_path / "projects"))
-    monkeypatch.setenv("BARD_DB_PATH", str(tmp_path / "bard.db"))
-    monkeypatch.setenv("BARD_WORKER", "mock")
+    monkeypatch.setenv("LYRE_PROJECTS_DIR", str(tmp_path / "projects"))
+    monkeypatch.setenv("LYRE_DB_PATH", str(tmp_path / "lyre.db"))
+    monkeypatch.setenv("LYRE_WORKER", "mock")
 
     from server import jobs as jobs_module
 
@@ -1025,7 +1025,7 @@ def test_worker_lease_is_a_cross_process_singleton(
     both hold the lease at once -- a live rival is refused, but a lease
     whose heartbeat has gone stale (crashed/killed owner) can be taken
     over, and the original owner can no longer renew it once that happens."""
-    monkeypatch.setenv("BARD_DB_PATH", str(tmp_path / "bard.db"))
+    monkeypatch.setenv("LYRE_DB_PATH", str(tmp_path / "lyre.db"))
 
     from server import jobs as jobs_module
 
@@ -1058,9 +1058,9 @@ def test_worker_status_and_capability_read_as_stale_after_heartbeat_gap(
     get_worker_status) and enqueue validation (via _check_worker_capability)
     must both treat a stale publish as unknown/unavailable rather than
     repeating a long-dead process's last report (SPEC.md sec 4.3 / sec 8)."""
-    monkeypatch.setenv("BARD_PROJECTS_DIR", str(tmp_path / "projects"))
-    monkeypatch.setenv("BARD_DB_PATH", str(tmp_path / "bard.db"))
-    monkeypatch.setenv("BARD_WORKER", "mock")
+    monkeypatch.setenv("LYRE_PROJECTS_DIR", str(tmp_path / "projects"))
+    monkeypatch.setenv("LYRE_DB_PATH", str(tmp_path / "lyre.db"))
+    monkeypatch.setenv("LYRE_WORKER", "mock")
 
     from server import jobs as jobs_module
 
@@ -1096,9 +1096,9 @@ def test_reclaim_stale_running_job_requeues_then_errors(
     be recoverable, not stuck forever. A stale heartbeat requeues it for a
     retry; past `MAX_ATTEMPTS` it's marked `error` instead of retried
     forever."""
-    monkeypatch.setenv("BARD_PROJECTS_DIR", str(tmp_path / "projects"))
-    monkeypatch.setenv("BARD_DB_PATH", str(tmp_path / "bard.db"))
-    monkeypatch.setenv("BARD_WORKER", "mock")
+    monkeypatch.setenv("LYRE_PROJECTS_DIR", str(tmp_path / "projects"))
+    monkeypatch.setenv("LYRE_DB_PATH", str(tmp_path / "lyre.db"))
+    monkeypatch.setenv("LYRE_WORKER", "mock")
 
     from server import jobs as jobs_module
 

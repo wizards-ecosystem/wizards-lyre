@@ -40,12 +40,12 @@ def lyre_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     mocked worker backend. Returns the tmp root, for tests that need to reach
     the same paths directly.
     """
-    monkeypatch.setenv("BARD_PROJECTS_DIR", str(tmp_path / "projects"))
-    monkeypatch.setenv("BARD_DB_PATH", str(tmp_path / "bard.db"))
+    monkeypatch.setenv("LYRE_PROJECTS_DIR", str(tmp_path / "projects"))
+    monkeypatch.setenv("LYRE_DB_PATH", str(tmp_path / "lyre.db"))
     # Tests always use the mocked worker; the real acestep_worker is
     # production's default (see server/jobs.py) and is exercised only by the
     # manual, non-pytest scripts/smoke-gpu.py.
-    monkeypatch.setenv("BARD_WORKER", "mock")
+    monkeypatch.setenv("LYRE_WORKER", "mock")
     return tmp_path
 
 

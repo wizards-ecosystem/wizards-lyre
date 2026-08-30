@@ -75,7 +75,7 @@ Use `./scripts/lyre paths` to show the exact locations. `vendor/`, models, envir
 and generated music are intentionally ignored by Git. The `ACE_STEP_REVISION` file records the
 pinned upstream source revision used by the installer.
 
-For a GPU-free UI/API development session, set `BARD_WORKER=mock` before starting
+For a GPU-free UI/API development session, set `LYRE_WORKER=mock` before starting
 `./scripts/lyre worker`; it writes silent WAVs and never loads CUDA.
 
 ## Run the server + worker
@@ -89,16 +89,16 @@ and a long generation never blocks a request.
 ./scripts/lyre worker  # terminal 2: claims queued jobs one at a time
 ```
 
-`server.app` binds `127.0.0.1:8421` by default; override with `BARD_PORT`. If `web/dist` exists,
+`server.app` binds `127.0.0.1:8421` by default; override with `LYRE_PORT`. If `web/dist` exists,
 it serves the built SPA at `/`; otherwise `/` returns a hint to build or run the frontend dev
 server. Jobs posted to `/api/projects/{id}/jobs` sit as `queued` until `worker.run_worker` (or
-`BARD_WORKER=mock` for a GPU-free worker) picks them up.
+`LYRE_WORKER=mock` for a GPU-free worker) picks them up.
 
 ## Frontend
 
 ```bash
 ./scripts/lyre build-web  # writes web/dist, served by FastAPI
-./scripts/lyre web        # Vite dev server with a /api proxy to BARD_PORT
+./scripts/lyre web        # Vite dev server with a /api proxy to LYRE_PORT
 ```
 
 ## Tests
@@ -107,7 +107,7 @@ server. Jobs posted to `/api/projects/{id}/jobs` sit as `queued` until `worker.r
 ./scripts/lyre test
 ```
 
-Default pytest must not load CUDA or ACE-Step weights (it pins `BARD_WORKER=mock`).
+Default pytest must not load CUDA or ACE-Step weights (it pins `LYRE_WORKER=mock`).
 
 Frontend regression tests: `./scripts/lyre test-web` (Vitest + React Testing
 Library against a mocked backend, no FastAPI/CUDA/ACE-Step required) — see

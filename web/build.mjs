@@ -13,7 +13,7 @@ import { build } from "vite";
 import react from "@vitejs/plugin-react";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
-const bardPort = process.env.BARD_PORT ?? "8421";
+const lyrePort = process.env.LYRE_PORT ?? "8421";
 
 await build({
   root,
@@ -22,7 +22,7 @@ await build({
   server: {
     proxy: {
       "/api": {
-        target: `http://127.0.0.1:${bardPort}`,
+        target: `http://127.0.0.1:${lyrePort}`,
         changeOrigin: true,
       },
     },

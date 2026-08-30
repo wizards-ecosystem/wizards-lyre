@@ -183,9 +183,9 @@ def test_worker_status_reflects_studio_ops_swap_before_job_finishes(
     whole extract job completes (reviewer-flagged: publishing only at job
     end makes a "loading base model..." UI state indistinguishable from
     ordinary in-progress extraction for the job's entire duration)."""
-    monkeypatch.setenv("BARD_PROJECTS_DIR", str(tmp_path / "projects"))
-    monkeypatch.setenv("BARD_DB_PATH", str(tmp_path / "bard.db"))
-    monkeypatch.setenv("BARD_WORKER", "mock")
+    monkeypatch.setenv("LYRE_PROJECTS_DIR", str(tmp_path / "projects"))
+    monkeypatch.setenv("LYRE_DB_PATH", str(tmp_path / "lyre.db"))
+    monkeypatch.setenv("LYRE_WORKER", "mock")
 
     jobs_module.init_db()
     project = storage.create_project(title="Swap Publish Test")

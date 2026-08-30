@@ -1,7 +1,7 @@
 """FastAPI app: health, projects, plan, takes, jobs. No CUDA here.
 
 See SPEC.md sec 8 for the HTTP API and sec 14 for phase 1 definition of done.
-Binds 127.0.0.1 only; port defaults to 8421, overridable via BARD_PORT.
+Binds 127.0.0.1 only; port defaults to 8421, overridable via LYRE_PORT.
 """
 
 from __future__ import annotations
@@ -160,7 +160,7 @@ def _value_error_handler(request, exc: ValueError):  # noqa: ANN001, ARG001
 
 @app.get("/api/health")
 def health() -> dict[str, Any]:
-    backend = os.environ.get("BARD_WORKER", "acestep")
+    backend = os.environ.get("LYRE_WORKER", "acestep")
     status = jobs.get_worker_status()
     if status is None:
         return {
@@ -381,7 +381,7 @@ else:
 def main() -> None:
     import uvicorn
 
-    uvicorn.run(app, host=config.HOST, port=config.bard_port())
+    uvicorn.run(app, host=config.HOST, port=config.lyre_port())
 
 
 if __name__ == "__main__":

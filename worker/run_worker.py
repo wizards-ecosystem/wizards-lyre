@@ -6,8 +6,8 @@ generation never blocks HTTP and a native GPU crash never touches it:
     python -m worker.run_worker
 
 Polls `server.jobs`' SQLite queue for `queued` rows, claims and runs one at
-a time against the backend selected by `BARD_WORKER` (default: `acestep`;
-set `BARD_WORKER=mock` for local dev/tests without a GPU). Never imports
+a time against the backend selected by `LYRE_WORKER` (default: `acestep`;
+set `LYRE_WORKER=mock` for local dev/tests without a GPU). Never imports
 FastAPI or binds a port (SPEC.md sec 10 point 4).
 
 On startup and on every poll, it also reclaims jobs a previous, now-dead

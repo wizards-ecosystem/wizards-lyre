@@ -1,7 +1,7 @@
 """Real ACE-Step 1.5 worker (SPEC.md sec 4 and sec 10).
 
 This is the production job backend (`server.jobs` selects it whenever
-`BARD_WORKER` is unset or `acestep`). `worker.mock_worker` is the test/local
+`LYRE_WORKER` is unset or `acestep`). `worker.mock_worker` is the test/local
 -dev-only stand-in -- see SPEC.md sec 11.
 
 `acestep` and CUDA are imported lazily, inside functions, never at module
@@ -232,9 +232,9 @@ LM_BACKEND = "pt"
 # directory. That keeps the model store in one portable Lyre checkout even
 # if the worker is launched through an absolute module path elsewhere.
 CHECKPOINTS_ROOT = Path(
-    os.environ.get("BARD_CHECKPOINTS_DIR", Path(__file__).resolve().parent.parent / "checkpoints")
+    os.environ.get("LYRE_CHECKPOINTS_DIR", Path(__file__).resolve().parent.parent / "checkpoints")
 ).resolve()
-DEVICE = os.environ.get("BARD_DEVICE", "cuda")
+DEVICE = os.environ.get("LYRE_DEVICE", "cuda")
 
 # SPEC.md sec 4.1: XL turbo (`quality`) needs CPU offload on a 16 GB card;
 # every other profile fits without it.
@@ -310,7 +310,7 @@ def _import_acestep():
     except ImportError as exc:
         raise WorkerUnavailable(
             "acestep is not installed in this environment. Install ACE-Step 1.5 "
-            "and download weights (SPEC.md sec 4 and 13), or set BARD_WORKER=mock "
+            "and download weights (SPEC.md sec 4 and 13), or set LYRE_WORKER=mock "
             "for local dev/tests without a GPU."
         ) from exc
     return AceStepHandler, GenerationParams, GenerationConfig, LLMHandler, generate_music, create_sample
@@ -331,7 +331,7 @@ def _import_lora_training():
         raise WorkerUnavailable(
             "acestep's LoRA training pipeline (acestep.training.*) is not installed in this "
             "environment. Install ACE-Step 1.5 with its training dependencies (SPEC.md sec "
-            "4.4/13), or set BARD_WORKER=mock for local dev/tests without a GPU."
+            "4.4/13), or set LYRE_WORKER=mock for local dev/tests without a GPU."
         ) from exc
     return DatasetBuilder, LoRAConfig, TrainingConfig, LoRATrainer
 
@@ -346,7 +346,7 @@ def _api_call(step: str, fn, *args, **kwargs):
     except (TypeError, AttributeError) as exc:
         raise WorkerUnavailable(
             f"acestep API mismatch in {step}: {exc}. Update worker/acestep_worker.py to "
-            "match the installed acestep version, or set BARD_WORKER=mock."
+            "match the installed acestep version, or set LYRE_WORKER=mock."
         ) from exc
 
 
@@ -363,7 +363,7 @@ def _api_method_call(step: str, obj: Any, method_name: str, *args, **kwargs):
     except (TypeError, AttributeError) as exc:
         raise WorkerUnavailable(
             f"acestep API mismatch in {step}: {exc}. Update worker/acestep_worker.py to "
-            "match the installed acestep version, or set BARD_WORKER=mock."
+            "match the installed acestep version, or set LYRE_WORKER=mock."
         ) from exc
 
 
@@ -409,13 +409,13 @@ def _checkpoints_project_root() -> Path:
     `CHECKPOINTS_ROOT`'s *parent* for that to land on `CHECKPOINTS_ROOT`
     itself -- which only lines up if `CHECKPOINTS_ROOT`'s own directory name
     is literally `checkpoints` (true for the SPEC-locked default; required of
-    any `BARD_CHECKPOINTS_DIR` override too, since ACE-Step's `checkpoints/`
+    any `LYRE_CHECKPOINTS_DIR` override too, since ACE-Step's `checkpoints/`
     segment is fixed, not something this adapter can rename around). Raises
     `WorkerUnavailable` instead of silently resolving to the wrong directory
     (exactly the bug the reviewer flagged)."""
     if CHECKPOINTS_ROOT.name != "checkpoints":
         raise WorkerUnavailable(
-            f"BARD_CHECKPOINTS_DIR ('{CHECKPOINTS_ROOT}') must be a directory named "
+            f"LYRE_CHECKPOINTS_DIR ('{CHECKPOINTS_ROOT}') must be a directory named "
             "'checkpoints': AceStepHandler.initialize_service resolves DiT checkpoints "
             "at <project_root>/checkpoints/<config_path>, and this adapter derives "
             "project_root as CHECKPOINTS_ROOT's parent so that lands on the real "
@@ -1269,7 +1269,7 @@ def train_lora(
                 raise WorkerUnavailable(
                     f"acestep API mismatch in DatasetBuilder.metadata: {exc}. Update "
                     "worker/acestep_worker.py to match the installed acestep version, or set "
-                    "BARD_WORKER=mock."
+                    "LYRE_WORKER=mock."
                 ) from exc
 
             samples, scan_status = _api_method_call(

@@ -11,28 +11,28 @@ DEFAULT_PORT = 8421
 HOST = "127.0.0.1"
 
 
-def bard_port() -> int:
-    return int(os.environ.get("BARD_PORT", DEFAULT_PORT))
+def lyre_port() -> int:
+    return int(os.environ.get("LYRE_PORT", DEFAULT_PORT))
 
 
 def projects_dir() -> Path:
-    raw = os.environ.get("BARD_PROJECTS_DIR")
+    raw = os.environ.get("LYRE_PROJECTS_DIR")
     path = Path(raw) if raw else REPO_ROOT / "projects"
     path.mkdir(parents=True, exist_ok=True)
     return path.resolve()
 
 
 def output_dir() -> Path:
-    raw = os.environ.get("BARD_OUTPUT_DIR")
+    raw = os.environ.get("LYRE_OUTPUT_DIR")
     path = Path(raw) if raw else REPO_ROOT / "output"
     path.mkdir(parents=True, exist_ok=True)
     return path.resolve()
 
 
 def db_path() -> Path:
-    raw = os.environ.get("BARD_DB_PATH")
+    raw = os.environ.get("LYRE_DB_PATH")
     if raw:
         path = Path(raw)
         path.parent.mkdir(parents=True, exist_ok=True)
         return path.resolve()
-    return projects_dir() / "bard.db"
+    return projects_dir() / "lyre.db"

@@ -114,7 +114,7 @@ Three processes conceptually:
 
 IPC: worker pulls jobs from SQLite (`queued` → `running` → `done` | `error`) or a localhost queue endpoint. Pick one and stick to it. SQLite is enough.
 
-Port: **8421** (Conclave dashboard is 8420). Override with `BARD_PORT`.
+Port: **8421** (Conclave dashboard is 8420). Override with `LYRE_PORT`.
 
 ---
 
@@ -332,7 +332,7 @@ Do not skip ahead. Do not open a “add Lyria” task.
 
 ### Phase 1 — Scaffold + generate
 
-FastAPI health, SQLite jobs, React shell, mocked worker in tests, real worker that can run turbo `text2music`, play/download, take history. README: venv, `acestep-download` for turbo + 1.7B, `BARD_PORT`.
+FastAPI health, SQLite jobs, React shell, mocked worker in tests, real worker that can run turbo `text2music`, play/download, take history. README: venv, `acestep-download` for turbo + 1.7B, `LYRE_PORT`.
 
 ### Phase 2 — Studio loop
 
