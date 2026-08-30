@@ -7,13 +7,11 @@ Mirrors tests/test_cover_flow.py's fixture/harness setup.
 
 from __future__ import annotations
 
-
 import pytest
 from fastapi.testclient import TestClient
+from helpers import wait_for_job
 
 from server import storage
-
-from helpers import wait_for_job
 
 
 def _generate_take(client: TestClient, project_id: str) -> str:

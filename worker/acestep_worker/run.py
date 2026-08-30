@@ -7,9 +7,10 @@ repaint, extract, lego, and complete.
 from __future__ import annotations
 
 import shutil
-from datetime import datetime, timezone
+from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from worker.acestep_worker.api import _api_call, _import_acestep
 from worker.acestep_worker.errors import WorkerUnavailable
@@ -24,9 +25,9 @@ from worker.acestep_worker.results import (
 )
 from worker.acestep_worker.settings import (
     _LOCK,
-    LORA_BASE_DIT_PROFILE,
     GENERATION_GUIDANCE_SCALE,
     GENERATION_STEPS,
+    LORA_BASE_DIT_PROFILE,
     TASK_TYPE_BY_ACTION,
     TRACK_INSTRUCTION_ACTIONS,
 )
@@ -160,12 +161,14 @@ def run_job(
             seed=seed,
             src_audio=job.get("src_audio"),
             audio_cover_strength=(
-                1.0
-                if job.get("audio_cover_strength") is None
-                else job.get("audio_cover_strength")
+                1.0 if job.get("audio_cover_strength") is None else job.get("audio_cover_strength")
             ),
-            repainting_start=job.get("repainting_start") if job.get("repainting_start") is not None else 0.0,
-            repainting_end=job.get("repainting_end") if job.get("repainting_end") is not None else -1,
+            repainting_start=job.get("repainting_start")
+            if job.get("repainting_start") is not None
+            else 0.0,
+            repainting_end=job.get("repainting_end")
+            if job.get("repainting_end") is not None
+            else -1,
             # extract/lego/complete's track selection goes through the
             # task-specific `instruction` field, not a `track_name` kwarg
             # (GenerationParams has no such field -- passing it raised
@@ -265,7 +268,11 @@ def run_job(
     vocal_language = _extra("vocal_language", effective_plan.get("vocal_language"))
     timesignature = _extra("timesignature", effective_plan.get("timesignature"))
     score = _quality_score(
-        handler, extra_lookup=_extra, lyrics=lyrics, vocal_language=vocal_language, dit_profile=dit_profile
+        handler,
+        extra_lookup=_extra,
+        lyrics=lyrics,
+        vocal_language=vocal_language,
+        dit_profile=dit_profile,
     )
     lrc_text = _lyric_timestamps(
         handler,
@@ -322,7 +329,7 @@ def run_job(
         "lyrics": lyrics,
         "bpm": bpm,
         "keyscale": keyscale,
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(UTC).isoformat(),
         # ACE-Step 1.5's DiT Lyrics Alignment Score (see `_quality_score`
         # above for exactly what was checked upstream and why this is a
         # second handler call rather than a `GenerationResult` field). None

@@ -111,7 +111,9 @@ def test_source_does_not_reference_forbidden_clients() -> None:
     around a forbidden vendor's API, or a stray `import suno_client`.
     """
     pattern = re.compile(
-        r"(?<![A-Za-z])(" + "|".join(re.escape(name) for name in FORBIDDEN_KEYWORDS) + r")(?![A-Za-z])",
+        r"(?<![A-Za-z])("
+        + "|".join(re.escape(name) for name in FORBIDDEN_KEYWORDS)
+        + r")(?![A-Za-z])",
         re.IGNORECASE,
     )
     hits: list[str] = []

@@ -16,10 +16,9 @@ import json
 import zipfile
 
 from fastapi.testclient import TestClient
+from helpers import wait_for_job
 
 from server import storage
-
-from helpers import wait_for_job
 
 
 def test_export_with_no_takes_still_200s_with_minimal_zip(client: TestClient) -> None:
@@ -249,7 +248,9 @@ def test_export_sanitizes_path_traversing_track_name(client: TestClient) -> None
     # confirm the raw malicious value really was persisted verbatim on the
     # take -- the guard has to live in the export path, not upstream of it
     take = next(
-        t for t in client.get(f"/api/projects/{project_id}").json()["takes"] if t["id"] == stem_take_id
+        t
+        for t in client.get(f"/api/projects/{project_id}").json()["takes"]
+        if t["id"] == stem_take_id
     )
     assert take["track_name"] == malicious_track_name
 

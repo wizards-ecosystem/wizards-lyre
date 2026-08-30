@@ -12,7 +12,6 @@ import threading
 from pathlib import Path
 from typing import Any
 
-
 # One GPU occupant: one loaded DiT + one LM, jobs serialize (SPEC.md sec 4.3).
 _LOCK = threading.Lock()
 # lora_id/lora_adapter_path track what's currently loaded onto `handler` via

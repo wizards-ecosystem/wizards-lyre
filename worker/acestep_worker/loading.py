@@ -81,9 +81,9 @@ def _log_cuda_status() -> str:
         free_bytes, total_bytes = torch.cuda.mem_get_info(0)
         return (
             f"CUDA detect: {device_count} device(s), using '{name}'; VRAM "
-            f"{free_bytes / (1024 ** 3):.1f} GiB free / {total_bytes / (1024 ** 3):.1f} GiB total"
+            f"{free_bytes / (1024**3):.1f} GiB free / {total_bytes / (1024**3):.1f} GiB total"
         )
-    except Exception as exc:  # noqa: BLE001 - diagnostic only, must never block startup
+    except Exception as exc:
         return f"CUDA detect: error while querying CUDA/VRAM: {exc}"
 
 
@@ -108,7 +108,7 @@ def initialize_worker() -> tuple[bool, str]:
     try:
         with _LOCK:
             _ensure_loaded("iterate")
-    except Exception as exc:  # noqa: BLE001 - see below
+    except Exception as exc:
         # `_api_call`/`_api_method_call` only convert signature mismatches
         # (TypeError/AttributeError) to WorkerUnavailable; ordinary
         # ACE-Step/CUDA failures during a real load -- missing checkpoint

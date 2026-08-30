@@ -149,7 +149,11 @@ _INVALID_PLANS: list[tuple[str, Any, str]] = [
     ("sections", [{"name": 5, "start_sec": 0, "end_sec": 8}], "sections[0].name"),
     ("sections", [{"name": "intro", "start_sec": "0", "end_sec": 8}], "sections[0].start_sec"),
     ("sections", [{"name": "intro", "start_sec": 0}], "sections[0].end_sec"),
-    ("sections", [{"name": "intro", "start_sec": 0, "end_sec": 8, "lyrics": ["x"]}], "sections[0].lyrics"),
+    (
+        "sections",
+        [{"name": "intro", "start_sec": 0, "end_sec": 8, "lyrics": ["x"]}],
+        "sections[0].lyrics",
+    ),
 ]
 
 

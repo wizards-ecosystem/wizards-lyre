@@ -7,7 +7,8 @@ plan/meta shapes (SPEC.md sec 7.2/7.3).
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from worker.acestep_worker.api import _api_call
 from worker.acestep_worker.settings import _LOCK, GENERATION_STEPS
@@ -146,7 +147,7 @@ def _quality_score(
             return None
         dit_score = _result_field(score_result, "dit_score", None)
         return float(dit_score) if dit_score is not None else None
-    except Exception:  # noqa: BLE001 - scoring is optional, never fails the take
+    except Exception:
         return None
 
 
@@ -218,5 +219,5 @@ def _lyric_timestamps(
         if not lrc_text or not str(lrc_text).strip():
             return None
         return str(lrc_text)
-    except Exception:  # noqa: BLE001 - timestamps are optional, never fail the take
+    except Exception:
         return None

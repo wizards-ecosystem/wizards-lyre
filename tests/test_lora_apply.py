@@ -16,11 +16,10 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from helpers import wait_for_job
 
 from server import jobs as jobs_module
 from server import storage
-
-from helpers import wait_for_job
 
 MIN_LORA_SOURCE_TAKES = 8
 
@@ -205,21 +204,21 @@ def test_resolve_lora_rejects_missing_failed_or_unfinished(
     with pytest.raises(jobs_module.JobError):
         jobs_module._resolve_lora(project_id, "does-not-exist")
 
-    failed_id, failed_dir = storage.allocate_lora_dir(project_id)
+    failed_id, _ = storage.allocate_lora_dir(project_id)
     storage.write_lora_meta(
         project_id, failed_id, {"id": failed_id, "status": None, "error": "training blew up"}
     )
     with pytest.raises(jobs_module.JobError):
         jobs_module._resolve_lora(project_id, failed_id)
 
-    unfinished_id, unfinished_dir = storage.allocate_lora_dir(project_id)
+    unfinished_id, _ = storage.allocate_lora_dir(project_id)
     storage.write_lora_meta(
         project_id, unfinished_id, {"id": unfinished_id, "status": None, "error": None}
     )
     with pytest.raises(jobs_module.JobError):
         jobs_module._resolve_lora(project_id, unfinished_id)
 
-    ok_id, ok_dir = storage.allocate_lora_dir(project_id)
+    ok_id, _ = storage.allocate_lora_dir(project_id)
     storage.write_lora_meta(
         project_id, ok_id, {"id": ok_id, "status": "epoch 10/10", "error": None}
     )

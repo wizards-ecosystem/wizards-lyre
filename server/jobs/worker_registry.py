@@ -9,13 +9,13 @@ it must never import acestep (SPEC.md sec 10 point 4).
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from contextlib import closing
-from typing import Any, Callable
+from typing import Any
 
 from server.jobs.db import _connect, _is_stale, _now
 from server.jobs.errors import JobError
 from worker import mock_worker
-
 
 # SPEC.md sec 4.3: one GPU occupant. worker/run_worker.py must hold this
 # lease before it initializes ACE-Step or starts polling the job queue, so
@@ -55,9 +55,7 @@ def resolve_worker_module():
     raise JobError(f"unknown LYRE_WORKER backend: {backend}")
 
 
-def acquire_worker_lease(
-    owner_id: str, stale_after: float = WORKER_LEASE_STALE_AFTER_SEC
-) -> bool:
+def acquire_worker_lease(owner_id: str, stale_after: float = WORKER_LEASE_STALE_AFTER_SEC) -> bool:
     """Atomically claim the single cross-process worker lease (SPEC.md sec
     4.3: one GPU occupant / serialized jobs). Succeeds if no lease is held,
     we already hold it, or the current holder's heartbeat has gone stale
@@ -106,9 +104,7 @@ def release_worker_lease(owner_id: str) -> None:
     out WORKER_LEASE_STALE_AFTER_SEC. A no-op if we don't currently hold it
     (e.g. it already went stale and was taken over)."""
     with closing(_connect()) as conn:
-        conn.execute(
-            "DELETE FROM worker_lease WHERE id = 1 AND owner_id = ?", (owner_id,)
-        )
+        conn.execute("DELETE FROM worker_lease WHERE id = 1 AND owner_id = ?", (owner_id,))
         conn.commit()
 
 
@@ -185,7 +181,10 @@ def get_worker_status(stale_after: float = WORKER_STATUS_STALE_AFTER_SEC) -> dic
     if _is_stale(row["updated_at"], stale_after):
         return {
             "ready": False,
-            "message": f"worker heartbeat stale since {row['updated_at']} -- is worker.run_worker still running?",
+            "message": (
+                f"worker heartbeat stale since {row['updated_at']} "
+                "-- is worker.run_worker still running?"
+            ),
             "loaded_dit_profile": None,
             "updated_at": row["updated_at"],
         }

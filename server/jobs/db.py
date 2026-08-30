@@ -9,13 +9,13 @@ from __future__ import annotations
 
 import sqlite3
 from contextlib import closing
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from server import config
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _is_stale(reference: str | None, stale_after: float) -> bool:
@@ -28,7 +28,7 @@ def _is_stale(reference: str | None, stale_after: float) -> bool:
         ref_ts = datetime.fromisoformat(reference).timestamp()
     except ValueError:
         return True
-    return ref_ts < datetime.now(timezone.utc).timestamp() - stale_after
+    return ref_ts < datetime.now(UTC).timestamp() - stale_after
 
 
 def _connect() -> sqlite3.Connection:
@@ -139,7 +139,9 @@ def _row_to_dict(row: sqlite3.Row) -> dict:
         "dit_profile": row["dit_profile"],
         "status": row["status"],
         "take_id": row["take_id"],
-        "lora_id": row["lora_id"] if "lora_id" in row.keys() else None,
+        # sqlite3.Row's __contains__ tests values, not column names, so the
+        # explicit .keys() is required here (SIM118 does not apply).
+        "lora_id": row["lora_id"] if "lora_id" in row.keys() else None,  # noqa: SIM118
         "error": row["error"],
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],

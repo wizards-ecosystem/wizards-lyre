@@ -11,7 +11,6 @@ from typing import Any
 from server import storage
 from server.jobs.errors import JobError
 
-
 # SPEC.md sec 12 (phase order): phase 1 is generate; phase 2 adds cover and
 # repaint (now that the web UI has a waveform with drag-to-select region
 # feeding repainting_start/repainting_end). Phase 3 adds extract, lego, and
@@ -170,7 +169,8 @@ def _resolve_lora_sources(project_id: str, body: dict[str, Any]) -> list[str]:
         source_take_ids = body.get("source_take_ids") or []
         raise JobError(
             f"action 'train_lora' requires at least {MIN_LORA_SOURCE_TAKES} distinct "
-            f"source_take_ids (got {len(distinct_ids)} distinct of {len(source_take_ids)} submitted)"
+            f"source_take_ids (got {len(distinct_ids)} distinct "
+            f"of {len(source_take_ids)} submitted)"
         )
     paths: list[str] = []
     for take_id in distinct_ids:

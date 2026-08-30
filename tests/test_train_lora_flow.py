@@ -16,12 +16,11 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from helpers import wait_for_job
 
 from server import jobs as jobs_module
 from server import storage
 from worker import mock_worker
-
-from helpers import wait_for_job
 
 MIN_LORA_SOURCES = 8
 
@@ -197,7 +196,9 @@ def test_jobs_list_filters_by_project_and_action(client: TestClient) -> None:
     assert {j["project_id"] for j in everything} == {project_a["id"], project_b["id"]}
 
 
-def test_queued_train_lora_job_is_recoverable_via_filtered_jobs_list(api_client: TestClient) -> None:
+def test_queued_train_lora_job_is_recoverable_via_filtered_jobs_list(
+    api_client: TestClient,
+) -> None:
     """Recovery contract after a mid-training page refresh: the UI finds the
     project's still-active training via GET /api/jobs?project_id&action=
     train_lora. No worker thread drains the queue here, so the job stays
@@ -238,10 +239,7 @@ def test_queued_train_lora_job_is_recoverable_via_filtered_jobs_list(api_client:
     assert jobs[0]["lora_id"] is None
     assert jobs[0]["error"] is None
     # ...and it is still visible in the unfiltered recent listing too.
-    assert any(
-        j["id"] == queued["id"]
-        for j in api_client.get("/api/jobs").json()
-    )
+    assert any(j["id"] == queued["id"] for j in api_client.get("/api/jobs").json())
     # The UI's recovery lookup narrows further to still-active jobs
     # (queued/running, returned complete -- no recency truncation).
     active = api_client.get(
@@ -251,7 +249,9 @@ def test_queued_train_lora_job_is_recoverable_via_filtered_jobs_list(api_client:
     assert [j["id"] for j in active] == [queued["id"]]
 
 
-def test_active_filter_recovers_a_running_job_buried_beyond_the_limit(api_client: TestClient) -> None:
+def test_active_filter_recovers_a_running_job_buried_beyond_the_limit(
+    api_client: TestClient,
+) -> None:
     """The recovery must not depend on the recency LIMIT. An older running
     train_lora job with more than `limit` newer train_lora rows behind it
     (multiple tabs / direct API use can pile these up while the GPU is

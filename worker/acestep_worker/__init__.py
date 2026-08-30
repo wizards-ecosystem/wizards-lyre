@@ -210,6 +210,7 @@ from worker.acestep_worker.loading import (
 )
 from worker.acestep_worker.lora import train_lora
 from worker.acestep_worker.run import run_job
+
 # CHECKPOINTS_ROOT is deliberately *not* re-exported here. It is the one
 # setting that gets repointed (LYRE_CHECKPOINTS_DIR, and tests), and a second
 # binding at package level would silently go stale against settings'. Read it
@@ -242,9 +243,9 @@ __all__ = [
     "MIN_LORA_SOURCES",
     "TASK_TYPE_BY_ACTION",
     "TRACK_INSTRUCTION_ACTIONS",
-    "WorkerUnavailable",
     "_LOCK",
     "_STATE",
+    "WorkerUnavailable",
     "_checkpoints_project_root",
     "_ensure_loaded",
     "_ensure_lora_adapter",

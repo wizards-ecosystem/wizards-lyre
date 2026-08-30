@@ -13,10 +13,9 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from helpers import wait_for_job
 
 from server import storage
-
-from helpers import wait_for_job
 
 
 def _make_take(client: TestClient) -> tuple[str, str]:
@@ -184,9 +183,7 @@ def test_legacy_take_missing_favorite_and_notes_gets_defaults(
 
     # Patching just one field on a legacy take must not surface the other as
     # missing -- it should come back as its normalized default.
-    resp = client.patch(
-        f"/api/projects/{project_id}/takes/{take_id}", json={"favorite": True}
-    )
+    resp = client.patch(f"/api/projects/{project_id}/takes/{take_id}", json={"favorite": True})
     assert resp.status_code == 200
     body = resp.json()
     assert body["favorite"] is True

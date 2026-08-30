@@ -13,12 +13,10 @@ exercise the endpoint itself end to end.
 
 from __future__ import annotations
 
-
 from fastapi.testclient import TestClient
+from helpers import wait_for_job
 
 from server import storage
-
-from helpers import wait_for_job
 
 
 def _make_take(client: TestClient) -> tuple[str, str]:

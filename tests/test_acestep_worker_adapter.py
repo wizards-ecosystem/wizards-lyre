@@ -44,7 +44,6 @@ import pytest
 
 from worker import acestep_worker
 
-
 _RESET_STATE = {
     "dit_profile": None,
     "handler": None,
@@ -217,9 +216,7 @@ def _install_fake_acestep(
             # section). Used by _ensure_lora_adapter. Returns a plain status
             # string, not a (message, success) tuple -- a "❌"-prefixed
             # string is ACE-Step's real way of reporting a failure here.
-            log.append(
-                ("handler.add_lora", {"lora_path": lora_path, "adapter_name": adapter_name})
-            )
+            log.append(("handler.add_lora", {"lora_path": lora_path, "adapter_name": adapter_name}))
             return lora_status_overrides.get("add_lora", f"✅ added lora adapter {adapter_name}")
 
         def set_active_lora_adapter(self, *, adapter_name: str) -> str:
@@ -443,7 +440,10 @@ def test_run_job_matches_installed_api_contract(
     # must land on Lyre's actual weights directory -- not
     # checkpoints/checkpoints/acestep-v15-turbo, which is what passing
     # CHECKPOINTS_ROOT itself as project_root used to produce.
-    assert kwargs["resolved_checkpoint_dir"] == acestep_worker.settings.CHECKPOINTS_ROOT / "acestep-v15-turbo"
+    assert (
+        kwargs["resolved_checkpoint_dir"]
+        == acestep_worker.settings.CHECKPOINTS_ROOT / "acestep-v15-turbo"
+    )
     assert kwargs["project_root"] == str(acestep_worker.settings.CHECKPOINTS_ROOT.parent)
     assert kwargs["config_path"] == "acestep-v15-turbo"
     assert kwargs["device"] == acestep_worker.DEVICE
@@ -710,8 +710,9 @@ def test_checkpoints_project_root_matches_ace_step_resolution(
     monkeypatch.setattr(acestep_worker.settings, "CHECKPOINTS_ROOT", Path("some/where/checkpoints"))
     project_root = acestep_worker._checkpoints_project_root()
     assert project_root == Path("some/where")
-    assert project_root / "checkpoints" / "acestep-v15-turbo" == acestep_worker.settings.CHECKPOINTS_ROOT / (
-        "acestep-v15-turbo"
+    assert (
+        project_root / "checkpoints" / "acestep-v15-turbo"
+        == acestep_worker.settings.CHECKPOINTS_ROOT / ("acestep-v15-turbo")
     )
 
     monkeypatch.setattr(acestep_worker.settings, "CHECKPOINTS_ROOT", Path("some/where/weights"))
@@ -719,7 +720,9 @@ def test_checkpoints_project_root_matches_ace_step_resolution(
         acestep_worker._checkpoints_project_root()
 
 
-def test_fixed_seed_disables_use_random_seed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_fixed_seed_disables_use_random_seed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A positive job seed must actually be reproducible: GenerationParams.seed
     alone is not enough upstream -- GenerationConfig.use_random_seed defaults
     True and overrides it unless explicitly turned off (reviewer-flagged:
@@ -1031,7 +1034,9 @@ def test_track_name_maps_to_instruction_for_studio_ops(
         assert params.instruction == "vocals", action
 
 
-def _lora_job(lora_id: str | None, lora_adapter_path: str | None, dit_profile: str = "studio_ops") -> dict:
+def _lora_job(
+    lora_id: str | None, lora_adapter_path: str | None, dit_profile: str = "studio_ops"
+) -> dict:
     return {
         "action": "generate",
         "dit_profile": dit_profile,
@@ -1197,9 +1202,7 @@ def test_run_job_rejects_lora_against_a_non_studio_ops_profile(
 
     with pytest.raises(acestep_worker.WorkerUnavailable, match="studio_ops"):
         acestep_worker.run_job(
-            job=_lora_job(
-                "lora1", "/checkpoints/loras/lora1/adapter/final", dit_profile="iterate"
-            ),
+            job=_lora_job("lora1", "/checkpoints/loras/lora1/adapter/final", dit_profile="iterate"),
             plan=_LORA_PLAN,
             take_id="t-lora-bad-profile",
             take_dir=tmp_path / "take-lora-bad-profile",
@@ -1308,9 +1311,7 @@ def test_ensure_lora_adapter_raises_on_unload_failure_status(
     assert acestep_worker._STATE["lora_id"] is None
     assert acestep_worker._STATE["lora_adapter_path"] is None
     # add_lora for lora2 must never run once unload_lora itself failed.
-    assert not any(
-        e[0] == "handler.add_lora" and e[1]["adapter_name"] == "lora2" for e in log
-    )
+    assert not any(e[0] == "handler.add_lora" and e[1]["adapter_name"] == "lora2" for e in log)
 
 
 def test_train_lora_invalidates_shared_handler_for_next_job(
@@ -1329,7 +1330,7 @@ def test_train_lora_invalidates_shared_handler_for_next_job(
     already-PEFT-wrapped decoder."""
 
     class StatefulHandler:
-        instances: list["StatefulHandler"] = []
+        instances: list[StatefulHandler] = []
 
         def __init__(self) -> None:
             self.config_path: str | None = None
@@ -1531,9 +1532,7 @@ def test_initialize_worker_reports_lm_init_failure_not_success(
     reported as a successfully preloaded worker (exactly what the reviewer
     flagged: the return value was previously ignored entirely)."""
     log: list[tuple] = []
-    _install_fake_acestep(
-        monkeypatch, log, lm_init_result=("lm checkpoint not found", False)
-    )
+    _install_fake_acestep(monkeypatch, log, lm_init_result=("lm checkpoint not found", False))
 
     ready, message = acestep_worker.initialize_worker()
 
@@ -1688,7 +1687,13 @@ def _install_fake_lora_training(
             self, *, dit_handler: Any, output_dir: str, skip_existing: bool, progress_callback: Any
         ):
             log.append(
-                ("builder.preprocess_to_tensors", dit_handler, output_dir, skip_existing, progress_callback)
+                (
+                    "builder.preprocess_to_tensors",
+                    dit_handler,
+                    output_dir,
+                    skip_existing,
+                    progress_callback,
+                )
             )
             Path(output_dir).mkdir(parents=True, exist_ok=True)
             output_paths = []
@@ -1745,8 +1750,7 @@ def _install_fake_lora_training(
 
         def train_from_preprocessed(self, tensor_dir: str):
             log.append(("trainer.train_from_preprocessed", tensor_dir))
-            for step, loss, status in train_steps or [(1, 0.5, "epoch 1/10"), (2, 0.3, "epoch 2/10")]:
-                yield step, loss, status
+            yield from train_steps or [(1, 0.5, "epoch 1/10"), (2, 0.3, "epoch 2/10")]
             if write_final:
                 final_dir = Path(self._training_config.output_dir) / "final"
                 final_dir.mkdir(parents=True, exist_ok=True)

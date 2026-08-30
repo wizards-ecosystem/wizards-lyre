@@ -29,11 +29,10 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from helpers import wait_for_job
 
 from server import jobs as jobs_module
 from server import storage
-
-from helpers import wait_for_job
 
 
 def test_extract_with_iterate_profile_is_rejected() -> None:
@@ -120,9 +119,7 @@ def test_extract_endpoint_rejects_missing_or_blank_track_name(client: TestClient
 
     # a non-string track_name never reaches enqueue_job at all -- JobBody's
     # `Optional[str]` rejects it at the request-validation layer first.
-    resp = client.post(
-        f"/api/projects/{project_id}/jobs", json={**base_body, "track_name": 123}
-    )
+    resp = client.post(f"/api/projects/{project_id}/jobs", json={**base_body, "track_name": 123})
     assert resp.status_code == 422
 
     # omitted entirely, not just falsy

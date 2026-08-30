@@ -13,12 +13,11 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from helpers import wait_for_job
 
 from server import jobs as jobs_module
 from server import storage
 from worker import mock_worker
-
-from helpers import wait_for_job
 
 MIN_LORA_SOURCE_TAKES = 8
 

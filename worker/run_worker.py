@@ -173,10 +173,7 @@ def _publish_train_lora_capability(module, ready: bool, message: str) -> None:
     reason = (
         None
         if supported
-        else (
-            f"worker backend '{module.__name__}' does not implement train_lora "
-            "(SPEC.md sec 4.4)"
-        )
+        else (f"worker backend '{module.__name__}' does not implement train_lora (SPEC.md sec 4.4)")
     )
     jobs.publish_worker_capability("train_lora", supported, reason)
 
@@ -307,7 +304,10 @@ def run_loop(stop_event: threading.Event, poll_interval: float = DEFAULT_POLL_IN
                     _refresh_published_state(startup_ready, startup_message)
                     last_status_refresh = time.monotonic()
                 else:
-                    if time.monotonic() - last_status_refresh >= jobs.WORKER_STATUS_HEARTBEAT_INTERVAL_SEC:
+                    if (
+                        time.monotonic() - last_status_refresh
+                        >= jobs.WORKER_STATUS_HEARTBEAT_INTERVAL_SEC
+                    ):
                         # Idle, but still alive -- keep touching worker_status so
                         # server.jobs' freshness check doesn't start reporting a
                         # perfectly healthy worker as dead (see module docstring).

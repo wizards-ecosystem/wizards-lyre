@@ -17,7 +17,6 @@ from server.storage.paths import _sanitize_component
 from server.storage.projects import load_plan, load_project
 from server.storage.takes import list_takes, take_audio_path
 
-
 # SPEC.md sec 7's data-model diagram labels the stems/ directory "extract /
 # lego outputs" specifically (sec 12 Phase 5 line: "stems/  extract / lego
 # outputs") -- `complete` ("Fill arrangement", sec 4.2) instead produces a

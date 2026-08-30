@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from server import config
@@ -17,7 +17,7 @@ from server.storage.errors import PathJailError
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def new_id() -> str:
@@ -36,9 +36,9 @@ def _strip_win_extended_prefix(path: Path) -> Path:
     # the \\server\share spelling the same code path uses.)
     s = str(path)
     if s.startswith("\\\\?\\UNC\\"):
-        return Path("\\\\" + s[len("\\\\?\\UNC\\"):])
+        return Path("\\\\" + s[len("\\\\?\\UNC\\") :])
     if s.startswith("\\\\?\\"):
-        return Path(s[len("\\\\?\\"):])
+        return Path(s[len("\\\\?\\") :])
     return path
 
 

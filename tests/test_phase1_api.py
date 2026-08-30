@@ -14,12 +14,11 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
+from helpers import wait_for_job
 
 from server import storage
 from server.app import app
 from worker.run_worker import run_loop
-
-from helpers import wait_for_job
 
 FORBIDDEN_IMPORTS = (
     "google.genai",
@@ -413,7 +412,7 @@ def test_project_json_updates_are_serialized_across_threads(
     def run_patch():
         try:
             storage.patch_project(project_id, {"title": "renamed while racing"})
-        except Exception as exc:  # noqa: BLE001 - surfaced via `errors` below
+        except Exception as exc:
             errors.append(exc)
 
     def run_set_active():
@@ -421,7 +420,7 @@ def test_project_json_updates_are_serialized_across_threads(
         thread_b_attempted.set()
         try:
             storage.set_active_take(project_id, take_id)
-        except Exception as exc:  # noqa: BLE001 - surfaced via `errors` below
+        except Exception as exc:
             errors.append(exc)
 
     t_patch = threading.Thread(target=run_patch)
@@ -479,7 +478,7 @@ def test_plan_json_updates_are_serialized_across_threads(
     def run_save():
         try:
             storage.save_plan(project_id, {**storage.default_plan(), "caption": "user edit"})
-        except Exception as exc:  # noqa: BLE001 - surfaced via `errors` below
+        except Exception as exc:
             errors.append(exc)
 
     def run_merge():
@@ -487,7 +486,7 @@ def test_plan_json_updates_are_serialized_across_threads(
         thread_b_attempted.set()
         try:
             storage.merge_plan_patch(project_id, {"bpm": 120, "keyscale": "C Major"})
-        except Exception as exc:  # noqa: BLE001 - surfaced via `errors` below
+        except Exception as exc:
             errors.append(exc)
 
     t_save = threading.Thread(target=run_save)
@@ -845,7 +844,11 @@ def test_enqueue_uses_project_dit_profile_when_job_omits_it(client: TestClient) 
 
     job = wait_for_job(client, queued["id"])
     assert job["status"] == "done", job.get("error")
-    take = next(t for t in client.get(f"/api/projects/{project_id}").json()["takes"] if t["id"] == job["take_id"])
+    take = next(
+        t
+        for t in client.get(f"/api/projects/{project_id}").json()["takes"]
+        if t["id"] == job["take_id"]
+    )
     assert take["dit_profile"] == "polish"
 
     # An explicit job-level dit_profile still overrides the project default.
@@ -1065,7 +1068,9 @@ def test_worker_status_and_capability_read_as_stale_after_heartbeat_gap(
     from server import jobs as jobs_module
 
     jobs_module.init_db()
-    jobs_module.publish_worker_status(True, "worker: 'iterate' DiT + LM currently loaded", "iterate")
+    jobs_module.publish_worker_status(
+        True, "worker: 'iterate' DiT + LM currently loaded", "iterate"
+    )
     jobs_module.publish_worker_capability("quality", False, "quality requires CPU offload")
 
     # Freshly published: trusted as-is.

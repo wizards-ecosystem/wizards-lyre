@@ -10,7 +10,7 @@ against.
 from __future__ import annotations
 
 import shutil
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -215,7 +215,7 @@ def train_lora(
     return {
         "id": lora_id,
         "name": name,
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(UTC).isoformat(),
         "source_take_count": len(source_paths),
         "base_checkpoint": DIT_CHECKPOINTS[LORA_BASE_DIT_PROFILE],
         "dit_profile": dit_profile,

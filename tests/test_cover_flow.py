@@ -10,12 +10,10 @@ tests/test_generate_take_flow.py's fixture/harness setup.
 
 from __future__ import annotations
 
-
 from fastapi.testclient import TestClient
+from helpers import wait_for_job
 
 from server import storage
-
-from helpers import wait_for_job
 
 
 def test_cover_take_flow(client: TestClient) -> None:

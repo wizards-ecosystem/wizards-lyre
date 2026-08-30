@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import shutil
 import time
-from typing import Callable
+from collections.abc import Callable
 
 from server import config
 from server.storage import jsonio

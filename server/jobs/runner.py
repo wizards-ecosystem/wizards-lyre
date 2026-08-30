@@ -130,11 +130,13 @@ def _run_train_lora_job(job_id: str, project_id: str, payload: dict[str, Any]) -
         )
         storage.write_lora_meta(project_id, lora_id, meta)
         _set_status(job_id, "done", lora_id=lora_id)
-    except Exception as exc:  # noqa: BLE001 - persist worker failure onto the job row
+    except Exception as exc:
         if lora_id is not None:
             try:
-                storage.write_lora_meta(project_id, lora_id, _error_lora_meta(lora_id, payload, str(exc)))
-            except Exception:  # noqa: BLE001 - best-effort cleanup only
+                storage.write_lora_meta(
+                    project_id, lora_id, _error_lora_meta(lora_id, payload, str(exc))
+                )
+            except Exception:
                 pass
         _set_status(job_id, "error", lora_id=lora_id, error=str(exc))
 
@@ -193,7 +195,7 @@ def _run_generate_shaped_job(
         # `error`, and active_take_id must not be left pointing at it.
         storage.set_active_take(project_id, take_id)
         _set_status(job_id, "done", take_id=take_id)
-    except Exception as exc:  # noqa: BLE001 - persist worker failure onto the job row
+    except Exception as exc:
         if take_id is not None:
             try:
                 storage.write_take_meta(
@@ -201,7 +203,7 @@ def _run_generate_shaped_job(
                     take_id,
                     _error_take_meta(take_id, action, dit_profile, payload, str(exc)),
                 )
-            except Exception:  # noqa: BLE001 - best-effort cleanup only
+            except Exception:
                 # Writing the take's error metadata is a courtesy (surfaces
                 # the failure on the take, not just the job row) -- if disk
                 # I/O itself is failing (full disk, permissions, lock), that

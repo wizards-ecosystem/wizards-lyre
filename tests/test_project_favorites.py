@@ -4,9 +4,7 @@ api_client-side only (no backend endpoint), so it isn't covered here.
 
 from __future__ import annotations
 
-
 from fastapi.testclient import TestClient
-
 
 
 def test_new_project_is_not_favorited(api_client: TestClient) -> None:

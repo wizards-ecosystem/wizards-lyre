@@ -15,12 +15,10 @@ field as extract/lego).
 
 from __future__ import annotations
 
-
 from fastapi.testclient import TestClient
+from helpers import wait_for_job
 
 from server import storage
-
-from helpers import wait_for_job
 
 
 def test_complete_endpoint_succeeds_with_studio_ops_and_real_source(client: TestClient) -> None:

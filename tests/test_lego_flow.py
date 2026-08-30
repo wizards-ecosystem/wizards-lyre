@@ -14,12 +14,10 @@ forwards as repainting_start/repainting_end.
 
 from __future__ import annotations
 
-
 from fastapi.testclient import TestClient
+from helpers import wait_for_job
 
 from server import storage
-
-from helpers import wait_for_job
 
 
 def test_lego_endpoint_succeeds_with_studio_ops_and_region(client: TestClient) -> None:

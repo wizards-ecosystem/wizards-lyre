@@ -186,7 +186,7 @@ def test_concurrent_enqueue_never_orphans_a_queued_job_past_deletion(
                 pass  # rejected once the tombstone is in place -- expected
             except storage.ProjectNotFound:
                 pass  # project already gone -- expected once delete finishes
-            except BaseException as exc:  # noqa: BLE001 - want to see everything else
+            except BaseException as exc:
                 unexpected_errors.append(exc)
 
     threads = [threading.Thread(target=enqueue_repeatedly) for _ in range(4)]

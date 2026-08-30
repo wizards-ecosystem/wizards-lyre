@@ -12,12 +12,10 @@ tests/test_cover_flow.py's fixture/harness setup.
 
 from __future__ import annotations
 
-
 from fastapi.testclient import TestClient
+from helpers import wait_for_job
 
 from server import storage
-
-from helpers import wait_for_job
 
 
 def test_repaint_take_flow(client: TestClient) -> None:
@@ -64,23 +62,11 @@ def test_repaint_take_flow(client: TestClient) -> None:
     assert repaint_take["task_type"] == "repaint"
     assert repaint_take["parent_take_id"] == source_take_id
 
-    meta = (
-        storage.config.projects_dir()
-        / project_id
-        / "takes"
-        / repaint_take_id
-        / "meta.json"
-    )
+    meta = storage.config.projects_dir() / project_id / "takes" / repaint_take_id / "meta.json"
     import json
 
     meta_json = json.loads(meta.read_text())
     assert meta_json["repaint"] == {"start": 1.5, "end": 3.0}
 
-    source_meta = (
-        storage.config.projects_dir()
-        / project_id
-        / "takes"
-        / source_take_id
-        / "mix.wav"
-    )
+    source_meta = storage.config.projects_dir() / project_id / "takes" / source_take_id / "mix.wav"
     assert source_meta.exists()  # the source take's audio is untouched

@@ -5,11 +5,10 @@ from __future__ import annotations
 import os
 import threading
 import time
+from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import Iterator
 
 from server.storage.paths import jailed_path
-
 
 # project.json and plan.json are both read-modify-written by the HTTP
 # server (save_plan, patch_project) and by the worker process (merging a
@@ -76,7 +75,7 @@ def _project_lock(project_id: str) -> Iterator[None]:
                     pass
                 continue
             if time.monotonic() > deadline:
-                raise TimeoutError(f"timed out waiting for project lock: {project_id}")
+                raise TimeoutError(f"timed out waiting for project lock: {project_id}") from None
             time.sleep(_PROJECT_LOCK_POLL_SEC)
     try:
         held[project_id] = 1

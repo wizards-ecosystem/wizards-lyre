@@ -29,7 +29,14 @@ def _import_acestep():
             "and download weights (SPEC.md sec 4 and 13), or set LYRE_WORKER=mock "
             "for local dev/tests without a GPU."
         ) from exc
-    return AceStepHandler, GenerationParams, GenerationConfig, LLMHandler, generate_music, create_sample
+    return (
+        AceStepHandler,
+        GenerationParams,
+        GenerationConfig,
+        LLMHandler,
+        generate_music,
+        create_sample,
+    )
 
 
 def _import_lora_training():

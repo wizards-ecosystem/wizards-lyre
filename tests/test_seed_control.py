@@ -19,10 +19,9 @@ import json
 
 import pytest
 from fastapi.testclient import TestClient
+from helpers import wait_for_job
 
 from server import storage
-
-from helpers import wait_for_job
 
 
 def _create_project(client: TestClient, title: str) -> str:

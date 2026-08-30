@@ -14,9 +14,10 @@ from __future__ import annotations
 
 import random
 import wave
-from datetime import datetime, timezone
+from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 SAMPLE_RATE = 8000
 DURATION_SEC = 0.5
@@ -168,7 +169,7 @@ def run_job(
         "lyrics": effective_plan.get("lyrics", ""),
         "bpm": effective_plan.get("bpm"),
         "keyscale": effective_plan.get("keyscale"),
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(UTC).isoformat(),
         "score": None,
         "has_lrc": False,
         "error": None,
@@ -203,7 +204,7 @@ def train_lora(
     return {
         "id": lora_id,
         "name": job.get("name") or "Untitled LoRA",
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(UTC).isoformat(),
         "source_take_count": len(source_paths),
         "base_checkpoint": "studio_ops",
         "dit_profile": "studio_ops",

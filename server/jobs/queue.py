@@ -28,7 +28,6 @@ from server.jobs.validation import (
 )
 from server.jobs.worker_registry import _check_worker_capability
 
-
 HEARTBEAT_INTERVAL_SEC = 5.0
 STALE_AFTER_SEC = 60.0
 MAX_ATTEMPTS = 3
@@ -170,7 +169,8 @@ def _set_status(
 ) -> None:
     with closing(_connect()) as conn:
         conn.execute(
-            "UPDATE jobs SET status = ?, take_id = ?, lora_id = ?, error = ?, updated_at = ? WHERE id = ?",
+            "UPDATE jobs SET status = ?, take_id = ?, lora_id = ?, error = ?, updated_at = ? "
+            "WHERE id = ?",
             (status, take_id, lora_id, error, _now(), job_id),
         )
         conn.commit()
