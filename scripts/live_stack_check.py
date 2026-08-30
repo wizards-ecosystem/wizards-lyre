@@ -696,13 +696,34 @@ def stage_lora(run: Run, notes: list[str]) -> None:
     Opt-in: SPEC.md sec 4.4 sizes training at roughly an hour on a 3090-class
     GPU, and it holds the GPU exclusively for that whole time.
     """
-    takes = run.api.get(f"/api/projects/{run.project_id}/takes")
-    playable = [t["id"] for t in takes if not t.get("error")]
-    if len(playable) < 8:
-        raise CheckFailed(
-            f"style-pack training needs 8 distinct takes and this project has {len(playable)}. "
-            "Run the earlier stages first, or generate more takes."
-        )
+    # Top up rather than refusing: this stage has to work when it is selected
+    # on its own, and eight short instrumentals cost far less than a confusing
+    # "run the other stages first".
+    needed = 8
+    playable = [
+        take["id"]
+        for take in run.api.get(f"/api/projects/{run.project_id}/takes")
+        if not take.get("error")
+    ]
+    if len(playable) < needed:
+        short_plan = {
+            "caption": "short piano motif, dry room",
+            "lyrics": "[Instrumental]",
+            "instrumental": True,
+            "bpm": 90,
+            "keyscale": "C Major",
+            "timesignature": "4/4",
+            "vocal_language": "en",
+            "duration_sec": 15,
+            "caption_rewrite": False,
+            "sections": [],
+            "negative": [],
+            "query": "",
+        }
+        run.api.put(f"/api/projects/{run.project_id}/plan", short_plan)
+        notes.append(f"generating {needed - len(playable)} more takes to reach the minimum of 8")
+        while len(playable) < needed:
+            playable.append(run.enqueue({"action": "generate", "seed": -1})["take_id"])
     started = time.monotonic()
     job = run.enqueue(
         {"action": "train_lora", "name": "live-stack pack", "source_take_ids": playable[:8]}

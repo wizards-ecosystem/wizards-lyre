@@ -58,6 +58,21 @@ lot in appetite (see [CONFIGURATION.md](CONFIGURATION.md)):
 Drop to `iterate` and confirm generation works at all before chasing a
 configuration problem.
 
+## Style-pack training fails with "labeled 0/8 staged source files"
+
+FFmpeg is missing. ACE-Step's dataset builder decodes training audio through
+torchcodec, which loads FFmpeg's shared libraries at import; the worker log
+will show something like `libavutil.so.56: cannot open shared object file`.
+
+```bash
+sudo apt install ffmpeg      # or your platform's equivalent
+```
+
+This is easy to misread, because **generation is unaffected** — it falls back
+to soundfile, so a machine can generate takes perfectly well and still label
+nothing for training. If the count is zero rather than merely too low, it is
+almost always this rather than a problem with your takes.
+
 ## Switching to Extract / Lego / Complete is slow
 
 Expected. Those three require the `studio_ops` base checkpoint, so the worker

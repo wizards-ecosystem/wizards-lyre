@@ -135,9 +135,25 @@ def train_lora(
                 "DatasetBuilder.get_labeled_count", builder, "get_labeled_count"
             )
             if labeled_count < MIN_LORA_SOURCES:
+                # Zero labeled out of a directory ACE-Step could see and count
+                # is a decoder failure, not a data problem: its dataset builder
+                # reads audio through torchcodec, which needs FFmpeg's shared
+                # libraries present on the system. Generation does not fail the
+                # same way -- it falls back to soundfile -- so a machine can
+                # generate perfectly well and still label nothing here, and the
+                # raw count alone sends people looking at their takes instead
+                # of at their system packages.
+                hint = ""
+                if labeled_count == 0 and samples:
+                    hint = (
+                        " -- labeling every file failed, which usually means FFmpeg's shared "
+                        "libraries are missing (ACE-Step decodes training audio through "
+                        "torchcodec). Install FFmpeg (e.g. `sudo apt install ffmpeg`) and "
+                        "retry; the worker log will show a libavutil load error if that is it."
+                    )
                 raise RuntimeError(
                     f"ACE-Step only labeled {labeled_count}/{len(samples)} staged source files "
-                    f"(needs >= {MIN_LORA_SOURCES}): {scan_status}"
+                    f"(needs >= {MIN_LORA_SOURCES}): {scan_status}{hint}"
                 )
 
             output_paths, preprocess_status = _api_method_call(

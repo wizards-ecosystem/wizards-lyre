@@ -70,6 +70,14 @@ are recorded because they shaped the code a contributor will read.
 
 ### Fixed
 
+- **Simple-mode generation never worked against real ACE-Step.** The adapter
+  passed `create_sample(lm_handler=...)`; upstream spells it `llm_handler`.
+- **Pinned seeds were recorded but never applied.** Upstream resolves the seed
+  from `GenerationConfig.seeds`, not `GenerationParams.seed`, so every "fixed"
+  seed silently produced different audio each run.
+- Style-pack training now explains itself when it labels zero source files,
+  which means FFmpeg is missing rather than anything being wrong with the
+  takes.
 - `storage.touch_project` had been defined and exported since the first commit
   without ever being called.
 - `scripts/lyre` was recorded in git as non-executable, so the README's first

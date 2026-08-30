@@ -26,6 +26,11 @@ If you want a finished track from one prompt, this is the wrong tool.
 - **Linux or WSL2**, with a working NVIDIA driver and CUDA runtime.
 - **`git`, [`uv`][uv], and Node.js 20+.** Everything else installs into the
   checkout.
+- **FFmpeg**, if you want to train style packs. Generation does not need it,
+  but ACE-Step decodes LoRA training audio through torchcodec, which loads
+  FFmpeg's shared libraries. Without it training labels zero source files
+  while everything else works normally (`sudo apt install ffmpeg`, or your
+  platform's equivalent).
 - **~25 GB of disk** for model weights, plus room for the audio you make.
 
 You do **not** need a GPU to develop against the UI or API — see

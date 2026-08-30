@@ -7,7 +7,9 @@ trying to become — see [Scope](#scope) below before starting anything large.
 ## Getting set up
 
 You need `git`, [`uv`](https://docs.astral.sh/uv/), and Node.js 20 or newer.
-Everything else is installed inside the checkout.
+Everything else is installed inside the checkout. FFmpeg is additionally
+required to *train* style packs, but not to run anything else — see
+[docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
 
 ```bash
 git clone https://github.com/wizards-ecosystem/wizards-lyre.git

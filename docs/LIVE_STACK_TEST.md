@@ -55,7 +55,7 @@ information.
 | `annotations` | Favorite, notes, or the active take did not reach `meta.json` on disk — the API and the disk layout disagree. |
 | `export` | The zip a user drops into a DAW is missing `project.json`, `plan.json`, or the active mix; is corrupt; contains a member escaping the archive root; or the mix is silent. |
 | `jail` | A traversing `upload_path` was accepted by the *running server*, not just rejected in a unit test. |
-| `lora` | Opt-in. Style-pack training failed, produced no `lora_id`, or the pack did not actually attach to a later generation. |
+| `lora` | Opt-in. Style-pack training failed, produced no `lora_id`, or the pack did not actually attach to a later generation. Needs FFmpeg installed — see [TROUBLESHOOTING.md](TROUBLESHOOTING.md). The stage generates its own source takes, so it can be selected on its own. |
 
 ## Audio is checked, not assumed
 
