@@ -104,3 +104,6 @@ temp-file-plus-`os.replace`. A reader never sees a partial file.
 - **No GPU in tests** — the default backend under `pytest` is
   `worker/mock_worker.py`, and nothing imports `acestep` or `torch` at module
   scope, so CI installs neither.
+- **One GPU occupant** — `worker/run_worker.py` holds both an OS-level file
+  lock and the SQLite lease before initializing anything, covered by
+  `tests/test_worker_singleton.py`.

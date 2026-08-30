@@ -32,8 +32,9 @@ it was prepared to be shared, not an incremental change from a prior release.
   live loudness/peak meter, and drag-drop of a local WAV/MP3 as a source.
 - MIT license, contributor and security documentation, GitHub Actions CI
   covering both stacks on Python 3.11/3.12 and Node 20, and Dependabot.
-- `./scripts/lyre lint` and `./scripts/lyre format`, running ruff, tsc, ESLint,
-  Prettier, and shellcheck.
+- `./scripts/lyre lint` and `./scripts/lyre format`, running ruff, mypy, tsc,
+  ESLint (at zero warnings), Prettier, and shellcheck. Coverage is gated at
+  88%.
 
 ### Changed
 
@@ -57,6 +58,10 @@ are recorded because they shaped the code a contributor will read.
   instruction failed on a fresh clone with "Permission denied".
 - The project-lock timeout chained the wrong exception, reporting a transient
   Windows sharing violation as the cause of a lock timeout.
+- `WorkerFn` was typed as returning two values while every worker returns
+  three, so the annotation misdescribed the worker contract.
+- `enqueue_job` built a style pack's adapter path from the raw client-supplied
+  `lora_id` instead of the resolved, validated record.
 
 [Unreleased]: https://github.com/wizards-ecosystem/wizards-lyre/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/wizards-ecosystem/wizards-lyre/releases/tag/v0.1.0

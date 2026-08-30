@@ -34,12 +34,17 @@ LYRE_WORKER=mock ./scripts/lyre worker   # terminal 1: writes silent WAVs, never
 ```bash
 ./scripts/lyre test        # pytest, mocked worker, no GPU
 ./scripts/lyre test-web    # vitest + React Testing Library against a mocked backend
-./scripts/lyre lint        # ruff, tsc, eslint, prettier, shellcheck
+./scripts/lyre lint        # ruff, mypy, tsc, eslint, prettier, shellcheck
 ./scripts/lyre format      # fix what is auto-fixable
 ```
 
-CI runs exactly these. `shellcheck` is the one optional piece — install it
-from your package manager, or let CI catch launcher issues.
+CI runs exactly these, and enforces them: ESLint runs at `--max-warnings 0`,
+and pytest fails below 88% coverage. `shellcheck` is the one optional piece —
+install it from your package manager, or let CI catch launcher issues.
+
+If you need to suppress a lint rule, do it at the site with the reason written
+above it, rather than weakening the rule for the whole project. The existing
+`eslint-disable-next-line` comments in `web/src/` are the pattern to follow.
 
 `./scripts/lyre smoke-gpu` runs a real ACE-Step generation. It is manual, needs
 a real GPU and downloaded weights, and is never part of `pytest`.
