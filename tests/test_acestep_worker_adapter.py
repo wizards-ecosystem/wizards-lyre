@@ -443,8 +443,8 @@ def test_run_job_matches_installed_api_contract(
     # must land on Lyre's actual weights directory -- not
     # checkpoints/checkpoints/acestep-v15-turbo, which is what passing
     # CHECKPOINTS_ROOT itself as project_root used to produce.
-    assert kwargs["resolved_checkpoint_dir"] == acestep_worker.CHECKPOINTS_ROOT / "acestep-v15-turbo"
-    assert kwargs["project_root"] == str(acestep_worker.CHECKPOINTS_ROOT.parent)
+    assert kwargs["resolved_checkpoint_dir"] == acestep_worker.settings.CHECKPOINTS_ROOT / "acestep-v15-turbo"
+    assert kwargs["project_root"] == str(acestep_worker.settings.CHECKPOINTS_ROOT.parent)
     assert kwargs["config_path"] == "acestep-v15-turbo"
     assert kwargs["device"] == acestep_worker.DEVICE
     assert kwargs["offload_to_cpu"] is False  # iterate does not need offload_to_cpu
@@ -454,7 +454,7 @@ def test_run_job_matches_installed_api_contract(
     # including backend="pt" (SPEC.md sec 4.2 -- ACE-Step otherwise
     # defaults to "vllm") and device.
     lm_init = next(e for e in log if e[0] == "lm.initialize")
-    assert lm_init[1]["checkpoint_dir"] == str(acestep_worker.CHECKPOINTS_ROOT)
+    assert lm_init[1]["checkpoint_dir"] == str(acestep_worker.settings.CHECKPOINTS_ROOT)
     assert lm_init[1]["lm_model_path"] == acestep_worker.DEFAULT_LM
     assert lm_init[1]["backend"] == "pt"
     assert lm_init[1]["device"] == acestep_worker.DEVICE
@@ -707,14 +707,14 @@ def test_checkpoints_project_root_matches_ace_step_resolution(
     and a LYRE_CHECKPOINTS_DIR that isn't literally named 'checkpoints' can
     never satisfy that upstream convention, so it must fail clearly instead
     of silently resolving to the wrong directory."""
-    monkeypatch.setattr(acestep_worker, "CHECKPOINTS_ROOT", Path("some/where/checkpoints"))
+    monkeypatch.setattr(acestep_worker.settings, "CHECKPOINTS_ROOT", Path("some/where/checkpoints"))
     project_root = acestep_worker._checkpoints_project_root()
     assert project_root == Path("some/where")
-    assert project_root / "checkpoints" / "acestep-v15-turbo" == acestep_worker.CHECKPOINTS_ROOT / (
+    assert project_root / "checkpoints" / "acestep-v15-turbo" == acestep_worker.settings.CHECKPOINTS_ROOT / (
         "acestep-v15-turbo"
     )
 
-    monkeypatch.setattr(acestep_worker, "CHECKPOINTS_ROOT", Path("some/where/weights"))
+    monkeypatch.setattr(acestep_worker.settings, "CHECKPOINTS_ROOT", Path("some/where/weights"))
     with pytest.raises(acestep_worker.WorkerUnavailable, match="checkpoints"):
         acestep_worker._checkpoints_project_root()
 
