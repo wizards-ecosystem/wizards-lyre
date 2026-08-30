@@ -19,10 +19,6 @@ of them to keep all writable state inside the checkout. Run
 | `LYRE_WORKER` | `acestep` | Job backend. Set to `mock` for a GPU-free worker that writes silent WAVs — the whole UI and API work against it. |
 | `LYRE_DEVICE` | `cuda` | Torch device string for the worker. |
 
-> Before 0.1.0 these were named `BARD_*`. Those names are gone and are not read
-> as a fallback. `scripts/lyre` migrates a pre-0.1.0 `projects/bard.db` to
-> `projects/lyre.db` once, automatically.
-
 ## Variables the launcher sets for you
 
 `scripts/lyre` also redirects every third-party cache into the checkout, so

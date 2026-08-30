@@ -37,12 +37,9 @@ it was prepared to be shared, not an incremental change from a prior release.
 
 ### Changed
 
-- **BREAKING: every environment variable is now `LYRE_*`.** `BARD_PORT`,
-  `BARD_WORKER`, `BARD_PROJECTS_DIR`, `BARD_OUTPUT_DIR`, `BARD_DB_PATH`,
-  `BARD_CHECKPOINTS_DIR`, and `BARD_DEVICE` were left over from the project's
-  pre-rename name and are gone, with no fallback. The queue database is
-  `projects/lyre.db`; `scripts/lyre` migrates an existing `projects/bard.db`
-  (and its sidecars and worker lock) once, on its next run.
+Nothing here is a change users can observe: 0.1.0 is the first release. These
+are recorded because they shaped the code a contributor will read.
+
 - `server/storage.py`, `server/jobs.py`, and `worker/acestep_worker.py` are now
   packages split by concern. Each package's `__init__` re-exports the previous
   surface, so `storage.<name>` and `jobs.<name>` call sites are unchanged.

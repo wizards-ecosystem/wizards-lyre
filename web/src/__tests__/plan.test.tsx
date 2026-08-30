@@ -19,7 +19,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, expect, it, vi } from "vitest";
 import App from "../App";
 import type { RecordedRequest } from "../test/mockServer";
-import { createMockBardServer, type MockBardServer } from "../test/mockServer";
+import { createMockLyreServer, type MockLyreServer } from "../test/mockServer";
 import { renderOpenedProject, type OpenedProject } from "../test/renderApp";
 
 vi.mock("wavesurfer.js", () => ({
@@ -48,7 +48,7 @@ afterEach(() => {
   cleanup();
 });
 
-function planPutRequests(server: MockBardServer): RecordedRequest[] {
+function planPutRequests(server: MockLyreServer): RecordedRequest[] {
   return server.requests.filter((r) => r.method === "PUT" && r.url.endsWith("/plan"));
 }
 
@@ -94,7 +94,7 @@ async function openProjectUI(): Promise<void> {
 }
 
 it("saves every Custom plan field through one debounced PUT /plan with correct types, and a reopen renders them", async () => {
-  const server = createMockBardServer();
+  const server = createMockLyreServer();
   server.install();
   let rendered = render(<App />);
   await openProjectUI();

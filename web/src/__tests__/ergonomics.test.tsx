@@ -19,7 +19,7 @@
 import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { api } from "../api";
-import { makeTakes, PROJECT_ID, type MockBardServer } from "../test/mockServer";
+import { makeTakes, PROJECT_ID, type MockLyreServer } from "../test/mockServer";
 import { renderOpenedProject, type OpenedProject } from "../test/renderApp";
 
 vi.mock("wavesurfer.js", () => ({
@@ -73,7 +73,7 @@ beforeAll(() => {
 // (src/test/mockServer.ts) has no route for it. Wrapping rather than
 // editing that shared file keeps this endpoint local to the one test (the
 // parent-chain restore) that actually needs it.
-function installActiveTakeEndpoint(server: MockBardServer): void {
+function installActiveTakeEndpoint(server: MockLyreServer): void {
   const previousFetch = globalThis.fetch;
   const patched: typeof fetch = (input, init) => {
     const url = String(input);

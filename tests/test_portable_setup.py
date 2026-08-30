@@ -46,57 +46,37 @@ def test_portable_setup_pins_ace_step_and_downloads_all_lyre_profiles() -> None:
         assert f"--model {model} --skip-main" in source
 
 
-def test_portable_setup_migrates_the_pre_rename_database() -> None:
-    """The 0.1.0 rename moved projects/bard.db to projects/lyre.db. An
-    existing checkout must keep its library, so the launcher renames the
-    legacy file (plus its SQLite sidecars and worker lock) once, and never
-    over an existing lyre.db.
-    """
-    source = LAUNCHER.read_text(encoding="utf-8")
-    assert "migrate_legacy_database" in source
-    assert 'legacy="$ROOT/projects/bard.db"' in source
-    assert 'current="$ROOT/projects/lyre.db"' in source
-    assert 'if [[ ! -f "$legacy" || -e "$current" ]]; then' in source
-    for suffix in ("-wal", "-shm", ".worker.lock"):
-        assert suffix in source
+def test_no_legacy_project_name_survives() -> None:
+    """Lyre's runtime contract is LYRE_* and its database is lyre.db.
 
+    The project carried an earlier name before its first release; nothing in
+    this repository should still say it. A half-finished rename is easy to
+    miss by eye and leaves a silently ignored setting behind, so scan every
+    tracked file.
 
-def test_no_pre_rename_environment_variables_survive() -> None:
-    """Lyre's runtime contract is LYRE_* (SPEC.md sec 5); the pre-0.1.0
-    BARD_* names were dropped outright, with no fallback. A half-finished
-    rename is easy to miss by eye and produces a silently ignored setting,
-    so fail loudly on any surviving token in tracked source.
+    Matched with letter boundaries (not \\b) so `LYRE_`-style underscore joins
+    and `.db` suffixes are still caught, while an ordinary word that merely
+    contains the letters is not. Generated lock files are skipped: their
+    content hashes are effectively random text and are not ours to rename.
+    vendor/ is upstream ACE-Step, likewise not ours.
     """
     tracked = subprocess.run(
         ["git", "ls-files"], cwd=ROOT, capture_output=True, text=True, check=True
     ).stdout.split()
 
-    # What this guard is for: catching code, config, or the launcher still
-    # *reading* a pre-rename name. Two categories are exempt because naming
-    # the old variables there is correct, not a leftover:
-    #
-    #   - Markdown, as a class. The changelog, the configuration reference,
-    #     and the contributor guide all have to name BARD_* to explain the
-    #     rename and the database migration to anyone upgrading. Listing
-    #     individual files here instead just rots the moment a doc is added.
-    #   - The launcher and this module, which implement and test the one-time
-    #     projects/bard.db -> projects/lyre.db migration.
-    #
-    # vendor/ is upstream ACE-Step and not Lyre's to rename.
-    exempt = {"scripts/lyre", "tests/test_portable_setup.py"}
+    pattern = re.compile(r"(?<![A-Za-z])bard(?![A-Za-z])", re.IGNORECASE)
+    skip_suffixes = ("uv.lock", "package-lock.json")
 
     hits: list[str] = []
     for name in tracked:
         path = ROOT / name
         if (
             name.startswith("vendor/")
-            or name in exempt
-            or name.endswith(".md")
+            or name.endswith(skip_suffixes)
+            or name == "tests/test_portable_setup.py"
             or not path.is_file()
         ):
             continue
-        text = path.read_text(encoding="utf-8", errors="replace")
-        for token in ("BARD_", "bard.db"):
-            if token in text:
-                hits.append(f"{name}: {token!r}")
+        if pattern.search(path.read_text(encoding="utf-8", errors="replace")):
+            hits.append(name)
     assert hits == []

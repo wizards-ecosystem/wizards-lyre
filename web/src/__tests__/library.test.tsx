@@ -8,10 +8,10 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, describe, expect, it } from "vitest";
 import App from "../App";
 import type { ProjectSummary } from "../api";
-import { createMockBardServer, makeProjectSummary, type MockBardServer } from "../test/mockServer";
+import { createMockLyreServer, makeProjectSummary, type MockLyreServer } from "../test/mockServer";
 
 interface LibraryApp {
-  server: MockBardServer;
+  server: MockLyreServer;
   cleanup: () => void;
 }
 
@@ -20,7 +20,7 @@ interface LibraryApp {
 // list on mount (App.tsx's `useEffect(() => { refreshProjects() }, [])`), so
 // there's no need to click "Open" for these tests.
 function renderLibrary(projects: ProjectSummary[]): LibraryApp {
-  const server = createMockBardServer();
+  const server = createMockLyreServer();
   server.state.projects = projects;
   server.install();
 

@@ -7,14 +7,14 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { expect, vi } from "vitest";
 import App from "../App";
 import type { Lora, Section, Take } from "../api";
-import { createMockBardServer, type MockBardServer } from "./mockServer";
+import { createMockLyreServer, type MockLyreServer } from "./mockServer";
 
 // The per-take checkbox that opts a take into style-pack training (App.tsx
 // only gives it a title, so query it by that).
 export const LORA_SOURCE_TITLE = "Include in style pack training source";
 
 export interface OpenedProject {
-  server: MockBardServer;
+  server: MockLyreServer;
   confirm: ReturnType<typeof vi.fn>;
   cleanup: () => void;
 }
@@ -22,7 +22,7 @@ export interface OpenedProject {
 export async function renderOpenedProject(
   opts: { takes?: Take[]; loras?: Lora[]; sections?: Section[] } = {},
 ): Promise<OpenedProject> {
-  const server = createMockBardServer();
+  const server = createMockLyreServer();
   if (opts.sections) {
     server.state.detail = {
       ...server.state.detail,

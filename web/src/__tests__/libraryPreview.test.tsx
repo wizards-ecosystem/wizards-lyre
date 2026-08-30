@@ -16,7 +16,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import App from "../App";
 import { api } from "../api";
-import { createMockBardServer, makeProjectSummary } from "../test/mockServer";
+import { createMockLyreServer, makeProjectSummary } from "../test/mockServer";
 
 let playSpy: ReturnType<typeof vi.spyOn> | undefined;
 let pauseSpy: ReturnType<typeof vi.spyOn> | undefined;
@@ -44,7 +44,7 @@ function previewBtn(title: string): HTMLButtonElement {
 
 describe("Library inline take preview", () => {
   it("disables the preview button with a 'No takes yet' title when a project has no active take", async () => {
-    const server = createMockBardServer();
+    const server = createMockLyreServer();
     server.state.projects = [
       makeProjectSummary({ id: "proj-1", title: "Has A Take", active_take_id: "take-01" }),
       makeProjectSummary({ id: "proj-2", title: "No Takes", active_take_id: null }),
@@ -72,7 +72,7 @@ describe("Library inline take preview", () => {
       .mockImplementation(() => Promise.resolve());
     pauseSpy = vi.spyOn(window.HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
 
-    const server = createMockBardServer();
+    const server = createMockLyreServer();
     server.state.projects = [
       makeProjectSummary({ id: "proj-1", title: "Song One", active_take_id: "take-01" }),
       makeProjectSummary({ id: "proj-2", title: "Song Two", active_take_id: "take-02" }),

@@ -20,7 +20,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import App from "../App";
-import { createMockBardServer, makeLora, makeTakes, PROJECT_ID } from "../test/mockServer";
+import { createMockLyreServer, makeLora, makeTakes, PROJECT_ID } from "../test/mockServer";
 import { renderOpenedProject, type OpenedProject } from "../test/renderApp";
 
 interface FakeRegion {
@@ -228,7 +228,7 @@ describe("DiT profile picker (SPEC.md sec 4.1)", () => {
   });
 
   it("survives a project reload", async () => {
-    const server = createMockBardServer();
+    const server = createMockLyreServer();
     server.install();
     let rendered = render(<App />);
     fireEvent.click(await screen.findByRole("button", { name: "Open Test Song" }));

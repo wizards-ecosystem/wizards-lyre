@@ -11,7 +11,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import App from "../App";
-import { createMockBardServer } from "../test/mockServer";
+import { createMockLyreServer } from "../test/mockServer";
 
 vi.mock("wavesurfer.js", () => ({
   default: {
@@ -36,7 +36,7 @@ afterEach(() => {
 });
 
 it("creates a project from a title and simple query, and switches to it", async () => {
-  const server = createMockBardServer();
+  const server = createMockLyreServer();
   server.install();
 
   render(<App />);
@@ -89,7 +89,7 @@ it("creates a project from a title and simple query, and switches to it", async 
 });
 
 it("creates a project with a fallback title when the title field is left blank", async () => {
-  const server = createMockBardServer();
+  const server = createMockLyreServer();
   server.install();
 
   render(<App />);
@@ -124,7 +124,7 @@ it("creates a project with a fallback title when the title field is left blank",
 });
 
 it("opens the new project's workspace with an empty takes pane and no Open click needed", async () => {
-  const server = createMockBardServer();
+  const server = createMockLyreServer();
   server.install();
 
   render(<App />);

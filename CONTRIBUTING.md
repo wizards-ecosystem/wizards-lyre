@@ -85,8 +85,8 @@ visual verification the DOM-level tests cannot provide, so it has not been
 done.
 
 **Environment variables are all `LYRE_*`.** See
-[docs/CONFIGURATION.md](docs/CONFIGURATION.md). Nothing reads the pre-0.1.0
-`BARD_*` names, and a test fails if one reappears.
+[docs/CONFIGURATION.md](docs/CONFIGURATION.md). Nothing reads any other prefix,
+and a test fails if one appears.
 
 ## Pull requests
 

@@ -149,7 +149,7 @@ export function makeProjectDetail(takes: Take[]): ProjectDetail {
 // The mock server itself.
 // ---------------------------------------------------------------------------
 
-export function createMockBardServer() {
+export function createMockLyreServer() {
   const requests: RecordedRequest[] = [];
   const state = {
     projects: [makeProjectSummary()],
@@ -498,4 +498,4 @@ export function createMockBardServer() {
   };
 }
 
-export type MockBardServer = ReturnType<typeof createMockBardServer>;
+export type MockLyreServer = ReturnType<typeof createMockLyreServer>;

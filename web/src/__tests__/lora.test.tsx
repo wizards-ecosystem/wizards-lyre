@@ -9,7 +9,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { afterEach, describe, expect, it, vi } from "vitest";
 import App from "../App";
 import {
-  createMockBardServer,
+  createMockLyreServer,
   makeLora,
   makeTake,
   makeTakes,
@@ -131,7 +131,7 @@ const RECOVERED_JOB_ID = "job-recovered";
 // or another tab) and must be recovered via GET /api/jobs on project open,
 // not via this test clicking Train.
 async function renderProjectWithSeededTraining(status: string): Promise<OpenedProject> {
-  const server = createMockBardServer();
+  const server = createMockLyreServer();
   server.seedJob(RECOVERED_JOB_ID, PROJECT_ID, "train_lora", status);
   server.install();
 
