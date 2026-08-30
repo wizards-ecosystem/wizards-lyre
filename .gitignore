@@ -43,6 +43,3 @@ checkpoints/
 Thumbs.db
 .idea/
 .vscode/
-
-# Conclave worktrees (jail colocates these under this repo)
-.conclave-wt/

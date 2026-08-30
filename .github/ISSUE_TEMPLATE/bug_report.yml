@@ -1,0 +1,67 @@
+name: Bug report
+description: Something in Lyre does not work as documented
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before filing, please check
+        [docs/TROUBLESHOOTING.md](https://github.com/wizards-ecosystem/wizards-lyre/blob/main/docs/TROUBLESHOOTING.md).
+        It covers the most common cases: jobs stuck at `queued`, the worker
+        failing to start, VRAM limits, and the SPA not being built.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what you got instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. ./scripts/lyre server
+        2. ...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: worker
+    attributes:
+      label: Worker backend
+      options:
+        - "acestep (real GPU)"
+        - "mock (LYRE_WORKER=mock)"
+        - "Not sure / not applicable"
+    validations:
+      required: true
+
+  - type: input
+    id: gpu
+    attributes:
+      label: GPU and VRAM
+      placeholder: "RTX 4070 Ti SUPER, 16 GB"
+
+  - type: input
+    id: os
+    attributes:
+      label: OS
+      placeholder: "Ubuntu 24.04 on WSL2 / Windows 11"
+
+  - type: textarea
+    id: paths
+    attributes:
+      label: Output of `./scripts/lyre paths`
+      render: shell
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant output
+      description: >
+        The worker's terminal output is usually the most useful thing here, plus
+        `curl -s http://127.0.0.1:8421/api/health`.
+      render: shell

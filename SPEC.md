@@ -1,8 +1,8 @@
 # Wizard's Lyre — SPEC
 
-This file is the sole product spec. Implement it in phase order. Do not invent extra engines, unofficial APIs, or a one-click generate page. Do not follow `wizards-conclave/docs/BARD_HANDOFF.md`; that document is a pointer here.
+This file is the sole product spec. Implement it in phase order. Do not invent extra engines, unofficial APIs, or a one-click generate page.
 
-**Machine:** Windows, RTX 4070 Ti SUPER 16 GB, 32 GB RAM, i7-13700KF.
+**Target hardware:** a 16 GB-class NVIDIA GPU (developed against an RTX 4070 Ti SUPER) on Linux/WSL2 or Windows.
 **User:** single local user. No auth. No cloud deploy.
 **Bind:** `127.0.0.1` only.
 
@@ -21,7 +21,7 @@ The product this spec locks: a library of song **projects**, each with a **plan*
 ## 2. Non-goals (forbidden)
 
 - Unofficial Suno / Udio wrappers or reverse-engineered APIs
-- **Lyria 3, Lyria RealTime, ElevenLabs Music, Stability Audio** — no adapters, no stubs, no API keys, no Gemini client. `agy` Google login is Conclave coding, not music.
+- **Lyria 3, Lyria RealTime, ElevenLabs Music, Stability Audio** — no adapters, no stubs, no API keys, no Gemini client.
 - Magenta RealTime 2 (Apple Silicon realtime; Windows JAX is offline jam, not this product)
 - LeVo 2 / SongGeneration (VRAM + non-commercial Tencent license)
 - YuE as a second generator
@@ -35,7 +35,7 @@ The product this spec locks: a library of song **projects**, each with a **plan*
 
 ## 3. Fully local (locked)
 
-Every generate / cover / repaint / extract / lego / complete / LoRA job runs **ACE-Step 1.5 on the RTX 4070 Ti SUPER**. No network is required after weights are on disk. Hugging Face download happens once at install (`uv run acestep-download` or equivalent). Runtime inference must not call Google, ElevenLabs, or any music API.
+Every generate / cover / repaint / extract / lego / complete / LoRA job runs **ACE-Step 1.5 on the local GPU**. No network is required after weights are on disk. Hugging Face download happens once at install (`uv run acestep-download` or equivalent). Runtime inference must not call Google, ElevenLabs, or any music API.
 
 ---
 
@@ -114,7 +114,7 @@ Three processes conceptually:
 
 IPC: worker pulls jobs from SQLite (`queued` → `running` → `done` | `error`) or a localhost queue endpoint. Pick one and stick to it. SQLite is enough.
 
-Port: **8421** (Conclave dashboard is 8420). Override with `LYRE_PORT`.
+Port: **8421**. Override with `LYRE_PORT`.
 
 ---
 
@@ -122,7 +122,7 @@ Port: **8421** (Conclave dashboard is 8420). Override with `LYRE_PORT`.
 
 ```
 SPEC.md                 this file
-AGENTS.md               Conclave / coding-agent rules
+AGENTS.md               coding-agent rules
 README.md               how to run
 pyproject.toml
 .gitignore
@@ -326,7 +326,7 @@ GPU smoke is manual only.
 
 ---
 
-## 12. Implementation phases (Conclave order)
+## 12. Implementation phases
 
 Do not skip ahead. Do not open a “add Lyria” task.
 

@@ -1,0 +1,44 @@
+name: Feature request
+description: Suggest something for Lyre
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Please check the scope first.** Lyre is deliberately narrow, and
+        [SPEC.md §2](https://github.com/wizards-ecosystem/wizards-lyre/blob/main/SPEC.md)
+        rules some things out permanently:
+
+        - Any generation engine other than ACE-Step 1.5 — no Suno/Udio
+          wrappers, Lyria, ElevenLabs, Stability, Magenta, LeVo, or YuE, not
+          even as an optional adapter
+        - A full DAW: mixer, MIDI piano roll, VST/AU plugins, automation lanes
+        - Authentication, multi-user, reverse proxy, Docker, or cloud GPU
+        - Shipping ACE-Step's Gradio UI
+
+        Requests for these will be closed — not because they are bad ideas, but
+        because they are a different product. A fork is a completely reasonable
+        answer.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: The problem, not the solution. What does your workflow look like today?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like to happen?
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope
+      options:
+        - label: I have read SPEC.md §2 and this is not one of the excluded items
+          required: true

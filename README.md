@@ -1,132 +1,145 @@
 # Wizard's Lyre
 
-Local generative music studio. ACE-Step 1.5 on the GPU. No cloud music APIs.
+A local generative music **studio** built on [ACE-Step 1.5][acestep]. Runs
+entirely on your own GPU: no accounts, no API keys, no cloud music services,
+and no network needed once the weights are on disk.
 
-The product spec is **[SPEC.md](SPEC.md)**. Implement that file. Do not invent extra engines.
+[![CI](https://github.com/wizards-ecosystem/wizards-lyre/actions/workflows/ci.yml/badge.svg)](https://github.com/wizards-ecosystem/wizards-lyre/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](pyproject.toml)
 
-## Status
+Lyre is deliberately **not** a one-click "type a prompt, get a song" page. It is
+a studio you iterate in: a library of song projects, each with a plan, a rail of
+takes, and a waveform you can select regions on. You throw a seed, listen, and
+push it around with Cover, Repaint, Extract, Lego, and Complete — each of which
+maps 1:1 onto an ACE-Step task. Every take is immutable and remembers its
+parent, so the history is always walkable.
 
-All six phases in SPEC.md sec 12 are implemented:
+If you want a finished track from one prompt, this is the wrong tool.
 
-- **Phase 1 (scaffold + generate):** FastAPI health/projects/plan/takes/jobs API, a SQLite
-  `queued -> running -> done|error` job queue, a dedicated worker process (`worker/run_worker.py`)
-  that drains it, a React shell, and a mocked worker for tests. The production job backend is
-  `worker/acestep_worker.py`, which calls ACE-Step 1.5's `generate_music` -- it requires ACE-Step
-  installed and weights downloaded (see below).
-- **Phase 2 (studio loop):** project library, the plan editor (simple + custom), waveform + region
-  display/select, `cover` (take source select + strength), and `repaint` (take/region source, no
-  strength control), reusing generate's plan-save/poll UX.
-- **Phase 3 (base swap):** worker unload/load, `extract` / `lego` / `complete` job types, and a
-  confirmation UI for the `studio_ops` base-model swap.
-- **Phase 4 (polish):** a quality score on takes, LRC output when ACE-Step supplies timestamps,
-  and a LoRA train/load path (style-pack UI to train from selected takes, then load a trained
-  LoRA into generation).
-- **Phase 5 (studio ergonomics):** A/B take compare, project export as a zip (`project.json`,
-  `plan.json`, active mix, optional stems), keyboard shortcuts (generate, play/pause, next/prev
-  take, save plan), and a UI to walk `parent_take_id` and restore an earlier take.
-- **Phase 6 (library and ingest):** project search, favorites for projects/takes, free-text take
-  notes, a loudness/peak meter on the player, and drag-drop of a local WAV/MP3 as a cover/repaint
-  source.
+## Requirements
 
-This describes what the code implements, not verified GPU performance -- generation quality, LoRA
-training throughput, etc. depend on ACE-Step and real hardware and are not something this repo's
-test suite exercises.
+- **An NVIDIA GPU.** 16 GB VRAM is the baseline the defaults are tuned for
+  (2B turbo DiT + 1.7B LM). Less will work for the smaller profiles; the
+  optional 4B `quality` profile needs CPU offload at 16 GB. LoRA training is
+  sized for 24 GB.
+- **Linux or WSL2**, with a working NVIDIA driver and CUDA runtime.
+- **`git`, [`uv`][uv], and Node.js 20+.** Everything else installs into the
+  checkout.
+- **~25 GB of disk** for model weights, plus room for the audio you make.
 
-## Machine
+You do **not** need a GPU to develop against the UI or API — see
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
-WSL Ubuntu (`limb06`), RTX 4070 Ti SUPER 16 GB. Checkout: `/home/limb06/wizards-lyre`.
-Default: ACE-Step 2B turbo + 1.7B LM. Bind `127.0.0.1:8421`.
+## Setup
+
+```bash
+git clone https://github.com/wizards-ecosystem/wizards-lyre.git
+cd wizards-lyre
+./scripts/lyre bootstrap
+```
+
+`bootstrap` pins and downloads ACE-Step 1.5 into `vendor/`, creates the Python
+environment in `.venv`, installs and builds the frontend, and downloads every
+model profile Lyre exposes into `checkpoints/`. It is resumable — re-running it
+reuses whatever is already there.
+
+To defer the large downloads, run `./scripts/lyre install` now and
+`./scripts/lyre models` when you are ready.
+
+Everything writable — weights, caches, environments, generated audio — stays
+inside the checkout. `./scripts/lyre paths` prints exactly where. Nothing but
+the NVIDIA driver itself is installed system-wide.
+
+## Running
+
+Two processes, in two terminals:
+
+```bash
+./scripts/lyre server   # HTTP API + the built SPA on 127.0.0.1:8421
+./scripts/lyre worker   # claims queued jobs one at a time; this is where CUDA loads
+```
+
+Then open <http://127.0.0.1:8421>.
+
+They are separate on purpose: the server only ever touches SQLite and disk, so
+a GPU crash fails the job rather than taking the API down, and a long
+generation never blocks an HTTP request. Jobs posted while no worker is running
+simply wait as `queued`.
+
+For a GPU-free session, start the worker as `LYRE_WORKER=mock ./scripts/lyre
+worker` — it writes silent WAVs and never loads CUDA.
+
+## What it does
+
+All six phases of [SPEC.md](SPEC.md) §12 are implemented:
+
+- **Generate** — Simple mode seeds a plan from a natural-language query using
+  ACE-Step's 5 Hz LM; Custom mode is you writing caption, lyrics, BPM, key,
+  time signature, and duration.
+- **Cover / Repaint** — remix a take, or drag a region on the waveform and
+  rewrite just that stretch.
+- **Extract / Lego / Complete** — isolate a track, add or replace one, or fill
+  out an arrangement. These swap in the base checkpoint, which the UI confirms
+  first.
+- **Style packs** — train a LoRA from 8+ of your own takes and apply it to
+  later generations.
+- **Studio ergonomics** — A/B compare, keyboard shortcuts, a live loudness
+  meter, restoring an earlier take, and zip export you can drop into a DAW.
+- **Library** — search, favorites, take notes, and drag-drop of a local
+  WAV/MP3 as a source.
+
+This describes what the code implements. Generation quality and training
+throughput depend on ACE-Step and your hardware, and are not something this
+repository's tests can speak to.
+
+## Documentation
+
+| | |
+|---|---|
+| [SPEC.md](SPEC.md) | The product spec. Authoritative on scope. |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | How the three processes fit together, and why. |
+| [docs/CONFIGURATION.md](docs/CONFIGURATION.md) | Every `LYRE_*` variable and the DiT profiles. |
+| [docs/API.md](docs/API.md) | The HTTP surface. Live schema at `/docs` while running. |
+| [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | Stuck jobs, VRAM, worker startup. |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Setup, the test loop, and what is out of scope. |
+| [SECURITY.md](SECURITY.md) | The threat model, stated plainly. |
 
 ## Layout
 
 | Path | Role |
 |---|---|
-| `SPEC.md` | Sole product spec |
-| `server/` | FastAPI (HTTP, jobs, files) |
-| `worker/` | `run_worker.py` (dedicated process entry point), `acestep_worker.py` (real backend), test-only `mock_worker.py` |
-| `web/` | Vite + React studio |
-| `tests/` | pytest, mocked worker, no GPU |
-| `scripts/lyre` | portable setup, launch, and test commands |
-| `scripts/smoke-gpu.py` | Real ACE-Step turbo smoke (manual, not part of pytest) |
+| `server/` | FastAPI: HTTP, storage, job queue. Never imports ACE-Step. |
+| `worker/` | The GPU process. `acestep_worker/` is real, `mock_worker.py` is for tests. |
+| `web/` | Vite + React studio UI. |
+| `tests/` | pytest against a mocked worker. No GPU. |
+| `scripts/lyre` | Setup, run, test, lint. Run everything through it. |
 
-## One-folder setup
-
-Install the small system prerequisites (`git`, `uv`, and Node.js/npm), clone this repository, then
-run one command from its root:
+## Development
 
 ```bash
-./scripts/lyre bootstrap
+./scripts/lyre test        # pytest, mocked worker, no GPU
+./scripts/lyre test-web    # vitest + React Testing Library, mocked backend
+./scripts/lyre lint        # ruff, tsc, eslint, prettier, shellcheck
+./scripts/lyre smoke-gpu   # manual: one real ACE-Step generation
 ```
 
-It pins and downloads ACE-Step 1.5 into `vendor/ACE-Step-1.5`, creates the Python environment in
-`.venv`, installs frontend dependencies in `web/node_modules`, builds the SPA, and downloads every
-ACE-Step profile Lyre exposes into `checkpoints/` (Turbo, SFT, base, and XL Turbo). It is resumable:
-re-running it reuses files already present in this checkout.
+See [CONTRIBUTING.md](CONTRIBUTING.md) before opening a PR.
 
-If you only need the web/API shell or want to defer the large model downloads, use
-`./scripts/lyre install` first and `./scripts/lyre models` when ready.
+## Security
 
-The launcher redirects package-manager, Hugging Face, ModelScope, PyTorch/CUDA, compiler, and
-temporary-file caches to this project. Runtime data remains under `projects/` and `output/`; no
-Lyre-owned state needs to be stored in a home-directory cache. The NVIDIA driver and CUDA runtime
-remain normal system prerequisites.
+Lyre binds `127.0.0.1` and has **no authentication by design**. Do not expose
+it to a network or put it behind a reverse proxy. See
+[SECURITY.md](SECURITY.md).
 
-Use `./scripts/lyre paths` to show the exact locations. `vendor/`, models, environments, caches,
-and generated music are intentionally ignored by Git. The `ACE_STEP_REVISION` file records the
-pinned upstream source revision used by the installer.
+## License
 
-For a GPU-free UI/API development session, set `LYRE_WORKER=mock` before starting
-`./scripts/lyre worker`; it writes silent WAVs and never loads CUDA.
+[MIT](LICENSE).
 
-## Run the server + worker
+Built on [ACE-Step 1.5][acestep], which is also MIT-licensed. ACE-Step is not
+vendored in this repository — `scripts/lyre` clones it at the revision pinned
+in `ACE_STEP_REVISION`. Model weights are downloaded from their upstream
+sources and carry their own terms.
 
-Two separate processes (SPEC.md sec 5): the FastAPI server only ever reads/writes SQLite and
-disk; the worker is where CUDA and ACE-Step actually load, so a GPU crash can't take HTTP down
-and a long generation never blocks a request.
-
-```bash
-./scripts/lyre server  # terminal 1: HTTP API + built SPA
-./scripts/lyre worker  # terminal 2: claims queued jobs one at a time
-```
-
-`server.app` binds `127.0.0.1:8421` by default; override with `LYRE_PORT`. If `web/dist` exists,
-it serves the built SPA at `/`; otherwise `/` returns a hint to build or run the frontend dev
-server. Jobs posted to `/api/projects/{id}/jobs` sit as `queued` until `worker.run_worker` (or
-`LYRE_WORKER=mock` for a GPU-free worker) picks them up.
-
-## Frontend
-
-```bash
-./scripts/lyre build-web  # writes web/dist, served by FastAPI
-./scripts/lyre web        # Vite dev server with a /api proxy to LYRE_PORT
-```
-
-## Tests
-
-```bash
-./scripts/lyre test
-```
-
-Default pytest must not load CUDA or ACE-Step weights (it pins `LYRE_WORKER=mock`).
-
-Frontend regression tests: `./scripts/lyre test-web` (Vitest + React Testing
-Library against a mocked backend, no FastAPI/CUDA/ACE-Step required) — see
-web/README.md's Tests section for details.
-
-## GPU smoke (manual)
-
-```bash
-./scripts/lyre smoke-gpu
-```
-
-Loads ACE-Step turbo, generates ~10s of instrumental `text2music`, prints the output path, exits
-0. Not part of `pytest`; requires a real GPU and installed weights.
-
-## Location
-
-Canonical checkout: `/home/limb06/wizards-lyre` (WSL Ubuntu, next to the other limb06 projects).
-Studio data (`projects/`) lives in this tree and is gitignored.
-
-Conclave on Windows cannot jail a WSL path, so the legacy
-`config/projects/wizards-bard.yaml` remains `active: false`. Do not recreate a Windows clone
-under `.projects/` unless you want Conclave to drive Lyre again.
+[acestep]: https://github.com/ace-step/ACE-Step-1.5
+[uv]: https://docs.astral.sh/uv/
