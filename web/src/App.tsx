@@ -1,4 +1,11 @@
-import { DragEvent, KeyboardEvent as ReactKeyboardEvent, useCallback, useEffect, useRef, useState } from "react";
+import {
+  DragEvent,
+  KeyboardEvent as ReactKeyboardEvent,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { api, Job, Lora, Plan, ProjectDetail, ProjectSummary, Section } from "./api";
 import { ConfirmationDialog } from "./components/ConfirmationDialog";
 import { Icon } from "./components/Icon";
@@ -134,7 +141,6 @@ export default function App() {
   const lyricsTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const confirmationFocusRef = useRef<HTMLElement | null>(null);
-
 
   const requestConfirmation = useCallback(
     (request: Omit<ConfirmationRequest, "resolve">): Promise<boolean> => {
@@ -330,7 +336,8 @@ export default function App() {
   async function deleteProject(p: ProjectSummary): Promise<void> {
     const accepted = await requestConfirmation({
       title: `Delete “${p.title}”?`,
-      message: "This permanently removes the project, every take, and its local files. This cannot be undone.",
+      message:
+        "This permanently removes the project, every take, and its local files. This cannot be undone.",
       confirmLabel: "Delete project",
       destructive: true,
     });
@@ -785,7 +792,8 @@ export default function App() {
     if (selectedLoraId) {
       const accepted = await requestConfirmation({
         title: "Load the studio model?",
-        message: "Generate needs the studio_ops base model for this style pack. Lyre will unload the current model before the job starts.",
+        message:
+          "Generate needs the studio_ops base model for this style pack. Lyre will unload the current model before the job starts.",
         confirmLabel: "Load model & generate",
       });
       if (!accepted) return;
@@ -824,7 +832,8 @@ export default function App() {
     if (selectedLoraId) {
       const accepted = await requestConfirmation({
         title: "Load the studio model?",
-        message: "Cover needs the studio_ops base model for this style pack. Lyre will unload the current model before the job starts.",
+        message:
+          "Cover needs the studio_ops base model for this style pack. Lyre will unload the current model before the job starts.",
         confirmLabel: "Load model & cover",
       });
       if (!accepted) return;
@@ -842,7 +851,13 @@ export default function App() {
       const source = selectedTakeId
         ? { takeId: selectedTakeId }
         : { uploadPath: uploadedSourcePath! };
-      const queued = await api.cover(activeId, source, coverStrength, selectedLoraId, parseSeed(seedInput));
+      const queued = await api.cover(
+        activeId,
+        source,
+        coverStrength,
+        selectedLoraId,
+        parseSeed(seedInput),
+      );
       const job = await pollJob(queued.id, (update) => setBusyStatus(update.status));
       if (job.status === "error") {
         setErrorMsg(job.error ?? "cover job failed");
@@ -875,7 +890,8 @@ export default function App() {
     if (selectedLoraId) {
       const accepted = await requestConfirmation({
         title: "Load the studio model?",
-        message: "Repaint needs the studio_ops base model for this style pack. Lyre will unload the current model before the job starts.",
+        message:
+          "Repaint needs the studio_ops base model for this style pack. Lyre will unload the current model before the job starts.",
         confirmLabel: "Load model & repaint",
       });
       if (!accepted) return;
@@ -893,7 +909,14 @@ export default function App() {
         : { uploadPath: uploadedSourcePath! };
       const start = selectedTakeId ? region!.start : 0;
       const end = selectedTakeId ? region!.end : -1;
-      const queued = await api.repaint(activeId, source, start, end, selectedLoraId, parseSeed(seedInput));
+      const queued = await api.repaint(
+        activeId,
+        source,
+        start,
+        end,
+        selectedLoraId,
+        parseSeed(seedInput),
+      );
       const job = await pollJob(queued.id, (update) => setBusyStatus(update.status));
       if (job.status === "error") {
         setErrorMsg(job.error ?? "repaint job failed");
@@ -921,7 +944,8 @@ export default function App() {
     // deliberate, confirmed action, not a side effect of a stray click.
     const accepted = await requestConfirmation({
       title: "Load the studio model?",
-      message: "Extract uses the studio_ops base model. Lyre will unload the current model before isolating this track.",
+      message:
+        "Extract uses the studio_ops base model. Lyre will unload the current model before isolating this track.",
       confirmLabel: "Load model & extract",
     });
     if (!accepted) return;
@@ -956,7 +980,8 @@ export default function App() {
     // Same base-model-swap gate as extract() (SPEC.md sec 4.3).
     const accepted = await requestConfirmation({
       title: "Load the studio model?",
-      message: "Lego uses the studio_ops base model. Lyre will unload the current model before adding or replacing the track.",
+      message:
+        "Lego uses the studio_ops base model. Lyre will unload the current model before adding or replacing the track.",
       confirmLabel: "Load model & add track",
     });
     if (!accepted) return;
@@ -992,7 +1017,8 @@ export default function App() {
     // Same base-model-swap gate as extract() (SPEC.md sec 4.3).
     const accepted = await requestConfirmation({
       title: "Load the studio model?",
-      message: "Complete uses the studio_ops base model. Lyre will unload the current model before filling the arrangement.",
+      message:
+        "Complete uses the studio_ops base model. Lyre will unload the current model before filling the arrangement.",
       confirmLabel: "Load model & complete",
     });
     if (!accepted) return;
@@ -1115,9 +1141,7 @@ export default function App() {
   // Generate/Cover/Repaint can show its name. Null when none is selected --
   // or when the id no longer resolves (a pack dir removed out of band), in
   // which case the <select> visually falls back to "None" too.
-  const selectedLora = selectedLoraId
-    ? loras.find((l) => l.id === selectedLoraId) ?? null
-    : null;
+  const selectedLora = selectedLoraId ? (loras.find((l) => l.id === selectedLoraId) ?? null) : null;
 
   useKeyboardShortcuts({
     activeId,
@@ -1173,7 +1197,9 @@ export default function App() {
           >
             <Icon name="library" />
           </button>
-          <span className="brand-mark"><Icon name="wave" /></span>
+          <span className="brand-mark">
+            <Icon name="wave" />
+          </span>
           <div>
             <h1>Wizard's Lyre</h1>
             <span className="brand-subtitle">A local music sketchbook</span>
@@ -1183,10 +1209,20 @@ export default function App() {
           <details className="shortcut-help">
             <summary>Keys</summary>
             <div className="shortcut-popover">
-              <span><kbd>G</kbd> Generate</span>
-              <span><kbd>Space</kbd> Play / pause</span>
-              <span><kbd>↑</kbd><kbd>↓</kbd> Previous / next take</span>
-              <span><kbd>Ctrl</kbd><kbd>S</kbd> Save plan</span>
+              <span>
+                <kbd>G</kbd> Generate
+              </span>
+              <span>
+                <kbd>Space</kbd> Play / pause
+              </span>
+              <span>
+                <kbd>↑</kbd>
+                <kbd>↓</kbd> Previous / next take
+              </span>
+              <span>
+                <kbd>Ctrl</kbd>
+                <kbd>S</kbd> Save plan
+              </span>
             </div>
           </details>
           <div
@@ -1221,7 +1257,11 @@ export default function App() {
           </div>
 
           {!creatingProject ? (
-            <button type="button" className="new-project-trigger" onClick={() => setCreatingProject(true)}>
+            <button
+              type="button"
+              className="new-project-trigger"
+              onClick={() => setCreatingProject(true)}
+            >
               <Icon name="add" />
               New project
             </button>
@@ -1238,7 +1278,12 @@ export default function App() {
             >
               <div className="composer-heading">
                 <span>New composition</span>
-                <button type="button" className="icon-button" aria-label="Cancel new project" onClick={() => setCreatingProject(false)}>
+                <button
+                  type="button"
+                  className="icon-button"
+                  aria-label="Cancel new project"
+                  onClick={() => setCreatingProject(false)}
+                >
                   <Icon name="close" />
                 </button>
               </div>
@@ -1259,7 +1304,9 @@ export default function App() {
                   onChange={(event) => setNewQuery(event.target.value)}
                 />
               </label>
-              <button type="submit" className="button-primary">Create project</button>
+              <button type="submit" className="button-primary">
+                Create project
+              </button>
             </form>
           )}
 
@@ -1331,7 +1378,9 @@ export default function App() {
             ))}
           </ul>
           {filteredProjects.length === 0 && (
-            <p className="empty-copy">{projects.length === 0 ? "No projects yet." : "No projects match this search."}</p>
+            <p className="empty-copy">
+              {projects.length === 0 ? "No projects yet." : "No projects match this search."}
+            </p>
           )}
           <audio ref={previewAudioRef} onEnded={() => setPreviewProjectId(null)} hidden />
         </ProjectRail>
@@ -1340,7 +1389,12 @@ export default function App() {
           {errorMsg && (
             <div className="error" role="alert">
               <span>{errorMsg}</span>
-              <button type="button" className="icon-button" aria-label="Dismiss error" onClick={() => setErrorMsg(null)}>
+              <button
+                type="button"
+                className="icon-button"
+                aria-label="Dismiss error"
+                onClick={() => setErrorMsg(null)}
+              >
                 <Icon name="close" />
               </button>
             </div>
@@ -1348,11 +1402,20 @@ export default function App() {
 
           {!detail && (
             <section className="workspace-empty" aria-labelledby="empty-title">
-              <span className="empty-mark"><Icon name="wave" /></span>
+              <span className="empty-mark">
+                <Icon name="wave" />
+              </span>
               <span className="eyebrow">Make room for an idea</span>
               <h2 id="empty-title">Choose a project or start a fresh musical sketch.</h2>
               <p>Your prompt, listening space, and take history stay together here.</p>
-              <button type="button" className="button-primary" onClick={() => { setCreatingProject(true); setLibraryOpen(true); }}>
+              <button
+                type="button"
+                className="button-primary"
+                onClick={() => {
+                  setCreatingProject(true);
+                  setLibraryOpen(true);
+                }}
+              >
                 <Icon name="add" /> New project
               </button>
             </section>
@@ -1401,10 +1464,25 @@ export default function App() {
                   </span>
                 </div>
                 <div className="workspace-actions">
-                  <button type="button" className="panel-action builder-toggle" aria-controls="composition-plan" aria-expanded={planOpen} onClick={() => setPlanOpen(true)}>
+                  <button
+                    type="button"
+                    className="panel-action builder-toggle"
+                    aria-controls="composition-plan"
+                    aria-expanded={planOpen}
+                    onClick={() => setPlanOpen(true)}
+                  >
                     <Icon name="settings" /> Plan
                   </button>
-                  <button type="button" className="panel-action" aria-controls="studio-inspector" aria-expanded={inspectorOpen} onClick={() => { setInspectorTab("takes"); setInspectorOpen(true); }}>
+                  <button
+                    type="button"
+                    className="panel-action"
+                    aria-controls="studio-inspector"
+                    aria-expanded={inspectorOpen}
+                    onClick={() => {
+                      setInspectorTab("takes");
+                      setInspectorOpen(true);
+                    }}
+                  >
                     <Icon name="wave" /> Takes
                   </button>
                   <label className="include-stems">
@@ -1440,18 +1518,33 @@ export default function App() {
                       <span className="eyebrow">Instrument deck</span>
                       <h3>Plan</h3>
                     </div>
-                    <div className={`save-state save-${saveState}`} role="status" aria-live="polite">
-                      <span />{saveStateLabel}
+                    <div
+                      className={`save-state save-${saveState}`}
+                      role="status"
+                      aria-live="polite"
+                    >
+                      <span />
+                      {saveStateLabel}
                     </div>
-                    <button type="button" className="icon-button drawer-close" aria-label="Close plan" onClick={() => setPlanOpen(false)}>
+                    <button
+                      type="button"
+                      className="icon-button drawer-close"
+                      aria-label="Close plan"
+                      onClick={() => setPlanOpen(false)}
+                    >
                       <Icon name="close" />
                     </button>
                   </div>
 
                   <div className="plan-scroll">
-                    <p className="builder-intro">Begin with the feeling. Add structure only when the song asks for it.</p>
+                    <p className="builder-intro">
+                      Begin with the feeling. Add structure only when the song asks for it.
+                    </p>
 
-                    <section className="builder-section builder-brief" aria-labelledby="builder-brief-title">
+                    <section
+                      className="builder-section builder-brief"
+                      aria-labelledby="builder-brief-title"
+                    >
                       <div className="builder-section-heading">
                         <span className="builder-index">01</span>
                         <div>
@@ -1467,7 +1560,10 @@ export default function App() {
                           onChange={(event) => savePlanField("query", event.target.value)}
                         />
                       </label>
-                      <p className="builder-tip">A scene, a sound, and a feeling is plenty. You can refine it after the first take.</p>
+                      <p className="builder-tip">
+                        A scene, a sound, and a feeling is plenty. You can refine it after the first
+                        take.
+                      </p>
                     </section>
 
                     <button
@@ -1479,13 +1575,23 @@ export default function App() {
                     >
                       <span className="builder-disclosure-copy">
                         <span className="builder-index">02</span>
-                        <span><strong>Open the sound controls</strong><small>Voice, timing, and arrangement</small></span>
+                        <span>
+                          <strong>Open the sound controls</strong>
+                          <small>Voice, timing, and arrangement</small>
+                        </span>
                       </span>
                       <span>{planDetailsOpen ? "Collapse" : "Open"}</span>
                     </button>
 
-                    <div id="composition-details" className="plan-details builder-details" hidden={!planDetailsOpen}>
-                      <section className="builder-section builder-song-details" aria-labelledby="song-details-title">
+                    <div
+                      id="composition-details"
+                      className="plan-details builder-details"
+                      hidden={!planDetailsOpen}
+                    >
+                      <section
+                        className="builder-section builder-song-details"
+                        aria-labelledby="song-details-title"
+                      >
                         <div className="builder-section-heading">
                           <span className="builder-index">A</span>
                           <div>
@@ -1501,11 +1607,59 @@ export default function App() {
                           />
                         </label>
                         <div className="plan-grid builder-settings-grid">
-                          <label>BPM<input type="number" value={detail.plan.bpm ?? ""} onChange={(event) => savePlanField("bpm", event.target.value === "" ? null : Number(event.target.value))} /></label>
-                          <label>Key<input value={detail.plan.keyscale ?? ""} onChange={(event) => savePlanField("keyscale", event.target.value === "" ? null : event.target.value)} /></label>
-                          <label>Time signature<input value={detail.plan.timesignature} onChange={(event) => savePlanField("timesignature", event.target.value)} /></label>
-                          <label>Duration (sec)<input type="number" value={detail.plan.duration_sec} onChange={(event) => savePlanField("duration_sec", Number(event.target.value))} /></label>
-                          <label>Language<input value={detail.plan.vocal_language} onChange={(event) => savePlanField("vocal_language", event.target.value)} /></label>
+                          <label>
+                            BPM
+                            <input
+                              type="number"
+                              value={detail.plan.bpm ?? ""}
+                              onChange={(event) =>
+                                savePlanField(
+                                  "bpm",
+                                  event.target.value === "" ? null : Number(event.target.value),
+                                )
+                              }
+                            />
+                          </label>
+                          <label>
+                            Key
+                            <input
+                              value={detail.plan.keyscale ?? ""}
+                              onChange={(event) =>
+                                savePlanField(
+                                  "keyscale",
+                                  event.target.value === "" ? null : event.target.value,
+                                )
+                              }
+                            />
+                          </label>
+                          <label>
+                            Time signature
+                            <input
+                              value={detail.plan.timesignature}
+                              onChange={(event) =>
+                                savePlanField("timesignature", event.target.value)
+                              }
+                            />
+                          </label>
+                          <label>
+                            Duration (sec)
+                            <input
+                              type="number"
+                              value={detail.plan.duration_sec}
+                              onChange={(event) =>
+                                savePlanField("duration_sec", Number(event.target.value))
+                              }
+                            />
+                          </label>
+                          <label>
+                            Language
+                            <input
+                              value={detail.plan.vocal_language}
+                              onChange={(event) =>
+                                savePlanField("vocal_language", event.target.value)
+                              }
+                            />
+                          </label>
                         </div>
                         <div className="toggle-row builder-switches">
                           <label className="checkbox">
@@ -1513,23 +1667,36 @@ export default function App() {
                               type="checkbox"
                               aria-label="Instrumental"
                               checked={detail.plan.instrumental}
-                              onChange={(event) => savePlanField("instrumental", event.target.checked)}
+                              onChange={(event) =>
+                                savePlanField("instrumental", event.target.checked)
+                              }
                             />
-                            <span><strong>Instrumental</strong><small>Do not generate vocals or lyrics.</small></span>
+                            <span>
+                              <strong>Instrumental</strong>
+                              <small>Do not generate vocals or lyrics.</small>
+                            </span>
                           </label>
                           <label className="checkbox">
                             <input
                               type="checkbox"
                               aria-label="Allow caption rewrite (Custom mode LM thinking)"
                               checked={detail.plan.caption_rewrite}
-                              onChange={(event) => savePlanField("caption_rewrite", event.target.checked)}
+                              onChange={(event) =>
+                                savePlanField("caption_rewrite", event.target.checked)
+                              }
                             />
-                            <span><strong>Allow caption rewrite</strong><small>Let Custom mode rethink the direction.</small></span>
+                            <span>
+                              <strong>Allow caption rewrite</strong>
+                              <small>Let Custom mode rethink the direction.</small>
+                            </span>
                           </label>
                         </div>
                       </section>
 
-                      <section className="builder-section builder-lyrics" aria-labelledby="builder-lyrics-title">
+                      <section
+                        className="builder-section builder-lyrics"
+                        aria-labelledby="builder-lyrics-title"
+                      >
                         <div className="builder-section-heading">
                           <span className="builder-index">B</span>
                           <div>
@@ -1542,7 +1709,10 @@ export default function App() {
                             <label htmlFor="plan-lyrics">Lyrics</label>
                             <span>Optional</span>
                           </div>
-                          <div className="lyrics-tag-palette" aria-label="Insert song structure tag">
+                          <div
+                            className="lyrics-tag-palette"
+                            aria-label="Insert song structure tag"
+                          >
                             {STRUCTURE_TAGS.map((tag) => (
                               <button
                                 key={tag}
@@ -1565,33 +1735,88 @@ export default function App() {
                         </div>
                       </section>
 
-                      <section className="plan-sections builder-section builder-arrangement" aria-labelledby="builder-arrangement-title">
+                      <section
+                        className="plan-sections builder-section builder-arrangement"
+                        aria-labelledby="builder-arrangement-title"
+                      >
                         <div className="plan-sections-header">
                           <div>
                             <span className="eyebrow">Map</span>
-                            <span id="builder-arrangement-title" className="plan-sections-title">Cue map</span>
-                            <small>{detail.plan.sections.length} mapped · or draw on the waveform</small>
+                            <span id="builder-arrangement-title" className="plan-sections-title">
+                              Cue map
+                            </span>
+                            <small>
+                              {detail.plan.sections.length} mapped · or draw on the waveform
+                            </small>
                           </div>
-                          <button type="button" className="button-secondary" onClick={() => addSection()}>
+                          <button
+                            type="button"
+                            className="button-secondary"
+                            onClick={() => addSection()}
+                          >
                             <Icon name="add" /> Add section
                           </button>
                         </div>
                         {detail.plan.sections.length === 0 && (
-                          <p className="empty-copy">No sections yet. Add one here or draw a region on the waveform.</p>
+                          <p className="empty-copy">
+                            No sections yet. Add one here or draw a region on the waveform.
+                          </p>
                         )}
                         <ul className="section-list">
                           {detail.plan.sections.map((section, index) => (
                             <li key={index} className="section-row">
-                              <span className="section-index">{String(index + 1).padStart(2, "0")}</span>
-                              <input className="section-name" placeholder="name" value={section.name} onChange={(event) => updateSection(index, { name: event.target.value })} />
+                              <span className="section-index">
+                                {String(index + 1).padStart(2, "0")}
+                              </span>
+                              <input
+                                className="section-name"
+                                placeholder="name"
+                                value={section.name}
+                                onChange={(event) =>
+                                  updateSection(index, { name: event.target.value })
+                                }
+                              />
                               <div className="section-range">
-                                <input className="section-time" type="number" min={0} step={0.1} title="start (sec)" value={section.start_sec} onChange={(event) => updateSection(index, { start_sec: Number(event.target.value) })} />
+                                <input
+                                  className="section-time"
+                                  type="number"
+                                  min={0}
+                                  step={0.1}
+                                  title="start (sec)"
+                                  value={section.start_sec}
+                                  onChange={(event) =>
+                                    updateSection(index, { start_sec: Number(event.target.value) })
+                                  }
+                                />
                                 <span className="section-sep">–</span>
-                                <input className="section-time" type="number" min={0} step={0.1} title="end (sec)" value={section.end_sec} onChange={(event) => updateSection(index, { end_sec: Number(event.target.value) })} />
+                                <input
+                                  className="section-time"
+                                  type="number"
+                                  min={0}
+                                  step={0.1}
+                                  title="end (sec)"
+                                  value={section.end_sec}
+                                  onChange={(event) =>
+                                    updateSection(index, { end_sec: Number(event.target.value) })
+                                  }
+                                />
                               </div>
-                              <input className="section-lyrics" placeholder="lyrics snippet" value={section.lyrics} onChange={(event) => updateSection(index, { lyrics: event.target.value })} />
-                              <button type="button" className="icon-button" aria-label={`Delete section ${index + 1}`} onClick={() => removeSection(index)}>
-                                <Icon name="delete" /><span className="delete-text">Delete</span>
+                              <input
+                                className="section-lyrics"
+                                placeholder="lyrics snippet"
+                                value={section.lyrics}
+                                onChange={(event) =>
+                                  updateSection(index, { lyrics: event.target.value })
+                                }
+                              />
+                              <button
+                                type="button"
+                                className="icon-button"
+                                aria-label={`Delete section ${index + 1}`}
+                                onClick={() => removeSection(index)}
+                              >
+                                <Icon name="delete" />
+                                <span className="delete-text">Delete</span>
                               </button>
                             </li>
                           ))}
@@ -1602,40 +1827,236 @@ export default function App() {
                     <OperationDock>
                       <div className="operation-tabs" role="tablist" aria-label="Studio operations">
                         {(["create", "transform", "tracks"] as OperationGroup[]).map((group) => (
-                          <button key={group} type="button" role="tab" aria-selected={operationGroup === group} onClick={() => setOperationGroup(group)}>{group}</button>
+                          <button
+                            key={group}
+                            type="button"
+                            role="tab"
+                            aria-selected={operationGroup === group}
+                            onClick={() => setOperationGroup(group)}
+                          >
+                            {group}
+                          </button>
                         ))}
                       </div>
 
-                      <section className={`operation-group create-group ${operationGroup === "create" ? "is-active" : ""}`} aria-label="Create operations">
-                        <div className="operation-heading"><span>01</span><div><strong>Play</strong><small>Turn this idea into a first take</small></div></div>
-                        <div className="operation-controls create-controls">
-                          <label className="lora-select">Style pack<select value={selectedLoraId ?? ""} onChange={(event) => setSelectedLoraId(event.target.value || null)} disabled={busy} title="Applies to Generate/Cover/Repaint below (SPEC.md sec 4.4)"><option value="">None</option>{loras.filter((lora) => !lora.error).map((lora) => <option key={lora.id} value={lora.id}>{lora.name}</option>)}</select></label>
-                          {selectedLora && <span className="lora-active-badge" title={`Generate/Cover/Repaint will run against the studio_ops base model with style pack "${selectedLora.name}" (SPEC.md sec 4.4)`}>Style pack: {selectedLora.name}</span>}
-                          <label className="seed-input">Seed<input type="number" step={1} min={-1} placeholder="-1" value={seedInput} onChange={(event) => setSeedInput(event.target.value)} disabled={busy} title="Fixed seed for Generate/Cover/Repaint; empty or -1 lets the worker pick and record one (SPEC.md sec 7.3)" /></label>
-                          <div className="dit-profile-picker" role="group" aria-label="DiT profile" title="Project default DiT checkpoint for Generate/Cover/Repaint (SPEC.md sec 4.1); a style pack always forces studio_ops">
-                            <span className="dit-profile-caption">DiT</span>
-                            {DIT_PROFILE_OPTIONS.map((profile) => <button key={profile} type="button" className={`dit-profile-option ${detail.project.dit_profile === profile ? "selected" : ""}`} disabled={busy} onClick={() => setDitProfile(profile)} title={profile === "iterate" ? "Fast daily generate/cover/repaint (turbo, 8 steps)" : profile === "polish" ? "More prompt adherence / detail (sft, 50 steps + CFG)" : "XL turbo; the job is rejected if the worker cannot load XL"}>{profile}</button>)}
+                      <section
+                        className={`operation-group create-group ${operationGroup === "create" ? "is-active" : ""}`}
+                        aria-label="Create operations"
+                      >
+                        <div className="operation-heading">
+                          <span>01</span>
+                          <div>
+                            <strong>Play</strong>
+                            <small>Turn this idea into a first take</small>
                           </div>
-                          <button type="button" className="generate-button" onClick={generate} disabled={busy} title="Shortcuts: g generate · space play/pause · ↑/↓ prev/next take · ctrl/cmd+s save plan"><Icon name="spark" /> Generate</button>
+                        </div>
+                        <div className="operation-controls create-controls">
+                          <label className="lora-select">
+                            Style pack
+                            <select
+                              value={selectedLoraId ?? ""}
+                              onChange={(event) => setSelectedLoraId(event.target.value || null)}
+                              disabled={busy}
+                              title="Applies to Generate/Cover/Repaint below (SPEC.md sec 4.4)"
+                            >
+                              <option value="">None</option>
+                              {loras
+                                .filter((lora) => !lora.error)
+                                .map((lora) => (
+                                  <option key={lora.id} value={lora.id}>
+                                    {lora.name}
+                                  </option>
+                                ))}
+                            </select>
+                          </label>
+                          {selectedLora && (
+                            <span
+                              className="lora-active-badge"
+                              title={`Generate/Cover/Repaint will run against the studio_ops base model with style pack "${selectedLora.name}" (SPEC.md sec 4.4)`}
+                            >
+                              Style pack: {selectedLora.name}
+                            </span>
+                          )}
+                          <label className="seed-input">
+                            Seed
+                            <input
+                              type="number"
+                              step={1}
+                              min={-1}
+                              placeholder="-1"
+                              value={seedInput}
+                              onChange={(event) => setSeedInput(event.target.value)}
+                              disabled={busy}
+                              title="Fixed seed for Generate/Cover/Repaint; empty or -1 lets the worker pick and record one (SPEC.md sec 7.3)"
+                            />
+                          </label>
+                          <div
+                            className="dit-profile-picker"
+                            role="group"
+                            aria-label="DiT profile"
+                            title="Project default DiT checkpoint for Generate/Cover/Repaint (SPEC.md sec 4.1); a style pack always forces studio_ops"
+                          >
+                            <span className="dit-profile-caption">DiT</span>
+                            {DIT_PROFILE_OPTIONS.map((profile) => (
+                              <button
+                                key={profile}
+                                type="button"
+                                className={`dit-profile-option ${detail.project.dit_profile === profile ? "selected" : ""}`}
+                                disabled={busy}
+                                onClick={() => setDitProfile(profile)}
+                                title={
+                                  profile === "iterate"
+                                    ? "Fast daily generate/cover/repaint (turbo, 8 steps)"
+                                    : profile === "polish"
+                                      ? "More prompt adherence / detail (sft, 50 steps + CFG)"
+                                      : "XL turbo; the job is rejected if the worker cannot load XL"
+                                }
+                              >
+                                {profile}
+                              </button>
+                            ))}
+                          </div>
+                          <button
+                            type="button"
+                            className="generate-button"
+                            onClick={generate}
+                            disabled={busy}
+                            title="Shortcuts: g generate · space play/pause · ↑/↓ prev/next take · ctrl/cmd+s save plan"
+                          >
+                            <Icon name="spark" /> Generate
+                          </button>
                         </div>
                       </section>
 
-                      <section className={`operation-group transform-group ${operationGroup === "transform" ? "is-active" : ""}`} aria-label="Transform operations">
-                        <div className="operation-heading"><span>02</span><div><strong>Bend</strong><small>Reshape the selected sound</small></div></div>
+                      <section
+                        className={`operation-group transform-group ${operationGroup === "transform" ? "is-active" : ""}`}
+                        aria-label="Transform operations"
+                      >
+                        <div className="operation-heading">
+                          <span>02</span>
+                          <div>
+                            <strong>Bend</strong>
+                            <small>Reshape the selected sound</small>
+                          </div>
+                        </div>
                         <div className="operation-controls">
-                          <label className="cover-strength">Strength<input type="number" min={0} max={1} step={0.05} value={coverStrength} onChange={(event) => setCoverStrength(Number(event.target.value))} /></label>
-                          <button type="button" onClick={cover} disabled={busy || (!selectedTakeId && !uploadedSourcePath) || !!selectedTake?.error} title={selectedTakeId || uploadedSourcePath ? undefined : "Select a take or drop a file first"}>Cover</button>
-                          <button type="button" onClick={repaint} disabled={busy || (!selectedTakeId && !uploadedSourcePath) || (!!selectedTakeId && !region) || !!selectedTake?.error} title={!selectedTakeId && !uploadedSourcePath ? "Select a take or drop a file first" : selectedTakeId && !region ? "Drag a region on the waveform first" : undefined}>Repaint</button>
+                          <label className="cover-strength">
+                            Strength
+                            <input
+                              type="number"
+                              min={0}
+                              max={1}
+                              step={0.05}
+                              value={coverStrength}
+                              onChange={(event) => setCoverStrength(Number(event.target.value))}
+                            />
+                          </label>
+                          <button
+                            type="button"
+                            onClick={cover}
+                            disabled={
+                              busy ||
+                              (!selectedTakeId && !uploadedSourcePath) ||
+                              !!selectedTake?.error
+                            }
+                            title={
+                              selectedTakeId || uploadedSourcePath
+                                ? undefined
+                                : "Select a take or drop a file first"
+                            }
+                          >
+                            Cover
+                          </button>
+                          <button
+                            type="button"
+                            onClick={repaint}
+                            disabled={
+                              busy ||
+                              (!selectedTakeId && !uploadedSourcePath) ||
+                              (!!selectedTakeId && !region) ||
+                              !!selectedTake?.error
+                            }
+                            title={
+                              !selectedTakeId && !uploadedSourcePath
+                                ? "Select a take or drop a file first"
+                                : selectedTakeId && !region
+                                  ? "Drag a region on the waveform first"
+                                  : undefined
+                            }
+                          >
+                            Repaint
+                          </button>
                         </div>
                       </section>
 
-                      <section className={`operation-group tracks-group ${operationGroup === "tracks" ? "is-active" : ""}`} aria-label="Track operations">
-                        <div className="operation-heading"><span>03</span><div><strong>Pull apart</strong><small>Work with the parts inside a take</small></div></div>
+                      <section
+                        className={`operation-group tracks-group ${operationGroup === "tracks" ? "is-active" : ""}`}
+                        aria-label="Track operations"
+                      >
+                        <div className="operation-heading">
+                          <span>03</span>
+                          <div>
+                            <strong>Pull apart</strong>
+                            <small>Work with the parts inside a take</small>
+                          </div>
+                        </div>
                         <div className="operation-controls">
-                          <label className="track-name">Track name / classes<input placeholder="vocals, drums, bass..." value={trackName} onChange={(event) => setTrackName(event.target.value)} /></label>
-                          <button type="button" onClick={extract} disabled={busy || !selectedTakeId || !trackName.trim() || !!selectedTake?.error} title={!selectedTakeId ? "Select a take first" : !trackName.trim() ? "Enter a track name first" : undefined}>Extract</button>
-                          <button type="button" onClick={lego} disabled={busy || !selectedTakeId || !trackName.trim() || !!selectedTake?.error} title={!selectedTakeId ? "Select a take first" : !trackName.trim() ? "Enter a track name first" : undefined}>Lego</button>
-                          <button type="button" onClick={complete} disabled={busy || !selectedTakeId || !trackName.trim() || !!selectedTake?.error} title={!selectedTakeId ? "Select a take first" : !trackName.trim() ? "Enter a track name / classes first" : undefined}>Complete</button>
+                          <label className="track-name">
+                            Track name / classes
+                            <input
+                              placeholder="vocals, drums, bass..."
+                              value={trackName}
+                              onChange={(event) => setTrackName(event.target.value)}
+                            />
+                          </label>
+                          <button
+                            type="button"
+                            onClick={extract}
+                            disabled={
+                              busy || !selectedTakeId || !trackName.trim() || !!selectedTake?.error
+                            }
+                            title={
+                              !selectedTakeId
+                                ? "Select a take first"
+                                : !trackName.trim()
+                                  ? "Enter a track name first"
+                                  : undefined
+                            }
+                          >
+                            Extract
+                          </button>
+                          <button
+                            type="button"
+                            onClick={lego}
+                            disabled={
+                              busy || !selectedTakeId || !trackName.trim() || !!selectedTake?.error
+                            }
+                            title={
+                              !selectedTakeId
+                                ? "Select a take first"
+                                : !trackName.trim()
+                                  ? "Enter a track name first"
+                                  : undefined
+                            }
+                          >
+                            Lego
+                          </button>
+                          <button
+                            type="button"
+                            onClick={complete}
+                            disabled={
+                              busy || !selectedTakeId || !trackName.trim() || !!selectedTake?.error
+                            }
+                            title={
+                              !selectedTakeId
+                                ? "Select a take first"
+                                : !trackName.trim()
+                                  ? "Enter a track name / classes first"
+                                  : undefined
+                            }
+                          >
+                            Complete
+                          </button>
                         </div>
                       </section>
                     </OperationDock>
@@ -1652,7 +2073,11 @@ export default function App() {
                       <div className="selected-take-summary">
                         <span>{selectedTake.task_type}</span>
                         <code>seed {selectedTake.seed}</code>
-                        <code>{selectedTake.duration_sec != null ? `${selectedTake.duration_sec.toFixed(1)}s` : "—"}</code>
+                        <code>
+                          {selectedTake.duration_sec != null
+                            ? `${selectedTake.duration_sec.toFixed(1)}s`
+                            : "—"}
+                        </code>
                       </div>
                     ) : (
                       <span className="stage-empty-label">No take selected</span>
@@ -1667,8 +2092,17 @@ export default function App() {
                     <Icon name="wave" />
                     {uploadedSourcePath ? (
                       <span className="upload-dropzone-file">
-                        <span><small>External source</small>{uploadedSourceName ?? uploadedSourcePath}</span>
-                        <button type="button" className="button-secondary" onClick={clearUploadedSource}>Clear</button>
+                        <span>
+                          <small>External source</small>
+                          {uploadedSourceName ?? uploadedSourcePath}
+                        </span>
+                        <button
+                          type="button"
+                          className="button-secondary"
+                          onClick={clearUploadedSource}
+                        >
+                          Clear
+                        </button>
                       </span>
                     ) : (
                       <span className="source-copy">
@@ -1689,7 +2123,11 @@ export default function App() {
                       }}
                     />
                     {!uploadedSourcePath && (
-                      <button type="button" className="button-secondary" onClick={() => fileInputRef.current?.click()}>
+                      <button
+                        type="button"
+                        className="button-secondary"
+                        onClick={() => fileInputRef.current?.click()}
+                      >
                         Choose audio
                       </button>
                     )}
@@ -1702,7 +2140,11 @@ export default function App() {
                     ) : (
                       <div className="waveform-empty">
                         <Icon name="wave" />
-                        <p>{selectedTake?.error ? "This take did not produce playable audio." : "Select a take to inspect its waveform."}</p>
+                        <p>
+                          {selectedTake?.error
+                            ? "This take did not produce playable audio."
+                            : "Select a take to inspect its waveform."}
+                        </p>
                       </div>
                     )}
                   </div>
@@ -1731,96 +2173,306 @@ export default function App() {
                         seekWaveform(Number(event.target.value));
                       }}
                     />
-                    <span className="transport-time">{formatClock(waveformDuration || selectedTake?.duration_sec || 0)}</span>
+                    <span className="transport-time">
+                      {formatClock(waveformDuration || selectedTake?.duration_sec || 0)}
+                    </span>
                     <LoudnessMeter audioEl={waveformMediaEl} />
                   </StudioPlayer>
 
                   <div className={`region-bar ${region ? "has-region" : ""}`}>
                     <span>
-                      {region ? `Region: ${region.start.toFixed(1)}s – ${region.end.toFixed(1)}s` : "Drag across the waveform to select a repaint region."}
+                      {region
+                        ? `Region: ${region.start.toFixed(1)}s – ${region.end.toFixed(1)}s`
+                        : "Drag across the waveform to select a repaint region."}
                     </span>
                     <div>
-                      <button type="button" className="button-secondary" onClick={addSectionFromRegion} disabled={!region} title={region ? "Append this region as a named section in the Plan" : "Drag a region on the waveform first"}>
+                      <button
+                        type="button"
+                        className="button-secondary"
+                        onClick={addSectionFromRegion}
+                        disabled={!region}
+                        title={
+                          region
+                            ? "Append this region as a named section in the Plan"
+                            : "Drag a region on the waveform first"
+                        }
+                      >
                         Add section from region
                       </button>
-                      {region && <button type="button" className="text-button" onClick={clearRegion}>Clear region</button>}
+                      {region && (
+                        <button type="button" className="text-button" onClick={clearRegion}>
+                          Clear region
+                        </button>
+                      )}
                     </div>
                   </div>
 
-                  {compareTakeId && (() => {
-                    const compareTake = detail.takes.find((take) => take.id === compareTakeId);
-                    if (!compareTake || compareTake.error) return null;
-                    return (
-                      <section className="compare" aria-label="A/B comparison">
-                        <div className="compare-heading">
-                          <div><span className="eyebrow">Instant audition</span><h3>Compare</h3></div>
-                          <button type="button" className="icon-button" aria-label="Close compare" onClick={() => setCompareTakeId(null)}><Icon name="close" /></button>
-                        </div>
-                        <div className="compare-panel">
-                          <div className="compare-slot">
-                            <span className="compare-label">A · selected</span>
-                            {selectedTake && !selectedTake.error ? <audio controls src={api.takeAudioUrl(detail.project.id, selectedTake.id)} /> : <p className="hint">Select a take to fill A too.</p>}
+                  {compareTakeId &&
+                    (() => {
+                      const compareTake = detail.takes.find((take) => take.id === compareTakeId);
+                      if (!compareTake || compareTake.error) return null;
+                      return (
+                        <section className="compare" aria-label="A/B comparison">
+                          <div className="compare-heading">
+                            <div>
+                              <span className="eyebrow">Instant audition</span>
+                              <h3>Compare</h3>
+                            </div>
+                            <button
+                              type="button"
+                              className="icon-button"
+                              aria-label="Close compare"
+                              onClick={() => setCompareTakeId(null)}
+                            >
+                              <Icon name="close" />
+                            </button>
                           </div>
-                          <button type="button" className="swap-compare" disabled={!selectedTakeId} onClick={swapCompare}>Swap A/B</button>
-                          <div className="compare-slot">
-                            <span className="compare-label">B · comparing</span>
-                            <audio controls src={api.takeAudioUrl(detail.project.id, compareTakeId)} />
+                          <div className="compare-panel">
+                            <div className="compare-slot">
+                              <span className="compare-label">A · selected</span>
+                              {selectedTake && !selectedTake.error ? (
+                                <audio
+                                  controls
+                                  src={api.takeAudioUrl(detail.project.id, selectedTake.id)}
+                                />
+                              ) : (
+                                <p className="hint">Select a take to fill A too.</p>
+                              )}
+                            </div>
+                            <button
+                              type="button"
+                              className="swap-compare"
+                              disabled={!selectedTakeId}
+                              onClick={swapCompare}
+                            >
+                              Swap A/B
+                            </button>
+                            <div className="compare-slot">
+                              <span className="compare-label">B · comparing</span>
+                              <audio
+                                controls
+                                src={api.takeAudioUrl(detail.project.id, compareTakeId)}
+                              />
+                            </div>
                           </div>
-                        </div>
-                      </section>
-                    );
-                  })()}
-
+                        </section>
+                      );
+                    })()}
                 </StudioStage>
 
                 <TakesRail open={inspectorOpen}>
                   <div className="inspector-tabs" role="tablist" aria-label="Inspector">
-                    <button type="button" role="tab" aria-selected={inspectorTab === "takes"} onClick={() => setInspectorTab("takes")}>Takes <span>{detail.takes.length}</span></button>
-                    <button type="button" role="tab" aria-selected={inspectorTab === "styles"} onClick={() => setInspectorTab("styles")}>Style packs <span>{loras.length}</span></button>
-                    <button type="button" className="icon-button drawer-close" aria-label="Close inspector" onClick={() => setInspectorOpen(false)}><Icon name="close" /></button>
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={inspectorTab === "takes"}
+                      onClick={() => setInspectorTab("takes")}
+                    >
+                      Takes <span>{detail.takes.length}</span>
+                    </button>
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={inspectorTab === "styles"}
+                      onClick={() => setInspectorTab("styles")}
+                    >
+                      Style packs <span>{loras.length}</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="icon-button drawer-close"
+                      aria-label="Close inspector"
+                      onClick={() => setInspectorOpen(false)}
+                    >
+                      <Icon name="close" />
+                    </button>
                   </div>
 
                   <section className="takes" hidden={inspectorTab !== "takes"}>
-                    <div className="sr-only"><h3>Takes</h3></div>
-                    {detail.takes.length === 0 && <div className="inspector-empty"><Icon name="wave" /><p>No takes yet.</p><span>Your first generation will appear here.</span></div>}
+                    <div className="sr-only">
+                      <h3>Takes</h3>
+                    </div>
+                    {detail.takes.length === 0 && (
+                      <div className="inspector-empty">
+                        <Icon name="wave" />
+                        <p>No takes yet.</p>
+                        <span>Your first generation will appear here.</span>
+                      </div>
+                    )}
                     <ul className="take-list">
                       {detail.takes.map((take, index) => (
                         <li
                           key={take.id}
-                          className={[take.id === selectedTakeId ? "selected" : "", take.id === detail.project.active_take_id ? "active-take" : ""].filter(Boolean).join(" ")}
+                          className={[
+                            take.id === selectedTakeId ? "selected" : "",
+                            take.id === detail.project.active_take_id ? "active-take" : "",
+                          ]
+                            .filter(Boolean)
+                            .join(" ")}
                           tabIndex={0}
                           aria-label={`Take ${detail.takes.length - index}, ${take.task_type}, seed ${take.seed}`}
                           onClick={() => setSelectedTakeId(take.id)}
                           onKeyDown={(event: ReactKeyboardEvent<HTMLLIElement>) => {
-                            if ((event.key === "Enter" || event.key === " ") && event.target === event.currentTarget) {
+                            if (
+                              (event.key === "Enter" || event.key === " ") &&
+                              event.target === event.currentTarget
+                            ) {
                               event.preventDefault();
                               setSelectedTakeId(take.id);
                             }
                           }}
                         >
                           <div className="take-header">
-                            <span className="take-number">{String(detail.takes.length - index).padStart(2, "0")}</span>
-                            <div className="take-identity"><strong>{take.task_type}</strong><span>seed {take.seed}</span></div>
-                            <div className="take-statuses">
-                              {take.id === detail.project.active_take_id && <span className="active-take-badge">active</span>}
-                              {take.id === selectedTakeId && <span className="source-take-badge">source</span>}
+                            <span className="take-number">
+                              {String(detail.takes.length - index).padStart(2, "0")}
+                            </span>
+                            <div className="take-identity">
+                              <strong>{take.task_type}</strong>
+                              <span>seed {take.seed}</span>
                             </div>
-                            <button type="button" className={`icon-button favorite-btn ${take.favorite ? "favorited" : ""}`} title={take.favorite ? "Unfavorite" : "Favorite"} aria-label={`${take.favorite ? "Unfavorite" : "Favorite"} take ${take.id}`} onClick={(event) => { event.stopPropagation(); toggleTakeFavorite(take); }}><Icon name="star" /></button>
+                            <div className="take-statuses">
+                              {take.id === detail.project.active_take_id && (
+                                <span className="active-take-badge">active</span>
+                              )}
+                              {take.id === selectedTakeId && (
+                                <span className="source-take-badge">source</span>
+                              )}
+                            </div>
+                            <button
+                              type="button"
+                              className={`icon-button favorite-btn ${take.favorite ? "favorited" : ""}`}
+                              title={take.favorite ? "Unfavorite" : "Favorite"}
+                              aria-label={`${take.favorite ? "Unfavorite" : "Favorite"} take ${take.id}`}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                toggleTakeFavorite(take);
+                              }}
+                            >
+                              <Icon name="star" />
+                            </button>
                           </div>
-                          <div className="take-facts"><span>{take.duration_sec != null ? `${take.duration_sec.toFixed(1)}s` : "—"}</span><span>score {take.score ?? "—"}</span><span>{take.dit_profile}</span></div>
-                          {take.lora_id && (() => {
-                            const pack = loras.find((lora) => lora.id === take.lora_id);
-                            return pack && !pack.error ? <button type="button" className="take-lora-badge" title={`Generated with style pack "${pack.name}" — click to select it for the next Generate/Cover/Repaint`} onClick={(event) => { event.stopPropagation(); setSelectedLoraId(pack.id); }}>style: {pack.name}</button> : <span className="take-lora-badge" title={pack ? `Generated with style pack "${pack.name}" (${take.lora_id}) — it failed training and cannot be loaded` : `Generated with style pack ${take.lora_id} (not found in this project)`}>style: {pack ? pack.name : take.lora_id.slice(0, 8)}</span>;
-                          })()}
-                          <textarea className="take-notes" placeholder="Notes..." value={take.notes} onClick={(event) => event.stopPropagation()} onChange={(event) => saveTakeNotes(take.id, event.target.value)} onBlur={() => flushTakeNotes(take.id).catch((err) => setErrorMsg(String(err)))} />
+                          <div className="take-facts">
+                            <span>
+                              {take.duration_sec != null ? `${take.duration_sec.toFixed(1)}s` : "—"}
+                            </span>
+                            <span>score {take.score ?? "—"}</span>
+                            <span>{take.dit_profile}</span>
+                          </div>
+                          {take.lora_id &&
+                            (() => {
+                              const pack = loras.find((lora) => lora.id === take.lora_id);
+                              return pack && !pack.error ? (
+                                <button
+                                  type="button"
+                                  className="take-lora-badge"
+                                  title={`Generated with style pack "${pack.name}" — click to select it for the next Generate/Cover/Repaint`}
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    setSelectedLoraId(pack.id);
+                                  }}
+                                >
+                                  style: {pack.name}
+                                </button>
+                              ) : (
+                                <span
+                                  className="take-lora-badge"
+                                  title={
+                                    pack
+                                      ? `Generated with style pack "${pack.name}" (${take.lora_id}) — it failed training and cannot be loaded`
+                                      : `Generated with style pack ${take.lora_id} (not found in this project)`
+                                  }
+                                >
+                                  style: {pack ? pack.name : take.lora_id.slice(0, 8)}
+                                </span>
+                              );
+                            })()}
+                          <textarea
+                            className="take-notes"
+                            placeholder="Notes..."
+                            value={take.notes}
+                            onClick={(event) => event.stopPropagation()}
+                            onChange={(event) => saveTakeNotes(take.id, event.target.value)}
+                            onBlur={() =>
+                              flushTakeNotes(take.id).catch((err) => setErrorMsg(String(err)))
+                            }
+                          />
                           <div className="take-player-row">
-                            {take.error ? <span className="take-error">failed: {take.error}</span> : <TakeAudioPlayer projectId={detail.project.id} takeId={take.id} registerRef={registerAudioRef} onSelect={() => setSelectedTakeId(take.id)} />}
+                            {take.error ? (
+                              <span className="take-error">failed: {take.error}</span>
+                            ) : (
+                              <TakeAudioPlayer
+                                projectId={detail.project.id}
+                                takeId={take.id}
+                                registerRef={registerAudioRef}
+                                onSelect={() => setSelectedTakeId(take.id)}
+                              />
+                            )}
                           </div>
                           <div className="take-actions">
-                            <button type="button" disabled={take.id === detail.project.active_take_id || !!take.error} onClick={(event) => { event.stopPropagation(); setActiveTake(take.id); }}>Set active</button>
-                            <button type="button" disabled={!!take.error || take.id === selectedTakeId} title={take.id === selectedTakeId ? "Already selected as A -- pick a different take to compare" : undefined} onClick={(event) => { event.stopPropagation(); setCompareTakeId((current) => current === take.id ? null : take.id); }}>{take.id === compareTakeId ? "Comparing" : "Compare"}</button>
-                            {take.parent_take_id && (detail.takes.find((candidate) => candidate.id === take.parent_take_id) ? <button type="button" className="parent-take-link" onClick={(event) => { event.stopPropagation(); setSelectedTakeId(take.parent_take_id); }}>from {take.parent_take_id.slice(0, 8)}</button> : <span className="parent-take-id">from {take.parent_take_id.slice(0, 8)}</span>)}
-                            {!take.error && <><a href={api.takeAudioUrl(detail.project.id, take.id)} download={`${take.id}.wav`}>download</a>{take.has_lrc && <a href={api.takeLrcUrl(detail.project.id, take.id)} download={`${take.id}.lrc`}>lyrics (.lrc)</a>}</>}
+                            <button
+                              type="button"
+                              disabled={take.id === detail.project.active_take_id || !!take.error}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                setActiveTake(take.id);
+                              }}
+                            >
+                              Set active
+                            </button>
+                            <button
+                              type="button"
+                              disabled={!!take.error || take.id === selectedTakeId}
+                              title={
+                                take.id === selectedTakeId
+                                  ? "Already selected as A -- pick a different take to compare"
+                                  : undefined
+                              }
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                setCompareTakeId((current) =>
+                                  current === take.id ? null : take.id,
+                                );
+                              }}
+                            >
+                              {take.id === compareTakeId ? "Comparing" : "Compare"}
+                            </button>
+                            {take.parent_take_id &&
+                              (detail.takes.find(
+                                (candidate) => candidate.id === take.parent_take_id,
+                              ) ? (
+                                <button
+                                  type="button"
+                                  className="parent-take-link"
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    setSelectedTakeId(take.parent_take_id);
+                                  }}
+                                >
+                                  from {take.parent_take_id.slice(0, 8)}
+                                </button>
+                              ) : (
+                                <span className="parent-take-id">
+                                  from {take.parent_take_id.slice(0, 8)}
+                                </span>
+                              ))}
+                            {!take.error && (
+                              <>
+                                <a
+                                  href={api.takeAudioUrl(detail.project.id, take.id)}
+                                  download={`${take.id}.wav`}
+                                >
+                                  download
+                                </a>
+                                {take.has_lrc && (
+                                  <a
+                                    href={api.takeLrcUrl(detail.project.id, take.id)}
+                                    download={`${take.id}.lrc`}
+                                  >
+                                    lyrics (.lrc)
+                                  </a>
+                                )}
+                              </>
+                            )}
                           </div>
                         </li>
                       ))}
@@ -1828,26 +2480,101 @@ export default function App() {
                   </section>
 
                   <StylePackPanel active={inspectorTab === "styles"}>
-                    <div className="style-heading"><div><span className="eyebrow">Training room</span><h3>Style packs</h3></div><p>Build a local style from eight or more successful takes.</p></div>
-                    {loras.length === 0 && trainingJobs.length === 0 && <p className="hint">No style packs trained yet.</p>}
+                    <div className="style-heading">
+                      <div>
+                        <span className="eyebrow">Training room</span>
+                        <h3>Style packs</h3>
+                      </div>
+                      <p>Build a local style from eight or more successful takes.</p>
+                    </div>
+                    {loras.length === 0 && trainingJobs.length === 0 && (
+                      <p className="hint">No style packs trained yet.</p>
+                    )}
                     <ul className="lora-list">
-                      {trainingJobs.map((job) => <li key={job.id} className="lora-training"><span className="lora-name">Training style pack…</span><span className="lora-status">{job.status === "queued" ? "queued — waiting for the GPU" : "running"}</span></li>)}
-                      {loras.map((lora) => <li key={lora.id} className={lora.error ? "lora-error" : ""}><span className="lora-name">{lora.name}</span><span className="lora-status">{lora.error ? `error: ${lora.error}` : lora.status ?? "—"}</span><span className="lora-loss">{lora.final_loss != null ? `loss ${lora.final_loss.toFixed(4)}` : ""}</span></li>)}
+                      {trainingJobs.map((job) => (
+                        <li key={job.id} className="lora-training">
+                          <span className="lora-name">Training style pack…</span>
+                          <span className="lora-status">
+                            {job.status === "queued" ? "queued — waiting for the GPU" : "running"}
+                          </span>
+                        </li>
+                      ))}
+                      {loras.map((lora) => (
+                        <li key={lora.id} className={lora.error ? "lora-error" : ""}>
+                          <span className="lora-name">{lora.name}</span>
+                          <span className="lora-status">
+                            {lora.error ? `error: ${lora.error}` : (lora.status ?? "—")}
+                          </span>
+                          <span className="lora-loss">
+                            {lora.final_loss != null ? `loss ${lora.final_loss.toFixed(4)}` : ""}
+                          </span>
+                        </li>
+                      ))}
                     </ul>
-                    <div className="style-source-heading"><strong>Training sources</strong><span>{loraSourceIds.size}/{MIN_LORA_SOURCE_TAKES}</span></div>
+                    <div className="style-source-heading">
+                      <strong>Training sources</strong>
+                      <span>
+                        {loraSourceIds.size}/{MIN_LORA_SOURCE_TAKES}
+                      </span>
+                    </div>
                     <ul className="style-source-list">
                       {detail.takes.map((take) => (
                         <li key={take.id}>
                           <label>
-                            <input type="checkbox" className="lora-source-checkbox" title="Include in style pack training source" checked={loraSourceIds.has(take.id)} onChange={() => toggleLoraSource(take.id)} />
-                            <span><strong>{take.task_type}</strong><small>seed {take.seed} · {take.duration_sec != null ? `${take.duration_sec.toFixed(1)}s` : "—"}</small></span>
+                            <input
+                              type="checkbox"
+                              className="lora-source-checkbox"
+                              title="Include in style pack training source"
+                              checked={loraSourceIds.has(take.id)}
+                              onChange={() => toggleLoraSource(take.id)}
+                            />
+                            <span>
+                              <strong>{take.task_type}</strong>
+                              <small>
+                                seed {take.seed} ·{" "}
+                                {take.duration_sec != null
+                                  ? `${take.duration_sec.toFixed(1)}s`
+                                  : "—"}
+                              </small>
+                            </span>
                           </label>
                         </li>
                       ))}
                     </ul>
                     <div className="lora-train-panel">
-                      <label>Style pack name<input placeholder="my-style" value={loraName} onChange={(event) => setLoraName(event.target.value)} /></label>
-                      <button type="button" onClick={trainLora} disabled={busy || trainingJobs.length > 0 || loraSourceIds.size < MIN_LORA_SOURCE_TAKES || !loraName.trim()} title={trainingJobs.length > 0 ? "A style pack is already training for this project" : loraSourceIds.size < MIN_LORA_SOURCE_TAKES ? `Select at least ${MIN_LORA_SOURCE_TAKES} takes first` : !loraName.trim() ? "Enter a style pack name first" : undefined}>{busy && activeJobAction === "style pack training" ? "Training…" : trainingJobs.length > 0 ? `Training… (${trainingJobs[0].status})` : "Train style pack"}</button>
+                      <label>
+                        Style pack name
+                        <input
+                          placeholder="my-style"
+                          value={loraName}
+                          onChange={(event) => setLoraName(event.target.value)}
+                        />
+                      </label>
+                      <button
+                        type="button"
+                        onClick={trainLora}
+                        disabled={
+                          busy ||
+                          trainingJobs.length > 0 ||
+                          loraSourceIds.size < MIN_LORA_SOURCE_TAKES ||
+                          !loraName.trim()
+                        }
+                        title={
+                          trainingJobs.length > 0
+                            ? "A style pack is already training for this project"
+                            : loraSourceIds.size < MIN_LORA_SOURCE_TAKES
+                              ? `Select at least ${MIN_LORA_SOURCE_TAKES} takes first`
+                              : !loraName.trim()
+                                ? "Enter a style pack name first"
+                                : undefined
+                        }
+                      >
+                        {busy && activeJobAction === "style pack training"
+                          ? "Training…"
+                          : trainingJobs.length > 0
+                            ? `Training… (${trainingJobs[0].status})`
+                            : "Train style pack"}
+                      </button>
                     </div>
                   </StylePackPanel>
                 </TakesRail>
@@ -1857,7 +2584,16 @@ export default function App() {
         </main>
 
         {(libraryOpen || planOpen || inspectorOpen) && (
-          <button type="button" className="drawer-scrim" aria-label="Close open panel" onClick={() => { setLibraryOpen(false); setPlanOpen(false); setInspectorOpen(false); }} />
+          <button
+            type="button"
+            className="drawer-scrim"
+            aria-label="Close open panel"
+            onClick={() => {
+              setLibraryOpen(false);
+              setPlanOpen(false);
+              setInspectorOpen(false);
+            }}
+          />
         )}
       </div>
 

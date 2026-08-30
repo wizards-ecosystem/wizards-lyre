@@ -86,9 +86,7 @@ describe("Resonance Workbench interactions", () => {
         (request) => request.method === "POST" && request.url.endsWith("/uploads"),
       ),
     ).toBe(true);
-    expect(screen.getByRole("listitem", { name: /seed 1001/ }).className).not.toMatch(
-      /selected/,
-    );
+    expect(screen.getByRole("listitem", { name: /seed 1001/ }).className).not.toMatch(/selected/);
   });
 
   it("commits project-title edits with Enter and restores edits with Escape", async () => {

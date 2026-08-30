@@ -295,11 +295,11 @@ describe("DiT profile picker (SPEC.md sec 4.1)", () => {
     app = await renderOpenedProject({ loras: [GOOD_LORA] });
 
     expect(within(ditGroup()).queryByRole("button", { name: "studio_ops" })).toBeNull();
-    expect(within(ditGroup()).getAllByRole("button").map((b) => b.textContent)).toEqual([
-      "iterate",
-      "polish",
-      "quality",
-    ]);
+    expect(
+      within(ditGroup())
+        .getAllByRole("button")
+        .map((b) => b.textContent),
+    ).toEqual(["iterate", "polish", "quality"]);
 
     fireEvent.change(loraSelect(), { target: { value: "lora-good" } });
     fireEvent.click(screen.getByRole("button", { name: "Generate" }));

@@ -32,7 +32,9 @@
   background: var(--canvas);
 }
 
-* { box-sizing: border-box; }
+* {
+  box-sizing: border-box;
+}
 
 html,
 body,
@@ -56,22 +58,30 @@ body {
 button,
 input,
 textarea,
-select { font: inherit; }
+select {
+  font: inherit;
+}
 
 button,
 summary,
 a,
 input[type="checkbox"],
-input[type="range"] { -webkit-tap-highlight-color: transparent; }
+input[type="range"] {
+  -webkit-tap-highlight-color: transparent;
+}
 
-button { border: 0; }
+button {
+  border: 0;
+}
 
 button:not(:disabled),
 summary,
 a,
 input[type="checkbox"],
 input[type="range"],
-select { cursor: pointer; }
+select {
+  cursor: pointer;
+}
 
 button:disabled,
 input:disabled,
@@ -86,7 +96,9 @@ input,
 textarea,
 select,
 summary,
-[tabindex="0"] { outline: none; }
+[tabindex="0"] {
+  outline: none;
+}
 
 button:focus-visible,
 a:focus-visible,
@@ -97,10 +109,14 @@ summary:focus-visible,
 [tabindex="0"]:focus-visible {
   position: relative;
   z-index: 3;
-  box-shadow: 0 0 0 2px var(--canvas), 0 0 0 4px var(--focus);
+  box-shadow:
+    0 0 0 2px var(--canvas),
+    0 0 0 4px var(--focus);
 }
 
-button:active:not(:disabled) { transform: translateY(1px); }
+button:active:not(:disabled) {
+  transform: translateY(1px);
+}
 
 a {
   color: var(--signal-strong);
@@ -116,12 +132,16 @@ select {
   background: var(--canvas);
   color: var(--text);
   padding: 7px 9px;
-  transition: border-color 120ms ease, background-color 120ms ease;
+  transition:
+    border-color 120ms ease,
+    background-color 120ms ease;
 }
 
 input:hover,
 textarea:hover,
-select:hover { border-color: var(--rule-strong); }
+select:hover {
+  border-color: var(--rule-strong);
+}
 
 input:focus,
 textarea:focus,
@@ -131,9 +151,13 @@ select:focus {
 }
 
 input::placeholder,
-textarea::placeholder { color: var(--muted-dim); }
+textarea::placeholder {
+  color: var(--muted-dim);
+}
 
-textarea { resize: vertical; }
+textarea {
+  resize: vertical;
+}
 
 input[type="checkbox"] {
   width: 14px;
@@ -149,10 +173,17 @@ input[type="range"] {
   accent-color: var(--signal);
 }
 
-[hidden] { display: none !important; }
+[hidden] {
+  display: none !important;
+}
 
-::-webkit-scrollbar { width: 9px; height: 9px; }
-::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
 ::-webkit-scrollbar-thumb {
   border: 3px solid transparent;
   border-radius: 8px;
@@ -204,9 +235,16 @@ input[type="range"] {
   text-transform: uppercase;
 }
 
-.optional { color: var(--muted-dim); font-weight: 400; }
+.optional {
+  color: var(--muted-dim);
+  font-weight: 400;
+}
 .hint,
-.empty-copy { margin: 0; color: var(--muted); font-size: 12px; }
+.empty-copy {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
 
 .button-primary,
 .generate-button,
@@ -224,7 +262,10 @@ input[type="range"] {
   color: var(--signal-ink);
   padding: 7px 12px;
   font-weight: 700;
-  transition: background-color 120ms ease, border-color 120ms ease, transform 80ms ease;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease,
+    transform 80ms ease;
 }
 
 .button-primary:hover:not(:disabled),
@@ -255,7 +296,11 @@ input[type="range"] {
   padding: 5px 9px;
   font-weight: 600;
   text-decoration: none;
-  transition: color 120ms ease, border-color 120ms ease, background-color 120ms ease, transform 80ms ease;
+  transition:
+    color 120ms ease,
+    border-color 120ms ease,
+    background-color 120ms ease,
+    transform 80ms ease;
 }
 
 .button-secondary:hover:not(:disabled),
@@ -292,7 +337,11 @@ input[type="range"] {
   background: transparent;
   color: var(--muted);
   padding: 0;
-  transition: color 120ms ease, border-color 120ms ease, background-color 120ms ease, transform 80ms ease;
+  transition:
+    color 120ms ease,
+    border-color 120ms ease,
+    background-color 120ms ease,
+    transform 80ms ease;
 }
 
 .icon-button:hover:not(:disabled) {
@@ -309,4 +358,6 @@ input[type="range"] {
   font-weight: 600;
 }
 
-.text-button:hover:not(:disabled) { color: var(--text); }
+.text-button:hover:not(:disabled) {
+  color: var(--text);
+}

@@ -172,6 +172,8 @@ Commands:
   build-web  Build the frontend bundle served by the HTTP server.
   test       Run the Python test suite.
   test-web   Run the frontend test suite.
+  lint       Check formatting and lint both stacks (and the launcher).
+  format     Reformat both stacks in place.
   smoke-gpu  Run the manual ACE-Step GPU smoke test.
   paths      Print the project-local writable paths.
 EOF
@@ -217,6 +219,26 @@ case "${1:-}" in
   test-web)
     need_command npm
     exec npm --prefix "$ROOT/web" test
+    ;;
+  lint)
+    ensure_venv
+    need_command npm
+    "$VENV/bin/ruff" check .
+    "$VENV/bin/ruff" format --check .
+    npm --prefix "$ROOT/web" run lint
+    # Optional system tool: skip the launcher lint rather than fail without it.
+    if command -v shellcheck >/dev/null 2>&1; then
+      shellcheck "$ROOT/scripts/lyre"
+    else
+      echo "shellcheck not installed; skipping the launcher lint." >&2
+    fi
+    ;;
+  format)
+    ensure_venv
+    need_command npm
+    "$VENV/bin/ruff" format .
+    "$VENV/bin/ruff" check --fix .
+    npm --prefix "$ROOT/web" run format
     ;;
   smoke-gpu)
     ensure_venv

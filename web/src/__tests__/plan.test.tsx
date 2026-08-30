@@ -140,9 +140,7 @@ it("saves every Custom plan field through one debounced PUT /plan with correct t
   rendered = render(<App />);
   await openProjectUI();
 
-  expect((screen.getByLabelText("Caption") as HTMLInputElement).value).toBe(
-    "brooding wizard folk",
-  );
+  expect((screen.getByLabelText("Caption") as HTMLInputElement).value).toBe("brooding wizard folk");
   expect(lyricsTextarea().value).toBe("[Chorus]\nburn the old maps");
   expect((screen.getByLabelText("Instrumental") as HTMLInputElement).checked).toBe(true);
   expect(

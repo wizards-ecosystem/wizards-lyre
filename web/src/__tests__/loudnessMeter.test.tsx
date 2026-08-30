@@ -142,7 +142,9 @@ function meterFillFor(audio: HTMLAudioElement): HTMLElement {
 }
 
 function analyserFor(ctxCallIndex: number) {
-  const instance = audioContextCtor.mock.instances[ctxCallIndex] as unknown as MockAudioContextInstance;
+  const instance = audioContextCtor.mock.instances[
+    ctxCallIndex
+  ] as unknown as MockAudioContextInstance;
   const result = instance.createAnalyser.mock.results[0];
   if (!result) throw new Error(`AudioContext #${ctxCallIndex} never called createAnalyser`);
   return result.value as ReturnType<typeof makeAnalyserMock>;

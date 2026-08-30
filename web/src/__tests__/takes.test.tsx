@@ -43,16 +43,12 @@ function takeRows(): HTMLElement[] {
 
 function patchTakeRequests() {
   if (!app) throw new Error("app not rendered");
-  return app.server.requests.filter(
-    (r) => r.method === "PATCH" && /\/takes\//.test(r.url),
-  );
+  return app.server.requests.filter((r) => r.method === "PATCH" && /\/takes\//.test(r.url));
 }
 
 function activeTakeRequests() {
   if (!app) throw new Error("app not rendered");
-  return app.server.requests.filter(
-    (r) => r.method === "POST" && r.url.endsWith("/active_take"),
-  );
+  return app.server.requests.filter((r) => r.method === "POST" && r.url.endsWith("/active_take"));
 }
 
 describe("Takes pane controls", () => {
@@ -121,7 +117,9 @@ describe("Takes pane controls", () => {
 
   it("keeps the export link's include_stems query in sync with the checkbox", async () => {
     app = await renderOpenedProject();
-    const exportLink = screen.getByRole("link", { name: "Export project (.zip)" }) as HTMLAnchorElement;
+    const exportLink = screen.getByRole("link", {
+      name: "Export project (.zip)",
+    }) as HTMLAnchorElement;
     expect(exportLink.getAttribute("href")).toBe(
       `/api/projects/${PROJECT_ID}/export?include_stems=true`,
     );

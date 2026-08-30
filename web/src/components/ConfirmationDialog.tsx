@@ -57,7 +57,12 @@ export function ConfirmationDialog({
         <h2 id="confirm-title">{request.title}</h2>
         <p id="confirm-message">{request.message}</p>
         <div className="dialog-actions">
-          <button ref={cancelRef} type="button" className="button-secondary" onClick={() => onDecision(false)}>
+          <button
+            ref={cancelRef}
+            type="button"
+            className="button-secondary"
+            onClick={() => onDecision(false)}
+          >
             Cancel
           </button>
           <button

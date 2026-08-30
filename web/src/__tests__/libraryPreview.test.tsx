@@ -70,9 +70,7 @@ describe("Library inline take preview", () => {
     playSpy = vi
       .spyOn(window.HTMLMediaElement.prototype, "play")
       .mockImplementation(() => Promise.resolve());
-    pauseSpy = vi
-      .spyOn(window.HTMLMediaElement.prototype, "pause")
-      .mockImplementation(() => {});
+    pauseSpy = vi.spyOn(window.HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
 
     const server = createMockBardServer();
     server.state.projects = [
@@ -90,7 +88,9 @@ describe("Library inline take preview", () => {
     // Clicking project one's preview button starts playback.
     fireEvent.click(previewBtn("Song One"));
     expect(playSpy).toHaveBeenCalledTimes(1);
-    expect(audio.src).toBe(new URL(api.takeAudioUrl("proj-1", "take-01"), window.location.href).href);
+    expect(audio.src).toBe(
+      new URL(api.takeAudioUrl("proj-1", "take-01"), window.location.href).href,
+    );
     expect(previewBtn("Song One").getAttribute("aria-label")).toBe("Pause Song One preview");
     expect(previewBtn("Song One").title).toBe("Pause preview");
     expect(previewBtn("Song Two").getAttribute("aria-label")).toBe("Play Song Two preview");
@@ -109,7 +109,9 @@ describe("Library inline take preview", () => {
     fireEvent.click(previewBtn("Song Two"));
     expect(playSpy).toHaveBeenCalledTimes(3);
     expect(pauseSpy).toHaveBeenCalledTimes(1);
-    expect(audio.src).toBe(new URL(api.takeAudioUrl("proj-2", "take-02"), window.location.href).href);
+    expect(audio.src).toBe(
+      new URL(api.takeAudioUrl("proj-2", "take-02"), window.location.href).href,
+    );
     expect(previewBtn("Song One").getAttribute("aria-label")).toBe("Play Song One preview");
     expect(previewBtn("Song Two").getAttribute("aria-label")).toBe("Pause Song Two preview");
     expect(previewBtn("Song Two").title).toBe("Pause preview");

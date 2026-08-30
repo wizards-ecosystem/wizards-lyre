@@ -44,10 +44,9 @@ it("creates a project from a title and simple query, and switches to it", async 
   // Library loads with just the fixture project until the form is used.
   await screen.findByText("Test Song");
   fireEvent.click(
-    within(screen.getByRole("complementary", { name: "Project library" })).getByRole(
-      "button",
-      { name: "New project" },
-    ),
+    within(screen.getByRole("complementary", { name: "Project library" })).getByRole("button", {
+      name: "New project",
+    }),
   );
 
   fireEvent.change(screen.getByPlaceholderText("title"), {
@@ -60,9 +59,7 @@ it("creates a project from a title and simple query, and switches to it", async 
 
   // POSTs the exact body createProject() builds.
   await waitFor(() => {
-    const posts = server.requests.filter(
-      (r) => r.method === "POST" && r.url === "/api/projects",
-    );
+    const posts = server.requests.filter((r) => r.method === "POST" && r.url === "/api/projects");
     expect(posts).toHaveLength(1);
     expect(posts[0].body).toEqual({
       title: "Goblin Ballad",
@@ -98,10 +95,9 @@ it("creates a project with a fallback title when the title field is left blank",
   render(<App />);
   await screen.findByText("Test Song");
   fireEvent.click(
-    within(screen.getByRole("complementary", { name: "Project library" })).getByRole(
-      "button",
-      { name: "New project" },
-    ),
+    within(screen.getByRole("complementary", { name: "Project library" })).getByRole("button", {
+      name: "New project",
+    }),
   );
 
   // Title left blank; only a query is provided.
@@ -111,9 +107,7 @@ it("creates a project with a fallback title when the title field is left blank",
   fireEvent.click(screen.getByRole("button", { name: "Create project" }));
 
   await waitFor(() => {
-    const posts = server.requests.filter(
-      (r) => r.method === "POST" && r.url === "/api/projects",
-    );
+    const posts = server.requests.filter((r) => r.method === "POST" && r.url === "/api/projects");
     expect(posts).toHaveLength(1);
     // App.tsx's createProject() substitutes "Untitled" client-side when the
     // title field is empty (matching server/storage.py::create_project's own
@@ -136,10 +130,9 @@ it("opens the new project's workspace with an empty takes pane and no Open click
   render(<App />);
   await screen.findByText("Test Song");
   fireEvent.click(
-    within(screen.getByRole("complementary", { name: "Project library" })).getByRole(
-      "button",
-      { name: "New project" },
-    ),
+    within(screen.getByRole("complementary", { name: "Project library" })).getByRole("button", {
+      name: "New project",
+    }),
   );
 
   fireEvent.change(screen.getByPlaceholderText("title"), {

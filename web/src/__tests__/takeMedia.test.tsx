@@ -45,10 +45,7 @@ function takeRows(): HTMLElement[] {
 
 describe("Takes pane score and media links", () => {
   it("renders a take's numeric score, and a '—' fallback when score is null", async () => {
-    const takes = [
-      makeTake("take-01", 1, { score: 87 }),
-      makeTake("take-02", 2, { score: null }),
-    ];
+    const takes = [makeTake("take-01", 1, { score: 87 }), makeTake("take-02", 2, { score: null })];
     app = await renderOpenedProject({ takes });
     const [firstRow, secondRow] = takeRows();
 
@@ -64,7 +61,9 @@ describe("Takes pane score and media links", () => {
     app = await renderOpenedProject({ takes });
     const [firstRow, secondRow] = takeRows();
 
-    const lrcLink = within(firstRow).getByRole("link", { name: "lyrics (.lrc)" }) as HTMLAnchorElement;
+    const lrcLink = within(firstRow).getByRole("link", {
+      name: "lyrics (.lrc)",
+    }) as HTMLAnchorElement;
     expect(lrcLink.getAttribute("href")).toBe(api.takeLrcUrl(PROJECT_ID, "take-01"));
     expect(lrcLink.getAttribute("download")).toBe("take-01.lrc");
 
@@ -73,18 +72,19 @@ describe("Takes pane score and media links", () => {
   });
 
   it("gives every non-errored take a download link with the correct href/filename", async () => {
-    const takes = [
-      makeTake("take-01", 1, {}),
-      makeTake("take-02", 2, {}),
-    ];
+    const takes = [makeTake("take-01", 1, {}), makeTake("take-02", 2, {})];
     app = await renderOpenedProject({ takes });
     const [firstRow, secondRow] = takeRows();
 
-    const firstDownload = within(firstRow).getByRole("link", { name: "download" }) as HTMLAnchorElement;
+    const firstDownload = within(firstRow).getByRole("link", {
+      name: "download",
+    }) as HTMLAnchorElement;
     expect(firstDownload.getAttribute("href")).toBe(api.takeAudioUrl(PROJECT_ID, "take-01"));
     expect(firstDownload.getAttribute("download")).toBe("take-01.wav");
 
-    const secondDownload = within(secondRow).getByRole("link", { name: "download" }) as HTMLAnchorElement;
+    const secondDownload = within(secondRow).getByRole("link", {
+      name: "download",
+    }) as HTMLAnchorElement;
     expect(secondDownload.getAttribute("href")).toBe(api.takeAudioUrl(PROJECT_ID, "take-02"));
     expect(secondDownload.getAttribute("download")).toBe("take-02.wav");
   });

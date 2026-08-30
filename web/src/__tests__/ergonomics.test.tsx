@@ -55,11 +55,15 @@ beforeAll(() => {
       return this.__paused ?? true;
     },
   });
-  HTMLMediaElement.prototype.play = vi.fn(function (this: HTMLMediaElement & { __paused?: boolean }) {
+  HTMLMediaElement.prototype.play = vi.fn(function (
+    this: HTMLMediaElement & { __paused?: boolean },
+  ) {
     this.__paused = false;
     return Promise.resolve();
   }) as unknown as () => Promise<void>;
-  HTMLMediaElement.prototype.pause = vi.fn(function (this: HTMLMediaElement & { __paused?: boolean }) {
+  HTMLMediaElement.prototype.pause = vi.fn(function (
+    this: HTMLMediaElement & { __paused?: boolean },
+  ) {
     this.__paused = true;
   }) as unknown as () => void;
 });
@@ -289,9 +293,9 @@ describe("Restoring an ancestor take (SPEC.md sec 12 Phase 5)", () => {
     fireEvent.click(within(takeRows()[2]).getByRole("button", { name: "Set active" }));
 
     await waitFor(() => {
-      expect(server.requests.some((r) => r.method === "POST" && r.url.endsWith("/active_take"))).toBe(
-        true,
-      );
+      expect(
+        server.requests.some((r) => r.method === "POST" && r.url.endsWith("/active_take")),
+      ).toBe(true);
     });
     const activeTakeCalls = server.requests.filter(
       (r) => r.method === "POST" && r.url.endsWith("/active_take"),

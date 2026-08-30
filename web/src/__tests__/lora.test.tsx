@@ -8,7 +8,13 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import App from "../App";
-import { createMockBardServer, makeLora, makeTake, makeTakes, PROJECT_ID } from "../test/mockServer";
+import {
+  createMockBardServer,
+  makeLora,
+  makeTake,
+  makeTakes,
+  PROJECT_ID,
+} from "../test/mockServer";
 import { LORA_SOURCE_TITLE, renderOpenedProject, type OpenedProject } from "../test/renderApp";
 
 // Mirrors App.tsx's LORA_TRAIN_RECOVERY_POLL_MS (not exported) -- the
@@ -136,9 +142,7 @@ async function renderProjectWithSeededTraining(status: string): Promise<OpenedPr
   const rendered = render(<App />);
   fireEvent.click(await screen.findByRole("button", { name: "Open Test Song" }));
   await waitFor(() => {
-    expect(screen.getAllByTitle(LORA_SOURCE_TITLE)).toHaveLength(
-      server.state.detail.takes.length,
-    );
+    expect(screen.getAllByTitle(LORA_SOURCE_TITLE)).toHaveLength(server.state.detail.takes.length);
   });
   openStylePacks();
 
@@ -243,9 +247,7 @@ describe("LoRA style packs (SPEC.md sec 4.4)", () => {
   it("lets only successful packs be selected for use", async () => {
     app = await renderOpenedProject({ loras: [GOOD_LORA, FAILED_LORA] });
     const select = await screen.findByRole("combobox");
-    const optionNames = Array.from((select as HTMLSelectElement).options).map(
-      (o) => o.textContent,
-    );
+    const optionNames = Array.from((select as HTMLSelectElement).options).map((o) => o.textContent);
     // The failed pack is listed (with its error) but never offered for use.
     expect(optionNames).toEqual(["None", "good-style"]);
 
@@ -331,9 +333,7 @@ describe("LoRA style packs (SPEC.md sec 4.4)", () => {
 
     expect(await screen.findByText("CUDA out of memory")).toBeTruthy();
     // The user's selection survives the failure so they can retry.
-    expect(loraSourceCheckboxes().filter((el) => (el as HTMLInputElement).checked)).toHaveLength(
-      8,
-    );
+    expect(loraSourceCheckboxes().filter((el) => (el as HTMLInputElement).checked)).toHaveLength(8);
     expect(nameInput().value).toBe("my-style");
     // No pack was added by the failed training.
     expect(screen.getByText("No style packs trained yet.")).toBeTruthy();
@@ -349,9 +349,7 @@ describe("LoRA style packs (SPEC.md sec 4.4)", () => {
     fireEvent.change(nameInput(), { target: { value: "my-style" } });
     fireEvent.click(trainButton());
 
-    expect(
-      await screen.findByText(/requires at least 8 distinct source takes/),
-    ).toBeTruthy();
+    expect(await screen.findByText(/requires at least 8 distinct source takes/)).toBeTruthy();
     expect(jobsPost()).toHaveLength(1); // the request was made and rejected
   });
 

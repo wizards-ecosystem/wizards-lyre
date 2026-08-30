@@ -145,16 +145,13 @@ describe("Library pane (SPEC.md sec 9.1)", () => {
     // Accepted: DELETE fires and the project drops out of the list.
     fireEvent.click(deleteBtn);
     fireEvent.click(
-      within(screen.getByRole("alertdialog", { name: /Delete.*Beta/ })).getByRole(
-        "button",
-        { name: "Delete project" },
-      ),
+      within(screen.getByRole("alertdialog", { name: /Delete.*Beta/ })).getByRole("button", {
+        name: "Delete project",
+      }),
     );
     await waitFor(() => {
       expect(
-        app!.server.requests.some(
-          (r) => r.method === "DELETE" && r.url === "/api/projects/proj-b",
-        ),
+        app!.server.requests.some((r) => r.method === "DELETE" && r.url === "/api/projects/proj-b"),
       ).toBe(true);
     });
     await waitFor(() => {
