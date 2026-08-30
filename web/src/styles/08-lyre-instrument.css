@@ -1,0 +1,231 @@
+/* --------------------------------------------------------------------------
+   The Lyre instrument
+
+   A light, tactile control surface: the prompt is the played surface, the
+   orange control starts a take, and the adjacent sound field answers back.
+   Supporting tools are deliberately quieter than the instrument itself.
+   -------------------------------------------------------------------------- */
+
+:root {
+  --canvas: #eaf1f5;
+  --surface: #fbfbf8;
+  --surface-raised: #ffffff;
+  --surface-hover: #f0f4f5;
+  --rule: #c9d3d9;
+  --rule-strong: #8296a5;
+  --text: #172c42;
+  --text-soft: #304f68;
+  --muted: #6d8495;
+  --muted-dim: #9babb4;
+  --signal: #f05a47;
+  --signal-strong: #d84736;
+  --signal-ink: #fffaf3;
+  --success: #118c7d;
+  --focus: #5265bc;
+}
+
+body,
+.app { background: #eaf1f5; }
+.topbar {
+  height: 58px;
+  flex-basis: 58px;
+  border-top: 4px solid #293f91;
+  border-bottom-color: #b9c7d1;
+  background: #fbfcfa;
+}
+.brand-mark {
+  width: 29px;
+  height: 29px;
+  border: 0;
+  border-radius: 50%;
+  background: #293f91;
+  color: #ffffff;
+}
+.topbar h1 { color: #1e347d; font-family: var(--display); font-size: 19px; }
+.brand-subtitle { color: #758999; }
+.health { border-left-color: #c6d1d6; }
+
+.workspace { background: #eaf1f5; }
+.workspace-header {
+  min-height: 72px;
+  border-bottom-color: #b9c7d1;
+  background: #f7faf8;
+  padding: 12px 30px;
+}
+.project-heading h2 { color: #1d3577; font-family: var(--display); font-size: 27px; }
+.project-context { color: #718494; }
+.export-link { border-color: #5265bc; color: #4055a9; }
+
+@media (min-width: 1100px) {
+  .panes { grid-template-columns: minmax(540px, 1.14fr) minmax(390px, 0.86fr); }
+}
+.plan {
+  border-right: 0;
+  background: #fbfbf8;
+}
+.waveform {
+  border-left: 1px solid #b9c7d1;
+  background: #eaf1f5;
+  padding: 26px 28px 0;
+}
+.pane-heading {
+  min-height: 66px;
+  border-bottom-color: #c9d3d9;
+  background: #fbfbf8;
+  padding: 11px 30px;
+}
+.pane-heading h3 { color: #1d3577; font-family: var(--display); font-size: 18px; }
+.pane-heading .eyebrow { color: #f05a47; }
+.save-state { color: #7890a0; }
+
+/* The control surface starts with the idea, then presents the actions that
+   make it audible. The rest of authorship remains available below it. */
+.plan-scroll { display: flex; flex-direction: column; background: #fbfbf8; }
+.builder-brief {
+  order: 1;
+  border-bottom: 0;
+  background: #fbfbf8;
+  padding: 29px 30px 18px;
+}
+.builder-section-heading h4 { color: #25436a; font-family: var(--display); font-size: 19px; }
+.builder-brief .intent-field { color: #577083; }
+.intent-field textarea {
+  min-height: 166px;
+  border: 1px solid #7b91a0;
+  border-radius: 12px;
+  background: #ffffff;
+  box-shadow: inset 0 0 0 4px #eff5f6;
+  padding: 16px 17px;
+  font-size: 15px;
+  line-height: 1.55;
+}
+.intent-field textarea:focus { border-color: #5265bc; box-shadow: inset 0 0 0 4px #edf0fc, 0 0 0 2px rgba(82, 101, 188, 0.16); }
+.builder-tip { color: #7d94a3; }
+
+.plan-scroll > .operation-dock {
+  order: 2;
+  display: block;
+  margin: 0 30px 24px;
+  border: 1px solid #8296a5;
+  border-radius: 14px;
+  background: #f4f8f8;
+  overflow: hidden;
+}
+.plan-scroll > .operation-dock .operation-group,
+.plan-scroll > .operation-dock .operation-group:nth-child(2),
+.plan-scroll > .operation-dock .operation-group:nth-child(3) {
+  display: grid;
+  min-height: 0;
+  grid-template-columns: 106px minmax(0, 1fr);
+  gap: 14px;
+  border: 0;
+  border-bottom: 1px solid #d3dce0;
+  background: transparent;
+  padding: 15px 16px;
+}
+.plan-scroll > .operation-dock .operation-group:last-child { border-bottom: 0; }
+.operation-heading { padding-top: 3px; }
+.operation-heading > span { display: none; }
+.operation-heading strong { color: #213f68; font-family: var(--display); font-size: 16px; }
+.operation-heading small { color: #748b9b; line-height: 1.35; }
+.operation-controls { align-content: center; gap: 8px; }
+.operation-controls label { color: #657d8e; }
+.operation-controls input,
+.operation-controls select { border-color: #b8c6cd; background: #ffffff; }
+.operation-controls .generate-button {
+  width: 72px;
+  min-width: 72px;
+  height: 72px;
+  min-height: 72px;
+  border: 3px solid #ffffff;
+  border-radius: 50%;
+  background: #f05a47;
+  box-shadow: 0 0 0 2px #f05a47;
+  font-size: 10px;
+  font-weight: 750;
+}
+.operation-controls .generate-button .icon { width: 16px; height: 16px; }
+.operation-controls .generate-button:hover:not(:disabled) { background: #d84736; box-shadow: 0 0 0 2px #d84736; }
+.dit-profile-picker { padding: 3px; border: 1px solid #b8c6cd; border-radius: 8px; background: #ffffff; }
+.dit-profile-caption { color: #8ca0ac; }
+.dit-profile-option { border: 0; border-radius: 5px; background: transparent; color: #607789; }
+.dit-profile-option.selected { border: 0; background: #e1e6fa; color: #2b4595; }
+.operation-group.transform-group,
+.operation-group.tracks-group { background: #f8fbfb; }
+
+.builder-disclosure { order: 3; border-top: 1px solid #c9d3d9; border-bottom: 1px solid #c9d3d9; background: #eaf1f5; padding: 15px 30px; }
+.builder-disclosure:hover { background: #e2edf2; }
+.builder-disclosure-copy strong { color: #27476a; font-family: var(--display); font-size: 16px; }
+.builder-disclosure-copy small { display: flex; color: #7890a0; }
+.builder-disclosure > span:last-child { color: #5265bc; }
+.builder-details { order: 4; }
+.builder-section,
+.builder-lyrics,
+.builder-song-details { border-bottom-color: #d5dfe3; background: #fbfbf8; padding: 28px 30px; }
+.builder-song-details { padding-top: 25px; }
+.builder-settings-grid input,
+.builder-lyrics .lyrics-field textarea { border-color: #b8c6cd; background: #ffffff; }
+.builder-lyrics .lyrics-field textarea { min-height: 245px; border-radius: 9px; }
+.builder-switches .checkbox strong { color: #304f68; }
+.lyrics-tag-button { border-color: #b8c6cd; border-radius: 999px; background: #ffffff; color: #506b80; }
+.lyrics-tag-button:hover:not(:disabled) { border-color: #5265bc; background: #e8ecfb; color: #2b4595; }
+.plan-sections-title { color: #25436a; font-family: var(--display); font-size: 19px; }
+
+/* The sound field is a display, not another form. */
+.stage-heading { border-bottom-color: #b9c7d1; }
+.stage-heading .eyebrow { color: #5265bc; }
+.stage-heading h3 { color: #1d3577; font-family: var(--display); font-size: 22px; }
+.source-shelf { border-bottom-color: #b9c7d1; }
+.waveform-canvas {
+  min-height: 280px;
+  border: 1px solid #7b91a0;
+  border-radius: 18px;
+  background-color: #ffffff;
+  background-image:
+    radial-gradient(circle at center, transparent 0 20%, rgba(82, 101, 188, 0.1) 20.4% 20.9%, transparent 21.3% 34%, rgba(17, 140, 125, 0.11) 34.4% 34.9%, transparent 35.3% 47%, rgba(240, 90, 71, 0.1) 47.4% 47.9%, transparent 48.3%);
+  box-shadow: inset 0 0 0 7px #f1f6f7;
+}
+.waveform-canvas::before,
+.waveform-canvas::after { display: none; }
+.waveform-empty { color: #7f95a4; }
+.waveform-empty .icon { width: 42px; height: 42px; color: #5265bc; }
+.stage-transport { min-height: 62px; border-bottom-color: #b9c7d1; }
+.transport-button { width: 40px; height: 40px; border: 2px solid #ffffff; background: #293f91; box-shadow: 0 0 0 2px #293f91; }
+.transport-button-small { border-color: #aabac3; border-radius: 50%; background: #ffffff; }
+.loudness-meter { border-color: #aabac3; border-radius: 4px; background: #ffffff; }
+.region-bar { border-bottom-color: #b9c7d1; }
+.compare { border-color: #8296a5; border-radius: 12px; background: #fbfbf8; }
+
+.library,
+.studio-inspector { top: 58px; border-color: #8296a5; background: #fbfbf8; }
+.drawer-scrim { inset: 58px 0 0; background: rgba(23, 44, 66, 0.22); }
+.library { box-shadow: 14px 0 38px rgba(23, 44, 66, 0.14); }
+.studio-inspector { box-shadow: -14px 0 38px rgba(23, 44, 66, 0.14); }
+.project-list li { border-bottom-color: #d1dde0; }
+.project-list li.active { border-left-color: #f05a47; background: #eef4f4; }
+.inspector-tabs { background: #f3f7f7; }
+
+@media (max-width: 1099px) {
+  .topbar { height: 58px; flex-basis: 58px; }
+  .library,
+  .studio-inspector,
+  .plan { top: 58px; }
+  .waveform { border-left: 0; }
+  .plan-scroll > .operation-dock { margin-right: 20px; margin-left: 20px; }
+}
+
+@media (max-width: 560px) {
+  .topbar { height: 54px; flex-basis: 54px; }
+  .library,
+  .studio-inspector,
+  .plan { top: 54px; }
+  .drawer-scrim { inset: 54px 0 0; }
+  .pane-heading,
+  .builder-brief,
+  .builder-section,
+  .builder-lyrics,
+  .builder-song-details { padding-right: 18px; padding-left: 18px; }
+  .plan-scroll > .operation-dock { margin-right: 18px; margin-left: 18px; }
+  .plan-scroll > .operation-dock .operation-group { grid-template-columns: 1fr; gap: 10px; }
+  .operation-controls .generate-button { width: 62px; min-width: 62px; height: 62px; min-height: 62px; }
+}

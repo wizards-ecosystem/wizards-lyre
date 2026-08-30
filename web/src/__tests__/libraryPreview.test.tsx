@@ -14,9 +14,9 @@
 // audio.pause() calls don't crash the test.
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import App from "./App";
-import { api } from "./api";
-import { createMockBardServer, makeProjectSummary } from "./test/mockServer";
+import App from "../App";
+import { api } from "../api";
+import { createMockBardServer, makeProjectSummary } from "../test/mockServer";
 
 let playSpy: ReturnType<typeof vi.spyOn> | undefined;
 let pauseSpy: ReturnType<typeof vi.spyOn> | undefined;

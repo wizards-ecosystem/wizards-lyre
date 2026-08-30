@@ -24,9 +24,9 @@
 // for the "add section from region" case).
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import type { RecordedRequest } from "./test/mockServer";
-import { makeTakes } from "./test/mockServer";
-import { renderOpenedProject, type OpenedProject } from "./test/renderApp";
+import type { RecordedRequest } from "../test/mockServer";
+import { makeTakes } from "../test/mockServer";
+import { renderOpenedProject, type OpenedProject } from "../test/renderApp";
 
 // Mirrors App.tsx's STRUCTURE_TAGS (not exported) -- SPEC.md sec 4.4/9.2's
 // fixed structure-tag palette.

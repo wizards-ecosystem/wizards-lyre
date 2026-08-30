@@ -7,9 +7,9 @@
 // generated audio.
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import App from "./App";
-import { createMockBardServer, makeLora, makeTake, makeTakes, PROJECT_ID } from "./test/mockServer";
-import { LORA_SOURCE_TITLE, renderOpenedProject, type OpenedProject } from "./test/renderApp";
+import App from "../App";
+import { createMockBardServer, makeLora, makeTake, makeTakes, PROJECT_ID } from "../test/mockServer";
+import { LORA_SOURCE_TITLE, renderOpenedProject, type OpenedProject } from "../test/renderApp";
 
 // Mirrors App.tsx's LORA_TRAIN_RECOVERY_POLL_MS (not exported) -- the
 // cadence of the recovery poll that watches a still-active train_lora job

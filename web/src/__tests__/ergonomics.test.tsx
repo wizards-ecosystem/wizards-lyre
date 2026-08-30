@@ -18,9 +18,9 @@
 //     shared mock backend does not implement.
 import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { api } from "./api";
-import { makeTakes, PROJECT_ID, type MockBardServer } from "./test/mockServer";
-import { renderOpenedProject, type OpenedProject } from "./test/renderApp";
+import { api } from "../api";
+import { makeTakes, PROJECT_ID, type MockBardServer } from "../test/mockServer";
+import { renderOpenedProject, type OpenedProject } from "../test/renderApp";
 
 vi.mock("wavesurfer.js", () => ({
   default: {

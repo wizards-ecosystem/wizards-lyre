@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { makeTakes } from "./test/mockServer";
-import { renderOpenedProject, type OpenedProject } from "./test/renderApp";
+import { makeTakes } from "../test/mockServer";
+import { renderOpenedProject, type OpenedProject } from "../test/renderApp";
 
 const waveform = vi.hoisted(() => ({
   playPause: vi.fn(() => Promise.resolve()),

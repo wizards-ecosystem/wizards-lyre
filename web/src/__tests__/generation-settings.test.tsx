@@ -19,9 +19,9 @@
 // mockServer.ts itself changes.
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import App from "./App";
-import { createMockBardServer, makeLora, makeTakes, PROJECT_ID } from "./test/mockServer";
-import { renderOpenedProject, type OpenedProject } from "./test/renderApp";
+import App from "../App";
+import { createMockBardServer, makeLora, makeTakes, PROJECT_ID } from "../test/mockServer";
+import { renderOpenedProject, type OpenedProject } from "../test/renderApp";
 
 interface FakeRegion {
   id: string;

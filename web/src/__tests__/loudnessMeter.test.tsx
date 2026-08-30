@@ -12,9 +12,9 @@
 // the mock that makes exercising that graph safe.
 import { act, cleanup, fireEvent } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { api } from "./api";
-import { PROJECT_ID } from "./test/mockServer";
-import { renderOpenedProject, type OpenedProject } from "./test/renderApp";
+import { api } from "../api";
+import { PROJECT_ID } from "../test/mockServer";
+import { renderOpenedProject, type OpenedProject } from "../test/renderApp";
 
 vi.mock("wavesurfer.js", () => ({
   default: {

@@ -17,10 +17,10 @@
 // select a take, since App.tsx statically imports the real package.
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
-import App from "./App";
-import type { RecordedRequest } from "./test/mockServer";
-import { createMockBardServer, type MockBardServer } from "./test/mockServer";
-import { renderOpenedProject, type OpenedProject } from "./test/renderApp";
+import App from "../App";
+import type { RecordedRequest } from "../test/mockServer";
+import { createMockBardServer, type MockBardServer } from "../test/mockServer";
+import { renderOpenedProject, type OpenedProject } from "../test/renderApp";
 
 vi.mock("wavesurfer.js", () => ({
   default: {

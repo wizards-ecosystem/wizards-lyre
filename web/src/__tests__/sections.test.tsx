@@ -10,9 +10,9 @@
 // canvas/layout for the real library).
 import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import type { Section } from "./api";
-import { makeTakes } from "./test/mockServer";
-import { renderOpenedProject, type OpenedProject } from "./test/renderApp";
+import type { Section } from "../api";
+import { makeTakes } from "../test/mockServer";
+import { renderOpenedProject, type OpenedProject } from "../test/renderApp";
 
 interface FakeRegion {
   id: string;

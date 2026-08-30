@@ -5,8 +5,8 @@
 // generated audio.
 import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { PROJECT_ID } from "./test/mockServer";
-import { renderOpenedProject, type OpenedProject } from "./test/renderApp";
+import { PROJECT_ID } from "../test/mockServer";
+import { renderOpenedProject, type OpenedProject } from "../test/renderApp";
 
 // jsdom has no canvas/layout for wavesurfer.js, so the waveform stack is
 // stubbed out (App renders it unconditionally once a take is selected).

@@ -6,7 +6,7 @@
 // CUDA, ACE-Step, credentials, or generated audio.
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { renderOpenedProject, type OpenedProject } from "./test/renderApp";
+import { renderOpenedProject, type OpenedProject } from "../test/renderApp";
 
 interface FakeRegion {
   id: string;

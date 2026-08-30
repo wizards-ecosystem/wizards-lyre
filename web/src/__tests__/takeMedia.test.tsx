@@ -6,9 +6,9 @@
 // ACE-Step, credentials, or generated audio.
 import { cleanup, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { api } from "./api";
-import { makeTake, PROJECT_ID } from "./test/mockServer";
-import { renderOpenedProject, type OpenedProject } from "./test/renderApp";
+import { api } from "../api";
+import { makeTake, PROJECT_ID } from "../test/mockServer";
+import { renderOpenedProject, type OpenedProject } from "../test/renderApp";
 
 // jsdom has no canvas/layout for wavesurfer.js, so the waveform stack is
 // stubbed out (App renders it unconditionally once a take is selected).
