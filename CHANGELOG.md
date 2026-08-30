@@ -35,6 +35,11 @@ it was prepared to be shared, not an incremental change from a prior release.
 - `./scripts/lyre lint` and `./scripts/lyre format`, running ruff, mypy, tsc,
   ESLint (at zero warnings), Prettier, and shellcheck. Coverage is gated at
   88%.
+- Tests for behavior that previously had none: the one-GPU-occupant guard
+  (OS-level lock plus SQLite lease), the cross-process project lock's
+  contention paths, and the accuracy of each package's re-export façade.
+- Tests that keep `docs/API.md` and `docs/CONFIGURATION.md` in step with the
+  routes the app serves and the variables it reads, so neither can drift.
 
 ### Changed
 
@@ -51,9 +56,18 @@ are recorded because they shaped the code a contributor will read.
   cascade order; the bundled CSS is byte-identical.
 - Test fixtures are shared through `tests/conftest.py` rather than copy-pasted
   across 20 files.
+- `web/src/App.tsx` sheds its constants, types, leaf components, the library
+  and style-pack panes, and five hooks -- including the plan-autosave and
+  take-notes debounce machinery, whose ordering and failure semantics are
+  subtle enough to deserve isolating.
+- 1024 CSS declarations and 284 whole rules that later layers already
+  overrode are gone; the bundled stylesheet drops from 81.8 kB to 53.0 kB
+  with a verified-identical effective cascade.
 
 ### Fixed
 
+- `storage.touch_project` had been defined and exported since the first commit
+  without ever being called.
 - `scripts/lyre` was recorded in git as non-executable, so the README's first
   instruction failed on a fresh clone with "Permission denied".
 - The project-lock timeout chained the wrong exception, reporting a transient
