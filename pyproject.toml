@@ -44,6 +44,25 @@ packages = ["server", "worker"]
 testpaths = ["tests"]
 addopts = "-q"
 
+[tool.coverage.run]
+source = ["server", "worker"]
+branch = true
+
+[tool.coverage.report]
+# The suite currently sits just above 90%. The floor is set a little below
+# that so an unrelated change does not fail CI over rounding, while a real
+# drop -- a new module arriving untested -- still does. Raise it when the
+# number moves up and stays there.
+fail_under = 88
+show_missing = true
+exclude_also = [
+    # The real ACE-Step import paths only execute with the GPU stack present,
+    # which CI deliberately does not install.
+    "raise WorkerUnavailable",
+    "if TYPE_CHECKING:",
+    "if sys.platform == \"win32\":",
+]
+
 [tool.ruff]
 # Matches the width the existing code was written to.
 line-length = 100

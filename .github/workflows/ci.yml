@@ -42,7 +42,7 @@ jobs:
           uv run --no-sync ruff format --check .
 
       - name: Test
-        run: uv run --no-sync python -m pytest --cov=server --cov=worker --cov-report=term-missing
+        run: uv run --no-sync python -m pytest --cov
 
   web:
     name: web
