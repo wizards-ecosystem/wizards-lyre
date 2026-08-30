@@ -46,8 +46,18 @@ If you need to suppress a lint rule, do it at the site with the reason written
 above it, rather than weakening the rule for the whole project. The existing
 `eslint-disable-next-line` comments in `web/src/` are the pattern to follow.
 
-`./scripts/lyre smoke-gpu` runs a real ACE-Step generation. It is manual, needs
-a real GPU and downloaded weights, and is never part of `pytest`.
+Two checks need a real GPU and are never part of `pytest`:
+
+```bash
+./scripts/lyre smoke-gpu     # one ACE-Step generation: does this machine work at all
+./scripts/lyre live-check    # the full stack end to end, ~10-25 min
+```
+
+`live-check` drives the real HTTP API against a running server and worker, and
+covers the layer the mocked suite cannot reach — most importantly the
+base-model swap, and whether generated audio is actually audio rather than a
+well-formed silent file. See [docs/LIVE_STACK_TEST.md](docs/LIVE_STACK_TEST.md).
+Run it before a release.
 
 ## Scope
 

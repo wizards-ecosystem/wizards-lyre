@@ -40,6 +40,10 @@ it was prepared to be shared, not an incremental change from a prior release.
   contention paths, and the accuracy of each package's re-export façade.
 - Tests that keep `docs/API.md` and `docs/CONFIGURATION.md` in step with the
   routes the app serves and the variables it reads, so neither can drift.
+- `./scripts/lyre live-check`, an end-to-end pass against a running server,
+  worker, and GPU. It covers what the mocked suite cannot: the base-model
+  swap, plan persistence through the real LM, and whether generated takes are
+  actually audible rather than well-formed silence.
 
 ### Changed
 

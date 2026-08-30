@@ -102,6 +102,7 @@ repository's tests can speak to.
 | [docs/CONFIGURATION.md](docs/CONFIGURATION.md) | Every `LYRE_*` variable and the DiT profiles. |
 | [docs/API.md](docs/API.md) | The HTTP surface. Live schema at `/docs` while running. |
 | [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | Stuck jobs, VRAM, worker startup. |
+| [docs/LIVE_STACK_TEST.md](docs/LIVE_STACK_TEST.md) | The end-to-end check against real weights. |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Setup, the test loop, and what is out of scope. |
 | [SECURITY.md](SECURITY.md) | The threat model, stated plainly. |
 
@@ -120,8 +121,9 @@ repository's tests can speak to.
 ```bash
 ./scripts/lyre test        # pytest, mocked worker, no GPU
 ./scripts/lyre test-web    # vitest + React Testing Library, mocked backend
-./scripts/lyre lint        # ruff, tsc, eslint, prettier, shellcheck
+./scripts/lyre lint        # ruff, mypy, tsc, eslint, prettier, shellcheck
 ./scripts/lyre smoke-gpu   # manual: one real ACE-Step generation
+./scripts/lyre live-check  # manual: full end-to-end pass against a live server + worker
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) before opening a PR.
