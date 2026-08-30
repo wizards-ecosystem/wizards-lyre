@@ -10,24 +10,13 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
 from fastapi.testclient import TestClient
 
 from server import storage
-from server.app import app
 
 
-@pytest.fixture()
-def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("BARD_PROJECTS_DIR", str(tmp_path / "projects"))
-    monkeypatch.setenv("BARD_DB_PATH", str(tmp_path / "bard.db"))
-    monkeypatch.setenv("BARD_WORKER", "mock")
-    with TestClient(app) as c:
-        yield c
-
-
-def test_project_plan_roundtrip(client: TestClient) -> None:
-    project = client.post("/api/projects", json={"title": "Roundtrip"}).json()
+def test_project_plan_roundtrip(api_client: TestClient) -> None:
+    project = api_client.post("/api/projects", json={"title": "Roundtrip"}).json()
     project_id = project["id"]
 
     plan = {
@@ -46,37 +35,37 @@ def test_project_plan_roundtrip(client: TestClient) -> None:
         # like every other plan field.
         "caption_rewrite": True,
     }
-    resp = client.put(f"/api/projects/{project_id}/plan", json=plan)
+    resp = api_client.put(f"/api/projects/{project_id}/plan", json=plan)
     assert resp.status_code == 200
     assert resp.json() == plan
 
-    resp = client.get(f"/api/projects/{project_id}")
+    resp = api_client.get(f"/api/projects/{project_id}")
     assert resp.status_code == 200
     body = resp.json()
     assert body["plan"] == plan
     assert body["project"]["id"] == project_id
 
 
-def test_default_plan_has_caption_rewrite_true(client: TestClient) -> None:
+def test_default_plan_has_caption_rewrite_true(api_client: TestClient) -> None:
     """SPEC.md sec 9.2/7.2: a brand-new project's plan defaults `caption_rewrite`
     to True -- Custom-mode generation may rewrite the user's caption unless
     they explicitly disable it."""
-    project = client.post("/api/projects", json={"title": "Defaults"}).json()
+    project = api_client.post("/api/projects", json={"title": "Defaults"}).json()
     project_id = project["id"]
 
-    resp = client.get(f"/api/projects/{project_id}")
+    resp = api_client.get(f"/api/projects/{project_id}")
     assert resp.status_code == 200
     assert resp.json()["plan"]["caption_rewrite"] is True
 
 
 def test_plan_missing_caption_rewrite_loads_as_false(
-    client: TestClient, tmp_path: Path
+    api_client: TestClient, tmp_path: Path
 ) -> None:
     """Backward compatibility: a plan.json written to disk before this field
     existed has no `caption_rewrite` key at all -- loading it must default to
     False (SPEC.md sec 7.2: Custom mode previously never rewrote captions),
     not raise or silently omit the key from the response."""
-    project = client.post("/api/projects", json={"title": "Legacy plan"}).json()
+    project = api_client.post("/api/projects", json={"title": "Legacy plan"}).json()
     project_id = project["id"]
 
     plan_path = storage.plan_json_path(project_id)
@@ -84,6 +73,6 @@ def test_plan_missing_caption_rewrite_loads_as_false(
     del legacy_plan["caption_rewrite"]
     plan_path.write_text(json.dumps(legacy_plan), encoding="utf-8")
 
-    resp = client.get(f"/api/projects/{project_id}")
+    resp = api_client.get(f"/api/projects/{project_id}")
     assert resp.status_code == 200
     assert resp.json()["plan"]["caption_rewrite"] is False

@@ -19,6 +19,8 @@ from server import storage
 from server.app import app
 from worker.run_worker import run_loop
 
+from helpers import wait_for_job
+
 FORBIDDEN_IMPORTS = (
     "google.genai",
     "google.generativeai",
@@ -27,54 +29,6 @@ FORBIDDEN_IMPORTS = (
     "suno",
     "udio",
 )
-
-
-@pytest.fixture(autouse=True)
-def _reset_mock_worker_state():
-    """worker.mock_worker tracks a simulated "loaded" flag at module scope
-    (mirroring worker.acestep_worker's real _STATE) so tests can exercise
-    worker/run_worker.py's republish-after-recovery behavior; reset it
-    between tests or an earlier test's job run would leak into a later
-    test expecting a fresh "nothing loaded yet" state."""
-    import worker.mock_worker as mock_worker_module
-
-    mock_worker_module._simulated_loaded_dit_profile = None
-    yield
-    mock_worker_module._simulated_loaded_dit_profile = None
-
-
-@pytest.fixture()
-def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("BARD_PROJECTS_DIR", str(tmp_path / "projects"))
-    monkeypatch.setenv("BARD_DB_PATH", str(tmp_path / "bard.db"))
-    # Tests always use the mocked worker; the real acestep_worker is
-    # production's default (see server/jobs.py) and is exercised only by the
-    # manual, non-pytest scripts/smoke-gpu.py.
-    monkeypatch.setenv("BARD_WORKER", "mock")
-
-    # `enqueue_job` only inserts a `queued` row -- it never runs a job
-    # itself (SPEC.md sec 5). This thread stands in for the dedicated
-    # `worker/run_worker.py` process that drains the same SQLite queue in
-    # production, fast-polled so tests stay quick.
-    stop_event = threading.Event()
-    worker_thread = threading.Thread(target=run_loop, args=(stop_event, 0.01), daemon=True)
-    worker_thread.start()
-    try:
-        with TestClient(app) as c:
-            yield c
-    finally:
-        stop_event.set()
-        worker_thread.join(timeout=5)
-
-
-def _wait_for_job(client: TestClient, job_id: str, timeout: float = 5.0) -> dict:
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        job = client.get(f"/api/jobs/{job_id}").json()
-        if job["status"] in ("done", "error"):
-            return job
-        time.sleep(0.01)
-    raise TimeoutError(f"job {job_id} did not finish within {timeout}s")
 
 
 def test_health(client: TestClient) -> None:
@@ -300,7 +254,7 @@ def test_generate_job_creates_playable_take(client: TestClient) -> None:
     # (SPEC.md sec 5), so it may still be queued/running when this returns.
     assert queued["status"] in ("queued", "running", "done")
 
-    job = _wait_for_job(client, queued["id"])
+    job = wait_for_job(client, queued["id"])
     assert job["status"] == "done"
     assert job["error"] is None
     take_id = job["take_id"]
@@ -361,7 +315,7 @@ def test_simple_query_generation_fills_and_persists_plan(client: TestClient) -> 
     assert detail["plan"]["caption"] == ""
 
     resp = client.post(f"/api/projects/{project_id}/jobs", json={"action": "generate"})
-    job = _wait_for_job(client, resp.json()["id"])
+    job = wait_for_job(client, resp.json()["id"])
     assert job["status"] == "done", job.get("error")
 
     detail = client.get(f"/api/projects/{project_id}").json()
@@ -622,7 +576,7 @@ def test_worker_failure_writes_error_take_meta(
     monkeypatch.setattr(mock_worker, "run_job", _boom)
 
     resp = client.post(f"/api/projects/{project_id}/jobs", json={"action": "generate"})
-    job = _wait_for_job(client, resp.json()["id"])
+    job = wait_for_job(client, resp.json()["id"])
     assert job["status"] == "error"
     assert "synthetic worker failure" in job["error"]
 
@@ -757,7 +711,7 @@ def test_cover_rejects_out_of_range_audio_cover_strength(client: TestClient) -> 
         f"/api/projects/{project_id}/jobs",
         json={"action": "generate", "dit_profile": "iterate"},
     )
-    gen = _wait_for_job(client, gen_resp.json()["id"])
+    gen = wait_for_job(client, gen_resp.json()["id"])
     assert gen["status"] == "done", gen.get("error")
     source_take_id = gen["take_id"]
 
@@ -889,7 +843,7 @@ def test_enqueue_uses_project_dit_profile_when_job_omits_it(client: TestClient) 
     queued = resp.json()
     assert queued["dit_profile"] == "polish"
 
-    job = _wait_for_job(client, queued["id"])
+    job = wait_for_job(client, queued["id"])
     assert job["status"] == "done", job.get("error")
     take = next(t for t in client.get(f"/api/projects/{project_id}").json()["takes"] if t["id"] == job["take_id"])
     assert take["dit_profile"] == "polish"
@@ -925,7 +879,7 @@ def test_batch_size_forced_to_one(client: TestClient, monkeypatch: pytest.Monkey
             f"/api/projects/{project_id}/jobs",
             json={"action": "generate", "batch_size": requested},
         )
-        job = _wait_for_job(client, resp.json()["id"])
+        job = wait_for_job(client, resp.json()["id"])
         assert job["status"] == "done", job.get("error")
 
     assert seen_batch_sizes == [1, 1, 1]

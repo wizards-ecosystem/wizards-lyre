@@ -10,43 +10,12 @@ tests/test_generate_take_flow.py's fixture/harness setup.
 
 from __future__ import annotations
 
-import threading
-import time
-from pathlib import Path
 
-import pytest
 from fastapi.testclient import TestClient
 
 from server import storage
-from server.app import app
-from worker.run_worker import run_loop
 
-
-@pytest.fixture()
-def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("BARD_PROJECTS_DIR", str(tmp_path / "projects"))
-    monkeypatch.setenv("BARD_DB_PATH", str(tmp_path / "bard.db"))
-    monkeypatch.setenv("BARD_WORKER", "mock")
-
-    stop_event = threading.Event()
-    worker_thread = threading.Thread(target=run_loop, args=(stop_event, 0.01), daemon=True)
-    worker_thread.start()
-    try:
-        with TestClient(app) as c:
-            yield c
-    finally:
-        stop_event.set()
-        worker_thread.join(timeout=5)
-
-
-def _wait_for_job(client: TestClient, job_id: str, timeout: float = 5.0) -> dict:
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        job = client.get(f"/api/jobs/{job_id}").json()
-        if job["status"] in ("done", "error"):
-            return job
-        time.sleep(0.01)
-    raise TimeoutError(f"job {job_id} did not finish within {timeout}s")
+from helpers import wait_for_job
 
 
 def test_cover_take_flow(client: TestClient) -> None:
@@ -62,7 +31,7 @@ def test_cover_take_flow(client: TestClient) -> None:
         json={"action": "generate", "dit_profile": "iterate", "seed": -1},
     )
     assert gen_resp.status_code == 200
-    gen_job = _wait_for_job(client, gen_resp.json()["id"])
+    gen_job = wait_for_job(client, gen_resp.json()["id"])
     assert gen_job["status"] == "done", gen_job.get("error")
     source_take_id = gen_job["take_id"]
     assert source_take_id
@@ -78,7 +47,7 @@ def test_cover_take_flow(client: TestClient) -> None:
         },
     )
     assert cover_resp.status_code == 200
-    cover_job = _wait_for_job(client, cover_resp.json()["id"])
+    cover_job = wait_for_job(client, cover_resp.json()["id"])
     assert cover_job["status"] == "done", cover_job.get("error")
     cover_take_id = cover_job["take_id"]
     assert cover_take_id

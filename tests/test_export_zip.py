@@ -13,44 +13,13 @@ from __future__ import annotations
 
 import io
 import json
-import threading
-import time
 import zipfile
-from pathlib import Path
 
-import pytest
 from fastapi.testclient import TestClient
 
 from server import storage
-from server.app import app
-from worker.run_worker import run_loop
 
-
-@pytest.fixture()
-def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("BARD_PROJECTS_DIR", str(tmp_path / "projects"))
-    monkeypatch.setenv("BARD_DB_PATH", str(tmp_path / "bard.db"))
-    monkeypatch.setenv("BARD_WORKER", "mock")
-
-    stop_event = threading.Event()
-    worker_thread = threading.Thread(target=run_loop, args=(stop_event, 0.01), daemon=True)
-    worker_thread.start()
-    try:
-        with TestClient(app) as c:
-            yield c
-    finally:
-        stop_event.set()
-        worker_thread.join(timeout=5)
-
-
-def _wait_for_job(client: TestClient, job_id: str, timeout: float = 5.0) -> dict:
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        job = client.get(f"/api/jobs/{job_id}").json()
-        if job["status"] in ("done", "error"):
-            return job
-        time.sleep(0.01)
-    raise TimeoutError(f"job {job_id} did not finish within {timeout}s")
+from helpers import wait_for_job
 
 
 def test_export_with_no_takes_still_200s_with_minimal_zip(client: TestClient) -> None:
@@ -85,7 +54,7 @@ def test_export_after_generate_includes_active_mix(client: TestClient) -> None:
         f"/api/projects/{project_id}/jobs",
         json={"action": "generate", "dit_profile": "iterate", "seed": -1},
     )
-    gen = _wait_for_job(client, gen_resp.json()["id"])
+    gen = wait_for_job(client, gen_resp.json()["id"])
     assert gen["status"] == "done", gen.get("error")
     take_id = gen["take_id"]
 
@@ -113,7 +82,7 @@ def test_export_includes_or_excludes_extract_stem_by_flag(client: TestClient) ->
         f"/api/projects/{project_id}/jobs",
         json={"action": "generate", "dit_profile": "iterate", "seed": -1},
     )
-    gen = _wait_for_job(client, gen_resp.json()["id"])
+    gen = wait_for_job(client, gen_resp.json()["id"])
     assert gen["status"] == "done", gen.get("error")
     source_take_id = gen["take_id"]
 
@@ -126,7 +95,7 @@ def test_export_includes_or_excludes_extract_stem_by_flag(client: TestClient) ->
             "track_name": "vocals",
         },
     )
-    extract_job = _wait_for_job(client, extract_resp.json()["id"])
+    extract_job = wait_for_job(client, extract_resp.json()["id"])
     assert extract_job["status"] == "done", extract_job.get("error")
     stem_take_id = extract_job["take_id"]
 
@@ -165,7 +134,7 @@ def test_export_excludes_complete_takes_from_stems(client: TestClient) -> None:
         f"/api/projects/{project_id}/jobs",
         json={"action": "generate", "dit_profile": "iterate", "seed": -1},
     )
-    gen = _wait_for_job(client, gen_resp.json()["id"])
+    gen = wait_for_job(client, gen_resp.json()["id"])
     assert gen["status"] == "done", gen.get("error")
     source_take_id = gen["take_id"]
 
@@ -178,7 +147,7 @@ def test_export_excludes_complete_takes_from_stems(client: TestClient) -> None:
             "track_name": "vocals, drums, bass",
         },
     )
-    complete_job = _wait_for_job(client, complete_resp.json()["id"])
+    complete_job = wait_for_job(client, complete_resp.json()["id"])
     assert complete_job["status"] == "done", complete_job.get("error")
     complete_take_id = complete_job["take_id"]
 
@@ -209,7 +178,7 @@ def test_export_always_includes_active_mix_even_when_it_is_also_a_stem(client: T
         f"/api/projects/{project_id}/jobs",
         json={"action": "generate", "dit_profile": "iterate", "seed": -1},
     )
-    gen = _wait_for_job(client, gen_resp.json()["id"])
+    gen = wait_for_job(client, gen_resp.json()["id"])
     assert gen["status"] == "done", gen.get("error")
     source_take_id = gen["take_id"]
 
@@ -222,7 +191,7 @@ def test_export_always_includes_active_mix_even_when_it_is_also_a_stem(client: T
             "track_name": "vocals",
         },
     )
-    extract_job = _wait_for_job(client, extract_resp.json()["id"])
+    extract_job = wait_for_job(client, extract_resp.json()["id"])
     assert extract_job["status"] == "done", extract_job.get("error")
     stem_take_id = extract_job["take_id"]
 
@@ -259,7 +228,7 @@ def test_export_sanitizes_path_traversing_track_name(client: TestClient) -> None
         f"/api/projects/{project_id}/jobs",
         json={"action": "generate", "dit_profile": "iterate", "seed": -1},
     )
-    gen = _wait_for_job(client, gen_resp.json()["id"])
+    gen = wait_for_job(client, gen_resp.json()["id"])
     assert gen["status"] == "done", gen.get("error")
     source_take_id = gen["take_id"]
 
@@ -273,7 +242,7 @@ def test_export_sanitizes_path_traversing_track_name(client: TestClient) -> None
             "track_name": malicious_track_name,
         },
     )
-    extract_job = _wait_for_job(client, extract_resp.json()["id"])
+    extract_job = wait_for_job(client, extract_resp.json()["id"])
     assert extract_job["status"] == "done", extract_job.get("error")
     stem_take_id = extract_job["take_id"]
 
