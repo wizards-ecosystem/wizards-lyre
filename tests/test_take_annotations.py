@@ -113,14 +113,18 @@ def test_concurrent_favorite_and_notes_patches_do_not_lose_updates(
     `_project_lock`) and passes reliably with it."""
     project_id, take_id = _make_take(client)
 
-    original_get_take = storage.get_take
+    # Patch the *defining* module: update_take_annotations calls get_take
+    # through server.storage.takes' own globals, so patching the package
+    # re-export would leave the real function running and never widen the
+    # race this test exists to force.
+    original_get_take = storage.takes.get_take
 
     def slow_get_take(pid: str, tid: str) -> dict:
         meta = original_get_take(pid, tid)
         time.sleep(0.05)
         return meta
 
-    monkeypatch.setattr(storage, "get_take", slow_get_take)
+    monkeypatch.setattr(storage.takes, "get_take", slow_get_take)
 
     responses: list = []
 

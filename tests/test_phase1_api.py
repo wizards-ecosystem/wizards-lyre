@@ -392,7 +392,7 @@ def test_project_json_updates_are_serialized_across_threads(
     project_id = project["id"]
     take_id = storage.new_id()
 
-    real_write_json = storage._write_json
+    real_write_json = storage.jsonio._write_json
     project_path = storage.project_json_path(project_id)
     thread_a_writing = threading.Event()
     thread_b_attempted = threading.Event()
@@ -406,7 +406,7 @@ def test_project_json_updates_are_serialized_across_threads(
             time.sleep(0.1)
         real_write_json(path, data)
 
-    monkeypatch.setattr(storage, "_write_json", slow_write_json)
+    monkeypatch.setattr(storage.jsonio, "_write_json", slow_write_json)
 
     errors: list[Exception] = []
 
@@ -457,7 +457,7 @@ def test_plan_json_updates_are_serialized_across_threads(
     project_id = project["id"]
     storage.save_plan(project_id, {**storage.default_plan(), "caption": "original"})
 
-    real_write_json = storage._write_json
+    real_write_json = storage.jsonio._write_json
     plan_path = storage.plan_json_path(project_id)
     thread_a_writing = threading.Event()
     thread_b_attempted = threading.Event()
@@ -472,7 +472,7 @@ def test_plan_json_updates_are_serialized_across_threads(
             time.sleep(0.1)
         real_write_json(path, data)
 
-    monkeypatch.setattr(storage, "_write_json", slow_write_json)
+    monkeypatch.setattr(storage.jsonio, "_write_json", slow_write_json)
 
     errors: list[Exception] = []
 

@@ -214,7 +214,7 @@ def test_delete_waits_for_inflight_save_and_directory_stays_absent(
     pdir = storage.project_dir(project_id)
     save_paused = threading.Event()
     resume_save = threading.Event()
-    real_write_json = storage._write_json
+    real_write_json = storage.jsonio._write_json
 
     def paused_write(path: Path, data: dict) -> None:
         if path == storage.plan_json_path(project_id):
@@ -222,7 +222,7 @@ def test_delete_waits_for_inflight_save_and_directory_stays_absent(
             assert resume_save.wait(timeout=10)
         real_write_json(path, data)
 
-    monkeypatch.setattr(storage, "_write_json", paused_write)
+    monkeypatch.setattr(storage.jsonio, "_write_json", paused_write)
     save_thread = threading.Thread(target=storage.save_plan, args=(project_id, {"query": "new"}))
     save_thread.start()
     assert save_paused.wait(timeout=10)
@@ -267,16 +267,16 @@ def test_filesystem_failure_rolls_back_job_cancellation(
             f"/api/projects/{project['id']}/jobs", json={"action": "generate", "seed": -1}
         ).json()
 
-        real_rmtree = storage.shutil.rmtree
+        real_rmtree = storage.projects.shutil.rmtree
 
         def _boom(*_args, **_kwargs):
             raise OSError("simulated disk failure")
 
-        storage.shutil.rmtree = _boom
+        storage.projects.shutil.rmtree = _boom
         try:
             resp = api_client.delete(f"/api/projects/{project['id']}")
         finally:
-            storage.shutil.rmtree = real_rmtree
+            storage.projects.shutil.rmtree = real_rmtree
         assert resp.status_code == 500
 
         # The project still exists (rmtree never actually ran) and is still
