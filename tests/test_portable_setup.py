@@ -71,21 +71,29 @@ def test_no_pre_rename_environment_variables_survive() -> None:
         ["git", "ls-files"], cwd=ROOT, capture_output=True, text=True, check=True
     ).stdout.split()
 
-    # vendor/ is upstream ACE-Step, not Lyre's to rename. The launcher owns
-    # the one-time bard.db migration and this module tests it, so both
-    # legitimately name the old file. Prose docs may recount the history.
-    exempt = {
-        "scripts/lyre",
-        "tests/test_portable_setup.py",
-        "SPEC.md",
-        "README.md",
-        "CHANGELOG.md",
-    }
+    # What this guard is for: catching code, config, or the launcher still
+    # *reading* a pre-rename name. Two categories are exempt because naming
+    # the old variables there is correct, not a leftover:
+    #
+    #   - Markdown, as a class. The changelog, the configuration reference,
+    #     and the contributor guide all have to name BARD_* to explain the
+    #     rename and the database migration to anyone upgrading. Listing
+    #     individual files here instead just rots the moment a doc is added.
+    #   - The launcher and this module, which implement and test the one-time
+    #     projects/bard.db -> projects/lyre.db migration.
+    #
+    # vendor/ is upstream ACE-Step and not Lyre's to rename.
+    exempt = {"scripts/lyre", "tests/test_portable_setup.py"}
 
     hits: list[str] = []
     for name in tracked:
         path = ROOT / name
-        if name.startswith("vendor/") or name in exempt or not path.is_file():
+        if (
+            name.startswith("vendor/")
+            or name in exempt
+            or name.endswith(".md")
+            or not path.is_file()
+        ):
             continue
         text = path.read_text(encoding="utf-8", errors="replace")
         for token in ("BARD_", "bard.db"):
