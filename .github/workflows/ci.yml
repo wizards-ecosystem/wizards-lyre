@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Every job here is GPU-free and ACE-Step-free. Nothing under server/, worker/,
+# or tests/ imports acestep or torch at module scope, and the adapter test
+# installs its own fake acestep.* modules, so CI needs only the declared
+# dependencies -- not the model weights and not the vendored upstream clone.
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    name: python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --extra dev --no-install-project --locked --python ${{ matrix.python-version }}
+
+      - name: Lint
+        run: |
+          uv run --no-sync ruff check .
+          uv run --no-sync ruff format --check .
+
+      - name: Test
+        run: uv run --no-sync python -m pytest --cov=server --cov=worker --cov-report=term-missing
+
+  web:
+    name: web
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci --prefix web
+
+      - name: Lint and type-check
+        run: npm run lint --prefix web
+
+      - name: Test
+        run: npm test --prefix web
+
+      - name: Build
+        run: npm run build --prefix web
+
+  launcher:
+    name: launcher
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: ShellCheck
+        run: shellcheck scripts/lyre
