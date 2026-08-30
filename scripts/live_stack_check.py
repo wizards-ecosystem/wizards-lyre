@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import argparse
 import array
+import hashlib
 import io
 import json
 import math
@@ -318,7 +319,7 @@ def stage_simple_generate(run: Run, notes: list[str]) -> None:
     plan (SPEC.md sec 7.2). The filled plan must be persisted, not just used."""
     run.api.put(
         f"/api/projects/{run.project_id}/plan",
-        {"query": "slow melancholy piano, felt hammers, room tone", "duration_sec": 20},
+        {"query": "slow melancholy piano, felt hammers, room tone"},
     )
     job = run.enqueue({"action": "generate", "seed": -1})
     take = run.take(job["take_id"])
@@ -336,12 +337,33 @@ def stage_simple_generate(run: Run, notes: list[str]) -> None:
             "generate. The plan patch is what makes simple mode reusable."
         )
     notes.append(f"seed {take['seed']}, caption {plan['caption'][:60]!r}")
+
+    # Duration is NOT asserted against a requested value here: in simple mode
+    # the LM chooses it along with bpm and key (SPEC.md sec 7.2, use_cot_metas).
+    # What must hold is that its choice is recorded consistently -- the plan on
+    # disk, the take's metadata, and the audio itself all have to agree, or the
+    # UI shows one number while the file is another.
+    if plan.get("duration_sec") != take.get("duration_sec"):
+        raise CheckFailed(
+            f"the LM chose a duration but plan.json says {plan.get('duration_sec')} while the "
+            f"take says {take.get('duration_sec')} -- the filled plan was not persisted "
+            "consistently"
+        )
+    for meta_field in ("bpm", "keyscale"):
+        if not plan.get(meta_field):
+            raise CheckFailed(
+                f"simple mode left {meta_field} unfilled; the LM is supposed to set it"
+            )
+    notes.append(
+        f"LM chose {plan['duration_sec']}s, {plan['bpm']} bpm, {plan['keyscale']}; "
+        "plan and take agree"
+    )
     if take.get("score") is not None:
         notes.append(f"quality score {take['score']}")
     if take.get("has_lrc"):
         lrc = run.api.get_bytes(f"/api/projects/{run.project_id}/takes/{take['id']}/lrc")
         notes.append(f"lrc {len(lrc)} bytes")
-    run.check_audio(take["id"], 20, notes)
+    run.check_audio(take["id"], take.get("duration_sec"), notes)
 
 
 def stage_custom_generate(run: Run, notes: list[str]) -> None:
@@ -365,6 +387,9 @@ def stage_custom_generate(run: Run, notes: list[str]) -> None:
     run.api.put(f"/api/projects/{run.project_id}/plan", plan)
 
     first = run.take(run.enqueue({"action": "generate", "seed": 4242})["take_id"])
+    # Unlike simple mode, a human-authored plan is authoritative: bpm, key and
+    # duration are all set, so use_cot_metas is off and the requested duration
+    # has to come back.
     if first["seed"] != 4242:
         raise CheckFailed(f"explicit seed 4242 was not recorded (got {first['seed']})")
     if first["caption"] != plan["caption"]:
@@ -375,6 +400,51 @@ def stage_custom_generate(run: Run, notes: list[str]) -> None:
     run.takes["custom"] = first
     notes.append(f"seed {first['seed']} honored, caption preserved")
     run.check_audio(first["id"], 20, notes)
+
+
+def stage_reproducible(run: Run, notes: list[str]) -> None:
+    """The same seed and the same plan must produce the same audio.
+
+    This is the only check that can catch a seed being *recorded* without being
+    *used*. Lyre shipped exactly that bug: the adapter set
+    `GenerationParams.seed` and `use_random_seed=False`, but upstream resolves
+    the seed from `GenerationConfig.seeds` alone and drew a fresh random one
+    when that was None -- so every take faithfully reported a seed that had had
+    no effect on it, and "regenerate with this seed" quietly returned something
+    different every time.
+
+    Asserting on returned metadata cannot see that. Comparing the bytes can.
+    """
+    plan = {
+        "caption": "sparse ambient drone, tape hiss, no drums",
+        "lyrics": "[Instrumental]",
+        "instrumental": True,
+        "bpm": 70,
+        "keyscale": "A Minor",
+        "timesignature": "4/4",
+        "vocal_language": "en",
+        "duration_sec": 15,
+        "caption_rewrite": False,
+        "sections": [],
+        "negative": [],
+        "query": "",
+    }
+    run.api.put(f"/api/projects/{run.project_id}/plan", plan)
+
+    digests = []
+    for _ in range(2):
+        take = run.take(run.enqueue({"action": "generate", "seed": 99991})["take_id"])
+        if take["seed"] != 99991:
+            raise CheckFailed(f"pinned seed 99991 was not recorded (got {take['seed']})")
+        digests.append(hashlib.sha256(run.audio(take["id"])).hexdigest())
+
+    if digests[0] != digests[1]:
+        raise CheckFailed(
+            "two generations with seed 99991 and an identical plan produced different audio. "
+            "The seed is being recorded but not applied, so nothing in the studio is "
+            "reproducible (SPEC.md sec 7.3)."
+        )
+    notes.append(f"two runs at seed 99991 are byte-identical ({digests[0][:16]})")
 
 
 def stage_cover(run: Run, notes: list[str]) -> None:
@@ -666,6 +736,11 @@ STAGES: list[tuple[str, str, object]] = [
         "custom",
         "custom mode: explicit plan, fixed seed, caption not rewritten",
         stage_custom_generate,
+    ),
+    (
+        "reproducible",
+        "the same seed and plan produce byte-identical audio",
+        stage_reproducible,
     ),
     ("cover", "cover creates a new take chained to its source", stage_cover),
     ("repaint", "repaint records the requested region", stage_repaint),

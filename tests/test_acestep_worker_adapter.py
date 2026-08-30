@@ -125,11 +125,16 @@ class FakeGenerationParams:
 
 
 class FakeGenerationConfig:
-    """batch_size/audio_format/use_random_seed -- inference_steps,
+    """batch_size/audio_format/use_random_seed/seeds -- inference_steps,
     guidance_scale, and enable_normalization belong on GenerationParams
-    (that's the installed ACE-Step 1.5 split). use_random_seed defaults True
-    upstream and must be explicitly False for a fixed (non--1) seed to
-    actually be honored."""
+    (that's the installed ACE-Step 1.5 split).
+
+    Honoring a fixed seed needs both `use_random_seed=False` and `seeds`:
+    upstream short-circuits to a random draw when use_random_seed is True, and
+    otherwise resolves the seed from `seeds` alone -- `GenerationParams.seed`
+    is never read, despite upstream's docstring. `seeds` is keyword-only with
+    no default here on purpose, so an adapter that stops sending it fails
+    loudly instead of silently reverting to random seeds."""
 
     def __init__(
         self,
@@ -137,10 +142,12 @@ class FakeGenerationConfig:
         batch_size: int,
         audio_format: str,
         use_random_seed: bool,
+        seeds: list[int] | None,
     ) -> None:
         self.batch_size = batch_size
         self.audio_format = audio_format
         self.use_random_seed = use_random_seed
+        self.seeds = seeds
 
 
 class FakeResult:
@@ -322,9 +329,12 @@ def _install_fake_acestep(
             return lm_init_result
 
     def create_sample(
-        *, lm_handler: Any, query: str, instrumental: bool, vocal_language: Any
+        llm_handler: Any,
+        query: str,
+        instrumental: bool = False,
+        vocal_language: Any = None,
     ) -> dict:
-        log.append(("create_sample", lm_handler, query, instrumental, vocal_language))
+        log.append(("create_sample", llm_handler, query, instrumental, vocal_language))
         if create_sample_result is not None:
             return create_sample_result
         return {
@@ -753,6 +763,13 @@ def test_fixed_seed_disables_use_random_seed(
     params, config = generate_call[3], generate_call[4]
     assert params.seed == 12345
     assert config.use_random_seed is False
+    # `seeds` is the one upstream actually reads. generate_music resolves the
+    # seed from config.seeds alone; when it is None it hands prepare_seeds an
+    # empty string, which parses as -1 and draws a random seed -- params.seed
+    # is never consulted, despite upstream's docstring claiming it falls back
+    # to it. Without this list a pinned seed silently came back different every
+    # run, which is the whole point of pinning one (SPEC.md sec 7.3).
+    assert config.seeds == [12345]
 
     log.clear()
     acestep_worker.run_job(
@@ -765,6 +782,8 @@ def test_fixed_seed_disables_use_random_seed(
     params, config = generate_call[3], generate_call[4]
     assert params.seed == -1
     assert config.use_random_seed is True
+    # None, not [-1]: upstream treats None as "draw one".
+    assert config.seeds is None
 
 
 def test_simple_mode_uses_module_level_create_sample_and_persists_full_plan(

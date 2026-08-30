@@ -128,11 +128,18 @@ def run_job(
 
         # SPEC.md sec 7.3: "-1 from the user means worker picks and records
         # it" -- any other value is a fixed seed the user expects to be able
-        # to reproduce. Passing `seed` on GenerationParams is not enough by
-        # itself: ACE-Step's GenerationConfig.use_random_seed defaults True
-        # upstream and overrides it, so a fixed seed must also flip that off
-        # or a "regenerate with this seed" request can silently come back
-        # different every time.
+        # to reproduce.
+        #
+        # Reaching that takes all three of the settings below, and getting two
+        # of them right is indistinguishable from getting none right. Upstream
+        # resolves the seed from `GenerationConfig.seeds` alone: when it is
+        # None, generate_music passes an empty string to `prepare_seeds`, which
+        # parses that as -1 and draws a random seed -- `GenerationParams.seed`
+        # is never consulted, despite upstream's own docstring saying it falls
+        # back to it. So a fixed seed needs `seeds=[seed]`, and
+        # `use_random_seed=False` on top (it short-circuits to a random draw
+        # before `seeds` is read at all). `params.seed` stays set because it is
+        # what upstream documents and what a future version may honor.
         seed = job.get("seed", -1)
         use_random_seed = seed == -1
 
@@ -195,6 +202,9 @@ def run_job(
             # sec 7: mix.wav is "preferred archive").
             audio_format="wav",
             use_random_seed=use_random_seed,
+            # None means "draw a random one" upstream, so only send a list
+            # when the user actually pinned a seed.
+            seeds=None if use_random_seed else [seed],
         )
         result = _api_call(
             "generate_music",

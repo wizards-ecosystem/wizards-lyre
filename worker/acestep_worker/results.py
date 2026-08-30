@@ -41,7 +41,10 @@ def _plan_from_query(create_sample_fn: Any, lm: Any, plan: dict[str, Any]) -> di
     sample = _api_call(
         "create_sample",
         create_sample_fn,
-        lm_handler=lm,
+        # Upstream spells this `llm_handler`, with two Ls -- unlike
+        # `AceStepHandler`/`LLMHandler.initialize`, which take neither. Passing
+        # `lm_handler` raised TypeError on every real simple-mode generate.
+        llm_handler=lm,
         query=plan.get("query"),
         instrumental=plan.get("instrumental", False),
         # Without this, create_sample is free to pick any language for the
