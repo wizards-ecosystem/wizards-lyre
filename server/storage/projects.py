@@ -202,10 +202,6 @@ def merge_plan_patch(project_id: str, patch: dict) -> dict:
     return _update_plan(project_id, lambda current: {**current, **patch})
 
 
-def touch_project(project_id: str) -> dict:
-    return _update_project(project_id, lambda project: None)
-
-
 def patch_project(project_id: str, patch: dict) -> dict:
     def mutate(project: dict) -> None:
         if patch.get("title") is not None:

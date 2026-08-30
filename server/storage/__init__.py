@@ -63,7 +63,6 @@ from server.storage.projects import (
     patch_project,
     save_plan,
     set_active_take,
-    touch_project,
 )
 from server.storage.takes import (
     allocate_lora_dir,
@@ -137,7 +136,6 @@ __all__ = [
     "take_dir",
     "take_lrc_path",
     "takes_dir",
-    "touch_project",
     "update_take_annotations",
     "uploads_dir",
     "validate_plan",

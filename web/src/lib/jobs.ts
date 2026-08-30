@@ -1,7 +1,7 @@
 import { api, Job } from "../api";
 import { JOB_POLL_INTERVAL_MS, JOB_POLL_TIMEOUT_MS } from "../constants";
 
-export function sleep(ms: number): Promise<void> {
+function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
