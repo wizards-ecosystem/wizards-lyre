@@ -6,7 +6,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { api, Job, Lora, Plan, ProjectDetail, ProjectSummary, Section } from "./api";
+import { api, Job, Lora, ProjectDetail, ProjectSummary, Section } from "./api";
 import { ConfirmationDialog } from "./components/ConfirmationDialog";
 import { Icon } from "./components/Icon";
 import { LibraryPane } from "./components/LibraryPane";
@@ -26,15 +26,16 @@ import {
   LORA_TRAIN_POLL_TIMEOUT_MS,
   LORA_TRAIN_RECOVERY_POLL_MS,
   MIN_LORA_SOURCE_TAKES,
-  PLAN_SAVE_DEBOUNCE_MS,
   STRUCTURE_TAGS,
 } from "./constants";
 import { formatClock, parseSeed } from "./lib/format";
 import { pollJob } from "./lib/jobs";
 import { useHealth } from "./hooks/useHealth";
+import { usePlanAutosave } from "./hooks/usePlanAutosave";
+import { useTakeNotes } from "./hooks/useTakeNotes";
 import { useWaveform } from "./hooks/useWaveform";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
-import { ConfirmationRequest, InspectorTab, OperationGroup, SaveState } from "./types";
+import { ConfirmationRequest, InspectorTab, OperationGroup } from "./types";
 
 export default function App() {
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
@@ -53,7 +54,6 @@ export default function App() {
   const [busyStatus, setBusyStatus] = useState<string | null>(null);
   const [activeJobAction, setActiveJobAction] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [saveState, setSaveState] = useState<SaveState>("idle");
   const [selectedTakeId, setSelectedTakeId] = useState<string | null>(null);
   const [compareTakeId, setCompareTakeId] = useState<string | null>(null);
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>("takes");
@@ -110,23 +110,28 @@ export default function App() {
   // being left can be silently discarded by the next project's edits
   // reusing the same slot/timer.
   //
-  // saveChainRef is a promise chain used purely to serialize save
-  // *execution order* -- it always resolves, even after a failed save, so
-  // one failure doesn't permanently break every save after it.
-  // lastSaveOutcomeRef instead reflects the *real* outcome of the most
-  // recently started save; flushPendingPlanSave() awaits that (not the
-  // chain) so a failed save is never silently treated as success --
-  // generate() must not enqueue a job against a plan that failed to save.
-  const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const pendingSaveRef = useRef<{ projectId: string; plan: Plan } | null>(null);
-  const saveChainRef = useRef<Promise<void>>(Promise.resolve());
-  const lastSaveOutcomeRef = useRef<Promise<void>>(Promise.resolve());
+  const {
+    saveState,
+    setSaveState,
+    savePlanField,
+    flushPendingPlanSave,
+    reset: resetPlanAutosave,
+  } = usePlanAutosave({
+    getContext: () => (activeId && detail ? { projectId: activeId, plan: detail.plan } : null),
+    onPlanChange: (plan) => setDetail((current) => (current ? { ...current, plan } : current)),
+    onError: (message) => setErrorMsg(message),
+  });
 
-  // Take notes debounce, analogous to the plan save mechanism above but
-  // keyed by take id (several takes' notes fields can each have their own
-  // edit in flight/pending at once, unlike the single shared plan slot).
-  const takeSaveTimeoutsRef = useRef<Record<string, ReturnType<typeof setTimeout> | null>>({});
-  const pendingTakeNotesRef = useRef<Record<string, string>>({});
+  const {
+    saveTakeNotes,
+    flushTakeNotes,
+    flushAllPendingTakeNotes,
+    reset: resetTakeNotes,
+  } = useTakeNotes({
+    getProjectId: () => activeIdRef.current,
+    onNotesChange: (takeId, notes) => updateTakeLocal(takeId, { notes }),
+    onError: (message) => setErrorMsg(message),
+  });
 
   // Mirrors activeId, but updated synchronously (the instant a switch is
   // committed, not after the next render) so refreshDetail can tell whether
@@ -190,9 +195,6 @@ export default function App() {
   // as the page is torn down instead of aborting it mid-flight.
   useEffect(() => {
     function flushTakeNotesOnUnload() {
-      // flushAllPendingTakeNotes is a hoisted function declaration, only called
-      // from this listener long after the module has evaluated -- not a real TDZ access.
-      // eslint-disable-next-line react-hooks/immutability
       flushAllPendingTakeNotes({ keepalive: true }).catch(() => {});
     }
     window.addEventListener("pagehide", flushTakeNotesOnUnload);
@@ -200,7 +202,7 @@ export default function App() {
     return () => {
       window.removeEventListener("pagehide", flushTakeNotesOnUnload);
       window.removeEventListener("beforeunload", flushTakeNotesOnUnload);
-      if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+      resetPlanAutosave();
       flushTakeNotesOnUnload();
     };
     // Mount-only by design: this registers the unload listeners once. Adding
@@ -208,53 +210,6 @@ export default function App() {
     // re-register them on every keystroke.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  function enqueueSave(): Promise<void> {
-    const runSave = saveChainRef.current.then(async () => {
-      const pending = pendingSaveRef.current;
-      if (!pending) return;
-      // Take ownership of this pending value before the request starts (not
-      // after) so a newer edit made while the request is in flight lands in
-      // a fresh slot instead of being clobbered when this save resolves.
-      pendingSaveRef.current = null;
-      try {
-        setSaveState("saving");
-        await api.savePlan(pending.projectId, pending.plan);
-        if (pendingSaveRef.current === null) setSaveState("saved");
-      } catch (err) {
-        // Put the failed edit back so a later flush can retry it -- but
-        // only if nothing newer has already claimed the slot, otherwise
-        // this would overwrite (and lose) that newer edit.
-        if (pendingSaveRef.current === null) {
-          pendingSaveRef.current = pending;
-        }
-        setSaveState("error");
-        throw err;
-      }
-    });
-    saveChainRef.current = runSave.catch(() => {});
-    lastSaveOutcomeRef.current = runSave;
-    return runSave;
-  }
-
-  // Cancels any pending debounce and waits for the latest edit (plus
-  // anything already in flight) to finish saving. generate() and
-  // switchActiveProject() must call this first: without it, a job can
-  // start (or a project switch can happen) within the debounce window and
-  // read/discard the plan from before the user's last edit. Throws if the
-  // save actually failed, so callers can abort instead of proceeding
-  // against a stale on-disk plan.
-  async function flushPendingPlanSave(): Promise<void> {
-    if (saveTimeoutRef.current) {
-      clearTimeout(saveTimeoutRef.current);
-      saveTimeoutRef.current = null;
-    }
-    if (pendingSaveRef.current) {
-      await enqueueSave();
-    } else {
-      await lastSaveOutcomeRef.current;
-    }
-  }
 
   // Flushes any pending/in-flight save for the *current* project before
   // switching to a different one (SPEC.md: a shared save slot must not
@@ -362,16 +317,8 @@ export default function App() {
       // drop any save/notes work still pending for it rather than let it
       // fire later against a now-404 project id, then clear the open-project
       // state the same way the [activeId] effect does for `activeId === null`.
-      if (saveTimeoutRef.current) {
-        clearTimeout(saveTimeoutRef.current);
-        saveTimeoutRef.current = null;
-      }
-      pendingSaveRef.current = null;
-      for (const timeout of Object.values(takeSaveTimeoutsRef.current)) {
-        if (timeout) clearTimeout(timeout);
-      }
-      takeSaveTimeoutsRef.current = {};
-      pendingTakeNotesRef.current = {};
+      resetPlanAutosave();
+      resetTakeNotes();
       activeIdRef.current = null;
       setActiveId(null);
     }
@@ -396,57 +343,6 @@ export default function App() {
       updateTakeLocal(take.id, { favorite: take.favorite });
       setErrorMsg(String(err));
     }
-  }
-
-  // Sends whatever note edit is pending for `takeId` right now, canceling
-  // its debounce timer first -- the single path every take-notes save
-  // actually goes through, whether triggered by the debounce firing, a
-  // blur, a project switch, or the page unloading. Re-queues the edit on
-  // failure (mirroring enqueueSave's failure handling above) so a later
-  // flush can retry it, but only if nothing newer has already claimed the
-  // slot. `opts.keepalive` is passed straight through to `api.patchTake`
-  // for the pagehide/beforeunload case, where a plain fetch would otherwise
-  // be aborted mid-flight by the navigation.
-  async function flushTakeNotes(takeId: string, opts?: { keepalive?: boolean }): Promise<void> {
-    const timeout = takeSaveTimeoutsRef.current[takeId];
-    if (timeout) {
-      clearTimeout(timeout);
-      takeSaveTimeoutsRef.current[takeId] = null;
-    }
-    if (!(takeId in pendingTakeNotesRef.current)) return;
-    const projectId = activeIdRef.current;
-    const notes = pendingTakeNotesRef.current[takeId];
-    delete pendingTakeNotesRef.current[takeId];
-    if (!projectId) return;
-    try {
-      await api.patchTake(projectId, takeId, { notes }, opts);
-    } catch (err) {
-      if (!(takeId in pendingTakeNotesRef.current)) {
-        pendingTakeNotesRef.current[takeId] = notes;
-      }
-      throw err;
-    }
-  }
-
-  // Flushes every take's pending note edit (not just one) -- used before a
-  // project switch, and from the pagehide/beforeunload handler below, since
-  // either can happen while more than one take's textarea has an unsaved
-  // edit in flight.
-  async function flushAllPendingTakeNotes(opts?: { keepalive?: boolean }): Promise<void> {
-    const takeIds = Object.keys(pendingTakeNotesRef.current);
-    await Promise.all(takeIds.map((takeId) => flushTakeNotes(takeId, opts)));
-  }
-
-  function saveTakeNotes(takeId: string, notes: string): void {
-    if (!activeId) return;
-    updateTakeLocal(takeId, { notes });
-
-    pendingTakeNotesRef.current[takeId] = notes;
-    const existing = takeSaveTimeoutsRef.current[takeId];
-    if (existing) clearTimeout(existing);
-    takeSaveTimeoutsRef.current[takeId] = setTimeout(() => {
-      flushTakeNotes(takeId).catch((err) => setErrorMsg(String(err)));
-    }, PLAN_SAVE_DEBOUNCE_MS);
   }
 
   async function setActiveTake(takeId: string): Promise<void> {
@@ -727,23 +623,6 @@ export default function App() {
       setErrorMsg(String(err));
       setTitleDraft(detail.project.title);
     }
-  }
-
-  function savePlanField<K extends keyof Plan>(key: K, value: Plan[K]) {
-    if (!activeId || !detail) return;
-    const plan = { ...detail.plan, [key]: value };
-    setDetail({ ...detail, plan });
-
-    pendingSaveRef.current = { projectId: activeId, plan };
-    setSaveState("saving");
-    if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
-    saveTimeoutRef.current = setTimeout(() => {
-      saveTimeoutRef.current = null;
-      // Fire-and-forget from here (nothing is awaiting this save yet), but
-      // still surface a failure -- flushPendingPlanSave() picks up the
-      // real outcome via lastSaveOutcomeRef if something awaits it later.
-      enqueueSave().catch((err) => setErrorMsg(String(err)));
-    }, PLAN_SAVE_DEBOUNCE_MS);
   }
 
   // Inserts a structure tag (SPEC.md sec 4.4/9.2) at the lyrics textarea's
