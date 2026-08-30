@@ -6,71 +6,18 @@
    the everyday page is just the song on one side and its sound on the other.
    -------------------------------------------------------------------------- */
 
-:root {
-  --canvas: #f3f3ef;
-  --surface: #ffffff;
-  --surface-raised: #ffffff;
-  --surface-hover: #f6f3ed;
-  --rule: #dedbd3;
-  --rule-strong: #bdb8ae;
-  --text: #202a38;
-  --text-soft: #35495d;
-  --muted: #737980;
-  --muted-dim: #a0a29f;
-  --signal: #c94a38;
-  --signal-strong: #ad392b;
-  --focus: #485f9d;
-}
-
-body,
-.app {
-  background: var(--canvas);
-}
-
 .topbar {
-  height: 54px;
-  flex-basis: 54px;
-  border-top: 3px solid #293e7d;
   border-bottom: 1px solid var(--rule);
-  background: #fbfaf7;
   padding: 0 18px;
 }
 .brand-mark {
-  width: 28px;
-  height: 28px;
   border-color: #293e7d;
-  background: transparent;
-  color: #293e7d;
-}
-.topbar h1 {
-  color: #293e7d;
-  font-size: 18px;
-}
-.brand-subtitle {
-  color: #89857c;
-}
-.health {
-  border-left-color: var(--rule);
-}
-
-.workspace {
-  background: var(--canvas);
 }
 .workspace-header {
-  min-height: 66px;
   border-bottom: 1px solid var(--rule);
-  background: #fbfaf7;
-  padding: 10px 28px;
-}
-.project-heading h2 {
-  color: #25334a;
-  font-size: 24px;
 }
 .project-heading h2::before {
   display: none;
-}
-.project-context {
-  color: #85877f;
 }
 .job-strip {
   background: #f7f4ee;
@@ -86,8 +33,6 @@ body,
 }
 .plan {
   grid-column: 1;
-  border-right: 1px solid var(--rule);
-  background: #ffffff;
 }
 .studio-inspector {
   position: fixed;
@@ -98,7 +43,6 @@ body,
   width: min(390px, 94vw);
   border-left: 1px solid var(--rule-strong);
   background: #fbfaf7;
-  box-shadow: -16px 0 40px rgba(32, 42, 56, 0.12);
   transform: translateX(101%);
   transition: transform 180ms ease;
 }
@@ -107,54 +51,23 @@ body,
 }
 .waveform {
   grid-column: 2;
-  background: #f8f7f3;
   background-image: none;
-  padding: 27px 28px 0;
-}
-.stage-heading {
-  border-bottom-color: var(--rule);
-}
-.stage-heading h3 {
-  font-size: 19px;
-}
-.source-shelf {
-  border-bottom-color: var(--rule-strong);
 }
 .waveform-canvas {
-  min-height: 250px;
   border-color: var(--rule-strong);
   background: #ffffff;
-  box-shadow: none;
 }
 .waveform-canvas::before,
 .waveform-canvas::after {
   background: rgba(72, 95, 157, 0.14);
-}
-.waveform-empty .icon {
-  color: #6476a9;
-}
-.transport-button {
-  box-shadow: none;
 }
 .compare {
   box-shadow: none;
 }
 
 /* Builder: a simple page of writing, with one piece of information at a time. */
-.pane-heading {
-  min-height: 66px;
-  border-bottom-color: var(--rule);
-  background: #ffffff;
-  padding: 11px 28px;
-}
 .pane-heading h3 {
-  color: #25334a;
-  font-family: var(--sans);
-  font-size: 15px;
   letter-spacing: 0;
-}
-.pane-heading .eyebrow {
-  color: #77808a;
 }
 .plan-scroll {
   padding: 0;
@@ -186,37 +99,23 @@ body,
   display: none;
 }
 .builder-section-heading h4 {
-  color: #34475d;
-  font-family: var(--sans);
-  font-size: 13px;
   font-weight: 700;
   letter-spacing: 0;
   line-height: 1.3;
 }
 .builder-brief .intent-field {
-  color: #566372;
   font-size: 11px;
 }
 .intent-field textarea {
-  min-height: 154px;
   border-color: var(--rule-strong);
-  background: #fbfaf7;
   color: #283746;
-  font-size: 14px;
 }
 .builder-tip {
   margin-top: 9px;
-  color: #92918b;
 }
 .builder-disclosure {
   margin: 0;
   border: 0;
-  border-bottom: 1px solid var(--rule);
-  background: #f8f7f3;
-  padding: 15px 28px;
-}
-.builder-disclosure:hover {
-  background: #f3f1eb;
 }
 .builder-disclosure-copy {
   gap: 0;
@@ -224,16 +123,7 @@ body,
 .builder-disclosure-copy .builder-index {
   display: none;
 }
-.builder-disclosure-copy strong {
-  color: #35495d;
-  font-family: var(--sans);
-  font-size: 12px;
-}
-.builder-disclosure-copy small {
-  display: none;
-}
 .builder-disclosure > span:last-child {
-  color: #7e8388;
   font-size: 9px;
 }
 .builder-details {
@@ -255,30 +145,14 @@ body,
 .builder-switches .checkbox {
   border-bottom-color: var(--rule);
 }
-.builder-switches .checkbox strong {
-  color: #3c5165;
-}
 .builder-lyrics .lyrics-field textarea {
-  min-height: 265px;
   border-color: var(--rule-strong);
   background: #fbfaf7;
-}
-.lyrics-tag-button {
-  border-color: var(--rule-strong);
-  background: #ffffff;
-  color: #53667a;
-}
-.lyrics-tag-button:hover:not(:disabled) {
-  border-color: #485f9d;
-  background: #f3f5fa;
 }
 .builder-arrangement {
   border-bottom: 0;
 }
 .plan-sections-title {
-  color: #34475d;
-  font-family: var(--sans);
-  font-size: 13px;
   letter-spacing: 0;
 }
 .plan-sections-header .eyebrow {
@@ -308,22 +182,10 @@ body,
   background: transparent;
   padding: 15px 0;
 }
-.operation-heading {
-  padding-top: 0;
-}
 .operation-heading > span,
 .operation-group:nth-child(2) .operation-heading > span,
 .operation-group:nth-child(3) .operation-heading > span {
   color: #858b91;
-}
-.operation-heading strong {
-  color: #405469;
-}
-.operation-heading small {
-  color: #97958e;
-}
-.operation-controls {
-  align-content: start;
 }
 .operation-tabs {
   display: none;
@@ -340,7 +202,6 @@ body,
   flex: none;
   border-right: 1px solid var(--rule-strong);
   background: #fbfaf7;
-  box-shadow: 16px 0 40px rgba(32, 42, 56, 0.12);
   transform: translateX(-101%);
   transition: transform 180ms ease;
 }
@@ -357,8 +218,6 @@ body,
   position: fixed;
   z-index: 55;
   display: block;
-  background: rgba(32, 42, 56, 0.2);
-  inset: 54px 0 0;
 }
 
 @media (min-width: 1100px) and (max-width: 1359px) {
@@ -379,10 +238,6 @@ body,
 }
 
 @media (max-width: 1099px) {
-  .topbar {
-    height: 58px;
-    flex-basis: 58px;
-  }
   .studio-inspector {
     top: 58px;
   }
@@ -425,20 +280,8 @@ body,
 }
 
 @media (max-width: 560px) {
-  .topbar {
-    height: 54px;
-    flex-basis: 54px;
-  }
   .workspace-header {
     padding: 9px 14px;
-  }
-  .library,
-  .studio-inspector,
-  .plan {
-    top: 54px;
-  }
-  .drawer-scrim {
-    inset: 54px 0 0;
   }
   .waveform {
     padding: 18px 14px 0;

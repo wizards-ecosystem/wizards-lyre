@@ -77,12 +77,17 @@ callers, and your test will pass while exercising the unpatched code. This has
 bitten before; see the comments in `server/storage/jsonio.py`.
 
 **The stylesheet is layered, not modular.** `web/src/styles.css` imports eight
-numbered files, and the order is the design: 03–08 are successive redesigns
+numbered files, and the order is the design: 03–08 are successive refinements
 that override each other by cascade position. Adding a rule at the end of
-`08-lyre-instrument.css` is usually what you want. Flattening the stack to a
-single effective stylesheet would be a genuine improvement, but it needs
-visual verification the DOM-level tests cannot provide, so it has not been
-done.
+`08-lyre-instrument.css` is usually what you want.
+
+Declarations a later layer provably overrode have already been removed, so
+what is left in each file is what that layer actually contributes. If you
+prune further, the safe rule is deletion-only where a *later* rule has the
+identical selector in the identical at-rule context — same selector means same
+specificity and same matched elements, so document order alone decides.
+Anything beyond that needs real-browser verification, which the DOM-level test
+suite does not provide.
 
 **Environment variables are all `LYRE_*`.** See
 [docs/CONFIGURATION.md](docs/CONFIGURATION.md). Nothing reads any other prefix,

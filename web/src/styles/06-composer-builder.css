@@ -11,10 +11,6 @@
     grid-template-columns: 370px minmax(400px, 1fr) 310px;
   }
 }
-
-.plan-scroll {
-  padding: 0 20px 36px;
-}
 .builder-intro {
   margin: 0 -20px;
   border-bottom: 1px solid #ddd3c3;
@@ -32,20 +28,13 @@
 }
 .builder-brief {
   margin: 0 -20px;
-  border-bottom: 0;
-  border-left: 4px solid #263f89;
-  background: #f7f3e9;
-  padding: 22px 20px 23px 16px;
 }
 .builder-section-heading {
-  display: grid;
   grid-template-columns: 28px minmax(0, 1fr);
   align-items: start;
   gap: 10px;
-  margin-bottom: 15px;
 }
 .builder-index {
-  display: inline-flex;
   width: 25px;
   height: 25px;
   align-items: center;
@@ -64,46 +53,18 @@
 }
 .builder-section-heading h4 {
   margin: 2px 0 0;
-  color: #253d62;
-  font-family: var(--display);
-  font-size: 18px;
-  font-weight: 700;
-  letter-spacing: -0.03em;
-  line-height: 1.08;
 }
 .builder-brief .intent-field {
   gap: 7px;
-  color: #38526a;
-}
-.intent-field textarea {
-  min-height: 132px;
-  border-color: #beb29e;
-  background: #fffdf8;
-  font-size: 14px;
-  line-height: 1.55;
 }
 .builder-tip {
   margin: 10px 0 0;
-  color: #82786c;
   font-size: 10px;
   line-height: 1.45;
-}
-
-.builder-disclosure {
-  margin: 0 -20px;
-  border: 0;
-  border-top: 1px solid #ddd3c3;
-  border-bottom: 1px solid #ddd3c3;
-  background: #fffdf7;
-  padding: 15px 20px;
-}
-.builder-disclosure:hover {
-  background: #f8f2e8;
 }
 .builder-disclosure-copy {
   display: flex;
   align-items: center;
-  gap: 11px;
 }
 .builder-disclosure-copy > span:last-child {
   display: flex;
@@ -111,25 +72,14 @@
   gap: 2px;
 }
 .builder-disclosure-copy strong {
-  color: #284461;
-  font-family: var(--display);
-  font-size: 16px;
   font-weight: 700;
 }
 .builder-disclosure-copy small {
-  color: #84796c;
   font-size: 9px;
   font-weight: 400;
 }
-.builder-disclosure > span:last-child {
-  color: #a24836;
-  font-size: 8px;
-}
 .builder-details {
   padding-top: 0;
-}
-.builder-details > .builder-section:last-child {
-  border-bottom: 0;
 }
 
 .builder-song-details {
@@ -137,9 +87,6 @@
 }
 .builder-song-details > .field-label {
   margin-bottom: 16px;
-}
-.builder-settings-grid {
-  gap: 11px 10px;
 }
 .builder-settings-grid label {
   color: #6c716f;
@@ -150,7 +97,6 @@
 }
 .builder-settings-grid input {
   height: 34px;
-  background: #fffdf8;
 }
 .builder-switches {
   gap: 0;
@@ -177,7 +123,6 @@
   gap: 2px;
 }
 .builder-switches .checkbox strong {
-  color: #314d68;
   font-size: 11px;
   font-weight: 700;
 }
@@ -211,20 +156,9 @@
 }
 .lyrics-tag-button {
   min-height: 27px;
-  border-color: #c9bca7;
-  background: #fffdf8;
-  color: #4b6076;
   padding: 3px 7px;
 }
-.lyrics-tag-button:hover:not(:disabled) {
-  border-color: #263f89;
-  background: #eef1f9;
-  color: #263f89;
-}
 .builder-lyrics .lyrics-field textarea {
-  min-height: 244px;
-  border-color: #beb29e;
-  background: #fffefb;
   font-family: var(--sans);
   font-size: 12px;
   line-height: 1.65;
@@ -246,11 +180,7 @@
 }
 .plan-sections-title {
   display: block;
-  color: #253d62;
-  font-family: var(--display);
-  font-size: 18px;
   font-weight: 700;
-  letter-spacing: -0.03em;
 }
 .plan-sections-header small {
   max-width: 190px;
