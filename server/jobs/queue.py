@@ -117,8 +117,10 @@ def enqueue_job(project_id: str, body: dict[str, Any]) -> dict:
         # here, not in the worker, so the worker never has to reach back
         # into project storage itself (same division of labor as
         # `_resolve_source_audio`'s src_audio).
+        # The resolved record's own id, not the raw client value: it has been
+        # through _resolve_lora's existence and training-status checks.
         payload["lora_adapter_path"] = str(
-            storage.lora_dir(project_id, lora_id) / "adapter" / "final"
+            storage.lora_dir(project_id, resolved_lora["id"]) / "adapter" / "final"
         )
 
     with closing(_connect()) as conn:

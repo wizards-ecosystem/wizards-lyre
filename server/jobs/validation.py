@@ -119,8 +119,6 @@ def _resolve_source_audio(project_id: str, action: str, body: dict[str, Any]) ->
 
     source_take_id = body.get("source_take_id")
     upload_path = body.get("upload_path")
-    if not source_take_id and not upload_path:
-        raise JobError(f"action '{action}' requires source_take_id or upload_path")
 
     if source_take_id:
         try:
@@ -129,10 +127,13 @@ def _resolve_source_audio(project_id: str, action: str, body: dict[str, Any]) ->
             raise JobError(f"source_take_id not found: {source_take_id}") from exc
         return str(path)
 
-    path = storage.resolve_upload_path(project_id, upload_path)
-    if not path.exists():
-        raise JobError(f"upload_path not found: {upload_path}")
-    return str(path)
+    if upload_path:
+        path = storage.resolve_upload_path(project_id, upload_path)
+        if not path.exists():
+            raise JobError(f"upload_path not found: {upload_path}")
+        return str(path)
+
+    raise JobError(f"action '{action}' requires source_take_id or upload_path")
 
 
 def _distinct_lora_source_ids(body: dict[str, Any]) -> list[str]:

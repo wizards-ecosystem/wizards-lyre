@@ -34,7 +34,11 @@ WORKER_STATUS_STALE_AFTER_SEC = 30.0
 # A worker returns the take's meta.json plus an optional plan.json patch
 # (simple-mode generation fills caption/lyrics/metas from the LM and the
 # filled plan must be persisted -- SPEC.md sec 7.2).
-WorkerFn = Callable[..., tuple[dict, dict | None]]
+# The take's meta.json, an optional plan.json patch (simple-mode generation
+# fills caption/lyrics/metas from the LM and the filled plan must be persisted
+# -- SPEC.md sec 7.2), and optional LRC text (SPEC.md sec 7 `lyrics.lrc`,
+# written by the caller, not the worker).
+WorkerFn = Callable[..., tuple[dict, dict | None, str | None]]
 
 
 def resolve_worker_module():

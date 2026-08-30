@@ -200,6 +200,7 @@ case "${1:-}" in
     need_command npm
     "$VENV/bin/ruff" check .
     "$VENV/bin/ruff" format --check .
+    "$VENV/bin/mypy"
     npm --prefix "$ROOT/web" run lint
     # Optional system tool: skip the launcher lint rather than fail without it.
     if command -v shellcheck >/dev/null 2>&1; then
