@@ -4,10 +4,10 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "node dev.mjs",
-    "build": "tsc -b && node build.mjs",
+    "dev": "vite",
+    "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "test": "node test.mjs"
+    "test": "vitest run"
   },
   "dependencies": {
     "react": "^18.3.1",

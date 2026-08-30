@@ -18,8 +18,6 @@ web/node_modules/
 web/dist/
 web/.vite/
 web/*.tsbuildinfo
-web/.dev-vendor/
-web/.dev-vendor-src/
 
 # Downloaded third-party source (pinned by ACE_STEP_REVISION and bootstrapped
 # by scripts/lyre; its environment and metadata stay inside vendor/).

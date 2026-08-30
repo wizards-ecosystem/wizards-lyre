@@ -45,9 +45,7 @@ the studio's core flows (generate/cover/repaint, extract/lego/complete,
 library management, take annotations, plan editing, LoRA train/load, and
 more) against a mocked fetch backend in `src/test/mockServer.ts` — no
 FastAPI, CUDA, ACE-Step, credentials, or generated audio required. Python-side
-tests stay pytest at the repo root
-(SPEC.md §11). Like `dev.mjs` / `build.mjs`, the Vitest config lives inline
-in `test.mjs` instead of a `vitest.config.ts`; see the Notes section for why.
+tests stay pytest at the repo root (SPEC.md §11).
 
 ## Keyboard shortcuts
 
@@ -65,12 +63,9 @@ Generate button — is the only place they're documented:
 
 ## Notes
 
-- `dev.mjs` / `build.mjs` load the Vite config as inline JS instead of a
-  `vite.config.ts` file, and `dev-vendor.mjs` pre-bundles React via Vite's
-  Rollup-based production build rather than the esbuild dev optimizer — both
-  work around an `EACCES` esbuild hits when it walks up through a
-  permission-denied ancestor directory under the Conclave worktree jail.
-  Functionally this is the same as a standard `vite.config.ts` with an
-  `/api` proxy; see the comments in those files for the full story.
-- Waveform integration (wavesurfer.js) is a later phase — the Waveform pane
-  is currently a placeholder container plus the action buttons.
+- The Vitest config pins `pool: "forks"` with `singleFork: true`. Each test
+  installs its own mock backend on the module-scope `fetch`, and `App` runs a
+  5 s health poll, so parallel workers would interleave state across files.
+- The waveform is a real wavesurfer.js instance with the regions plugin: it is
+  remounted per selected take and owns both the repaint drag-selection and the
+  plan's named section labels (SPEC.md §9.2).
