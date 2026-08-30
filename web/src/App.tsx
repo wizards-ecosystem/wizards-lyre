@@ -1,7 +1,5 @@
 import { DragEvent, KeyboardEvent as ReactKeyboardEvent, useCallback, useEffect, useRef, useState } from "react";
-import WaveSurfer from "wavesurfer.js";
-import RegionsPlugin from "wavesurfer.js/plugins/regions";
-import { api, Health, Job, Lora, Plan, ProjectDetail, ProjectSummary, Section } from "./api";
+import { api, Job, Lora, Plan, ProjectDetail, ProjectSummary, Section } from "./api";
 import { ConfirmationDialog } from "./components/ConfirmationDialog";
 import { Icon } from "./components/Icon";
 import { LoudnessMeter } from "./components/LoudnessMeter";
@@ -18,17 +16,17 @@ import {
 } from "./components/Workbench";
 import {
   DIT_PROFILE_OPTIONS,
-  HEALTH_POLL_INTERVAL_MS,
   LORA_TRAIN_POLL_TIMEOUT_MS,
   LORA_TRAIN_RECOVERY_POLL_MS,
   MIN_LORA_SOURCE_TAKES,
   PLAN_SAVE_DEBOUNCE_MS,
-  REPAINT_REGION_ID,
-  SECTION_REGION_ID_PREFIX,
   STRUCTURE_TAGS,
 } from "./constants";
 import { formatClock, parseSeed } from "./lib/format";
 import { pollJob } from "./lib/jobs";
+import { useHealth } from "./hooks/useHealth";
+import { useWaveform } from "./hooks/useWaveform";
+import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
 import { ConfirmationRequest, InspectorTab, OperationGroup, SaveState } from "./types";
 
 export default function App() {
@@ -67,7 +65,6 @@ export default function App() {
   const [uploadedSourcePath, setUploadedSourcePath] = useState<string | null>(null);
   const [uploadedSourceName, setUploadedSourceName] = useState<string | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
-  const [region, setRegion] = useState<{ start: number; end: number } | null>(null);
   const [coverStrength, setCoverStrength] = useState(0.7);
   // Fixed seed for the next Generate/Cover/Repaint (SPEC.md sec 7.3). Kept
   // as the raw input string so an empty field stays empty on screen; empty
@@ -75,8 +72,7 @@ export default function App() {
   const [seedInput, setSeedInput] = useState("");
   const [trackName, setTrackName] = useState("");
   const [includeStems, setIncludeStems] = useState(true);
-  const [health, setHealth] = useState<Health | null>(null);
-  const [healthError, setHealthError] = useState<string | null>(null);
+  const { health, error: healthError } = useHealth();
   const [loras, setLoras] = useState<Lora[]>([]);
   // Multi-select of takes to train a style pack from (SPEC.md sec 4.4 "8+
   // songs") -- deliberately separate from selectedTakeId/compareTakeId,
@@ -95,10 +91,6 @@ export default function App() {
   // queue is not, so the Style Packs pane can keep showing its status and
   // refresh the pack list the moment it finishes (no second reload needed).
   const [trainingJobs, setTrainingJobs] = useState<Job[]>([]);
-  const [waveformPlaying, setWaveformPlaying] = useState(false);
-  const [waveformCurrentTime, setWaveformCurrentTime] = useState(0);
-  const [waveformDuration, setWaveformDuration] = useState(0);
-  const [waveformMediaEl, setWaveformMediaEl] = useState<HTMLAudioElement | null>(null);
 
   // Plan saves are debounced and serialized: at most one PUT /plan in
   // flight at a time, always carrying the latest edit. Without this, one
@@ -143,9 +135,6 @@ export default function App() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const confirmationFocusRef = useRef<HTMLElement | null>(null);
 
-  const waveformContainerRef = useRef<HTMLDivElement | null>(null);
-  const wavesurferRef = useRef<WaveSurfer | null>(null);
-  const regionsPluginRef = useRef<RegionsPlugin | null>(null);
 
   const requestConfirmation = useCallback(
     (request: Omit<ConfirmationRequest, "resolve">): Promise<boolean> => {
@@ -171,6 +160,19 @@ export default function App() {
   const registerAudioRef = useCallback((id: string, el: HTMLAudioElement | null) => {
     audioRefs.current[id] = el;
   }, []);
+
+  const {
+    region,
+    clearRegion,
+    waveformPlaying,
+    waveformCurrentTime,
+    waveformDuration,
+    waveformMediaEl,
+    waveformContainerRef,
+    wavesurferRef,
+    toggleWaveformPlayback,
+    seekWaveform,
+  } = useWaveform({ selectedTakeId, detail, activeIdRef, audioRefs, setErrorMsg });
 
   // Reviewer-flagged: canceling a pending take-notes debounce timer (on
   // unmount, or on the page actually closing/reloading) used to just drop
@@ -499,33 +501,6 @@ export default function App() {
     refreshProjects().catch((err) => setErrorMsg(String(err)));
   }, []);
 
-  // Server (and worker) may not be running at all -- a fetch failure here
-  // is a normal, expected state (shown as "offline"), not something to
-  // surface via the generic errorMsg banner.
-  useEffect(() => {
-    let cancelled = false;
-    async function poll() {
-      try {
-        const result = await api.health();
-        if (!cancelled) {
-          setHealth(result);
-          setHealthError(null);
-        }
-      } catch (err) {
-        if (!cancelled) {
-          setHealth(null);
-          setHealthError(String(err));
-        }
-      }
-    }
-    poll();
-    const interval = setInterval(poll, HEALTH_POLL_INTERVAL_MS);
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
-  }, []);
-
   useEffect(() => {
     setSelectedTakeId(null);
     setCompareTakeId(null);
@@ -625,13 +600,6 @@ export default function App() {
     };
   }, [activeId, trainingJobIds]);
 
-  // A newly selected take has no region yet -- drop whatever was drawn for
-  // the previous one instead of showing a stale start/end that no longer
-  // corresponds to anything on screen.
-  useEffect(() => {
-    setRegion(null);
-  }, [selectedTakeId]);
-
   // An uploaded file and a selected take are alternative cover/repaint
   // sources (server.jobs._resolve_source_audio accepts exactly one) --
   // picking a take deselects whatever was dropped. The reverse (dropping a
@@ -660,119 +628,6 @@ export default function App() {
   // decoding work and duplicate canvases. activeIdRef (not activeId) is used
   // for the take URL because it's already kept in sync with the project
   // actually on screen (see its own comment above); selectedTakeId is reset
-  // to null synchronously on every project switch (the effect just above),
-  // so by the time this effect fires for a non-null selectedTakeId, the
-  // project has already settled.
-  useEffect(() => {
-    const projectId = activeIdRef.current;
-    if (!selectedTakeId || !projectId || !waveformContainerRef.current) return;
-    const take = detail?.takes.find((t) => t.id === selectedTakeId);
-    if (!take || take.error) return;
-
-    const regions = RegionsPlugin.create();
-    const wavesurfer = WaveSurfer.create({
-      container: waveformContainerRef.current,
-      url: api.takeAudioUrl(projectId, selectedTakeId),
-      waveColor: "#565d5a",
-      progressColor: "#e6b85c",
-      cursorColor: "#f2f0e8",
-      height: 164,
-      normalize: true,
-      plugins: [regions],
-    });
-    wavesurferRef.current = wavesurfer;
-    regionsPluginRef.current = regions;
-    setWaveformPlaying(false);
-    setWaveformCurrentTime(0);
-    setWaveformDuration(0);
-    setWaveformMediaEl(
-      typeof wavesurfer.getMediaElement === "function"
-        ? (wavesurfer.getMediaElement() as HTMLAudioElement)
-        : null,
-    );
-
-    wavesurfer.on("ready", (duration) => setWaveformDuration(duration));
-    wavesurfer.on("timeupdate", (time) => setWaveformCurrentTime(time));
-    wavesurfer.on("play", () => setWaveformPlaying(true));
-    wavesurfer.on("pause", () => setWaveformPlaying(false));
-    wavesurfer.on("finish", () => setWaveformPlaying(false));
-
-    // A missing/corrupt/unsupported take would otherwise just leave a blank
-    // waveform with no indication anything went wrong.
-    wavesurfer.on("error", (err) => setErrorMsg(`waveform load failed: ${err.message}`));
-
-    // Only one repaint selection at a time (SPEC.md: drag a region ->
-    // repaint) -- a new drag replaces the previous selection instead of
-    // accumulating. Persisted section labels (SECTION_REGION_ID_PREFIX) live
-    // on this same plugin instance and must survive that cleanup, so this
-    // only ever removes regions sharing the selection's fixed id. The
-    // iteration copies the list first because remove() mutates it in place.
-    regions.on("region-created", (created) => {
-      if (created.id.startsWith(SECTION_REGION_ID_PREFIX)) return;
-      for (const existing of regions.getRegions().slice()) {
-        if (existing !== created && existing.id === created.id) existing.remove();
-      }
-      setRegion({ start: created.start, end: created.end });
-    });
-    regions.on("region-updated", (updated) => {
-      // Section labels are drag/resize-disabled, but guard anyway: only the
-      // repaint selection feeds the region state used by Repaint/Lego.
-      if (updated.id !== REPAINT_REGION_ID) return;
-      setRegion({ start: updated.start, end: updated.end });
-    });
-    regions.enableDragSelection({ id: REPAINT_REGION_ID });
-
-    return () => {
-      wavesurfer.destroy();
-      wavesurferRef.current = null;
-      regionsPluginRef.current = null;
-      setWaveformMediaEl(null);
-      setWaveformPlaying(false);
-    };
-  }, [selectedTakeId]);
-
-  // Renders plan.sections as labeled, non-editable regions on the waveform
-  // (SPEC.md sec 7.2: sections are "region labels on the waveform") and
-  // keeps them in sync with the Plan pane's section list -- editing, adding,
-  // or deleting a section there redraws its label here. addRegion is safe to
-  // call before the audio finishes decoding: the plugin defers positioning
-  // until ready. Declared after the mount effect above so that on a take
-  // switch effects run in order and the fresh RegionsPlugin already exists
-  // when labels are (re)drawn.
-  useEffect(() => {
-    const regions = regionsPluginRef.current;
-    if (!regions) return;
-    // Copy before iterating: remove() mutates the plugin's region list.
-    for (const existing of regions.getRegions().slice()) {
-      if (existing.id.startsWith(SECTION_REGION_ID_PREFIX)) existing.remove();
-    }
-    for (const [index, section] of (detail?.plan.sections ?? []).entries()) {
-      regions.addRegion({
-        id: `${SECTION_REGION_ID_PREFIX}${index}`,
-        start: section.start_sec,
-        // A section whose end was typed before its start in the Plan pane
-        // would otherwise render with zero/negative width and vanish.
-        end: Math.max(section.end_sec, section.start_sec),
-        content: section.name,
-        // Accent tint so labels are visually distinct from the repaint
-        // selection's default gray; drag/resize off -- these are labels,
-        // edited via the Plan pane, not on the waveform.
-        color: "rgba(230, 184, 92, 0.16)",
-        drag: false,
-        resize: false,
-      });
-    }
-  }, [detail?.plan.sections, selectedTakeId]);
-
-  function clearRegion() {
-    // Remove only the repaint selection -- persisted section labels share
-    // this RegionsPlugin instance and must survive clearing it.
-    for (const existing of regionsPluginRef.current?.getRegions().slice() ?? []) {
-      if (existing.id === REPAINT_REGION_ID) existing.remove();
-    }
-    setRegion(null);
-  }
-
   function clearUploadedSource() {
     setUploadedSourcePath(null);
     setUploadedSourceName(null);
@@ -806,16 +661,6 @@ export default function App() {
     event.preventDefault();
     const file = event.dataTransfer.files[0];
     if (file) await uploadSourceFile(file);
-  }
-
-  function toggleWaveformPlayback(): void {
-    const wavesurfer = wavesurferRef.current;
-    if (!wavesurfer) return;
-    for (const audio of Object.values(audioRefs.current)) {
-      audio?.pause();
-    }
-    if (typeof wavesurfer.playPause !== "function") return;
-    wavesurfer.playPause().catch((err) => setErrorMsg(`playback failed: ${String(err)}`));
   }
 
   async function createProject() {
@@ -1274,77 +1119,19 @@ export default function App() {
     ? loras.find((l) => l.id === selectedLoraId) ?? null
     : null;
 
-  // Keyboard shortcuts (SPEC.md sec 12 Phase 5). Gated on a project being
-  // open (there's nothing to act on otherwise). Save is exempt from the
-  // text-entry guard below -- it's the one shortcut users need most while
-  // actually typing in the caption/lyrics/query fields, and Ctrl/Cmd+S is
-  // never a literal character those fields would otherwise receive.
-  // Generate / play-pause / prev-next-take *are* guarded, since "g" and
-  // Space are ordinary characters those same fields need to accept normally.
-  useEffect(() => {
-    function isTextEntryFocused(): boolean {
-      const tag = document.activeElement?.tagName;
-      return tag === "INPUT" || tag === "TEXTAREA";
-    }
-
-    function onKeyDown(event: KeyboardEvent) {
-      if (!activeId || !detail) return;
-
-      const key = event.key;
-
-      if ((key === "s" || key === "S") && (event.ctrlKey || event.metaKey)) {
-        event.preventDefault();
-        flushPendingPlanSave().catch((err) => setErrorMsg(String(err)));
-        return;
-      }
-
-      if (isTextEntryFocused()) return;
-
-      if (key === "g" || key === "G") {
-        if (!busy) generate();
-        return;
-      }
-
-      if (key === " " || event.code === "Space") {
-        event.preventDefault();
-        const take = detail.takes.find((t) => t.id === selectedTakeId);
-        if (!take || take.error) return;
-        if (typeof wavesurferRef.current?.playPause === "function") {
-          toggleWaveformPlayback();
-          return;
-        }
-        // Test/legacy fallback for a waveform adapter without playPause.
-        const audio = audioRefs.current[take.id];
-        if (!audio) return;
-        if (audio.paused) audio.play();
-        else audio.pause();
-        return;
-      }
-
-      if (key === "ArrowDown" || key === "ArrowUp") {
-        if (detail.takes.length === 0) return;
-        const currentIndex = detail.takes.findIndex((t) => t.id === selectedTakeId);
-        // Newest-first order (server already sorts it that way) -- Down
-        // moves toward older takes, Up toward newer ones. Clamp at the ends
-        // rather than wrap so repeated presses can't silently loop back
-        // around onto a take the user already stepped past.
-        let nextIndex: number;
-        if (currentIndex === -1) {
-          nextIndex = 0;
-        } else if (key === "ArrowDown") {
-          nextIndex = Math.min(currentIndex + 1, detail.takes.length - 1);
-        } else {
-          nextIndex = Math.max(currentIndex - 1, 0);
-        }
-        event.preventDefault();
-        setSelectedTakeId(detail.takes[nextIndex].id);
-        return;
-      }
-    }
-
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [activeId, detail, selectedTakeId, busy]);
+  useKeyboardShortcuts({
+    activeId,
+    detail,
+    selectedTakeId,
+    busy,
+    audioRefs,
+    wavesurferRef,
+    flushPendingPlanSave,
+    generate,
+    toggleWaveformPlayback,
+    setSelectedTakeId,
+    setErrorMsg,
+  });
 
   const filteredProjects = projects
     .filter((project) => project.title.toLowerCase().includes(librarySearch.toLowerCase()))
@@ -1941,9 +1728,7 @@ export default function App() {
                       disabled={!selectedTake}
                       aria-label="Seek selected take"
                       onChange={(event) => {
-                        const next = Number(event.target.value);
-                        if (waveformDuration > 0) wavesurferRef.current?.seekTo(next / waveformDuration);
-                        setWaveformCurrentTime(next);
+                        seekWaveform(Number(event.target.value));
                       }}
                     />
                     <span className="transport-time">{formatClock(waveformDuration || selectedTake?.duration_sec || 0)}</span>
