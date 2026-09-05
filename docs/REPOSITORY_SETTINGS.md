@@ -49,6 +49,8 @@ the first pull request before marking them required.
 - Workflow tokens cannot approve pull requests.
 - Allowed actions: GitHub-owned actions plus
   `astral-sh/setup-uv`; other third-party actions are blocked.
+- After public visibility is enabled, require workflow approval for first-time
+  contributors to limit fork-based compute abuse.
 - Every action reference uses a full 40-character commit SHA.
 - Checkout credentials are not persisted in the working tree.
 - Every job has a timeout and the workflows cancel superseded branch runs.
@@ -72,8 +74,9 @@ release, and attests its archives.
 
 When the repository becomes public, verify that secret scanning, push
 protection, code scanning, dependency review, and private vulnerability
-reporting are active. These controls are unavailable or limited on the current
-private GitHub Free repository.
+reporting are active. Also set Actions fork approval to first-time contributors.
+These controls are unavailable or limited on the current private GitHub Free
+repository.
 
 ## Release tags
 
