@@ -72,7 +72,8 @@ release candidate must not silently present it as tested.
 
 ## 4. Publish
 
-1. Confirm CI, dependency review, and CodeQL are green on the exact commit.
+1. Confirm the release commit is on `main` and CI, dependency review, and
+   CodeQL are green on that exact commit.
 2. Create a signed or annotated tag: `git tag -s vX.Y.Z` (use `-a` if signing
    is unavailable), then push the tag.
 3. The release workflow repeats the GPU-free gates, validates the tag against

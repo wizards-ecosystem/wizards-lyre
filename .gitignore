@@ -43,6 +43,13 @@ checkpoints/
 .env
 .env.*
 !.env.example
+.envrc
+*.key
+*.pem
+*.p12
+*.pfx
+credentials.json
+secrets.json
 
 # OS / IDE
 .DS_Store

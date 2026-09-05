@@ -153,6 +153,7 @@ it through port forwarding, a reverse proxy, or a public bind. Read the
 | [Contributing](CONTRIBUTING.md) | GPU-free setup, project scope, test loop, and pull requests |
 | [Support](SUPPORT.md) | Where to ask for help and what diagnostics to include |
 | [Release guide](docs/RELEASING.md) | Reproducible, security, browser, and GPU release gates |
+| [Repository settings](docs/REPOSITORY_SETTINGS.md) | GitHub contribution, branch, workflow, and release controls |
 | [Dependency audit](docs/SECURITY_AUDIT.md) | ACE-Step overlay and reachability-reviewed advisory exceptions |
 
 `SPEC.md` is the sole product specification and the authority when any other
