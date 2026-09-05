@@ -8,8 +8,8 @@ prebuilt studio interface, so Node.js and npm are **not** required.
 - Linux x86-64, or Windows 11 using WSL2
 - an NVIDIA CUDA GPU; 16 GB VRAM is the tuned baseline
 - `git` and [`uv`](https://docs.astral.sh/uv/)
-- about 17 GB free for the environment and default models, or about 40 GB for
-  every model profile
+- about 20 GB free for the environment and default models, or at least 55 GB
+  for every model profile
 - optionally, FFmpeg for style-pack training
 
 Confirm that `nvidia-smi` sees your GPU before setup. Native Windows, macOS, and
@@ -27,7 +27,7 @@ Then run:
 ./scripts/lyre doctor
 ```
 
-`models-core` downloads roughly 9 GB and enables Generate, Cover, and Repaint.
+`models-core` downloads roughly 10 GB and enables Generate, Cover, and Repaint.
 Use `models-standard` for all profiles except optional XL quality, or `models`
 for every profile. `bootstrap` is the one-command equivalent of a full install
 plus `models`.

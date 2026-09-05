@@ -38,7 +38,7 @@ and reshape. Throw a seed, listen, keep what works, and push it somewhere new.
 
 The supported path is Linux x86-64 or Windows 11 with WSL2, an NVIDIA GPU,
 `git`, and [`uv`][uv]. The defaults are tuned for 16 GB VRAM. A full setup
-needs about 40 GB free before space for your music.
+needs at least 55 GB free before space for your music.
 
 For the smallest download, get the `.tar.gz` or `.zip` runtime bundle from the
 [latest release](https://github.com/wizards-ecosystem/wizards-lyre/releases/latest),

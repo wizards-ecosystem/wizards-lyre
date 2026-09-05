@@ -109,6 +109,10 @@ are recorded because they shaped the code a contributor will read.
   traversal issues.
 - Source builds no longer combine a PEP 639 license expression with the
   superseded license classifier, which recent Setuptools rejects.
+- Model-footprint guidance now reflects the pinned XL checkpoint's sharded
+  20 GB layout, and `doctor` recognizes both sharded and single-file weights.
+- Direct worker and GPU-smoke invocations now resolve the checkout-level model
+  directory instead of incorrectly looking under `worker/checkpoints/`.
 
 ### Security
 

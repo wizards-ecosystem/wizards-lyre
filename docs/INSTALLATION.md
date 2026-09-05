@@ -26,18 +26,20 @@ driver inside the distribution.
 
 ## Choose a model footprint
 
-The Python/CUDA environment uses roughly 8 GB. Model sizes are approximate and
-downloads are resumable.
+The Python/CUDA environment and package cache use roughly 10 GB of unique disk
+space. Model sizes are approximate and downloads are resumable.
 
 | Setup | Approx. models | Capabilities |
 |---|---:|---|
-| `models-core` | 9 GB | Generate, Cover, Repaint with the default `iterate` profile |
-| `models-standard` | 19 GB | Core + `polish` + Extract, Lego, Complete, and style packs |
-| `models` | 28 GB | Standard + optional 4B `quality` profile |
-| `bootstrap` | 28 GB | Full install and every model in one command |
+| `models-core` | 10 GB | Generate, Cover, Repaint with the default `iterate` profile |
+| `models-standard` | 20 GB | Core + `polish` + Extract, Lego, Complete, and style packs |
+| `models` | 40 GB | Standard + optional 4B `quality` profile |
+| `bootstrap` | 40 GB | Full install and every model in one command |
 
-Allow about 40 GB free for a full environment plus all models, and additional
-space for projects and exported audio.
+Allow at least 55 GB free for a full environment, package cache, and all models,
+plus additional space for projects and exported audio. These figures were
+measured against the pinned ACE-Step revision; upstream artifact layouts can
+change when that pin is deliberately updated.
 
 ## Install a release bundle (recommended)
 

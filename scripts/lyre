@@ -236,7 +236,8 @@ doctor() {
 
   local model label
   while IFS='|' read -r model label; do
-    if [[ -f "$ROOT/checkpoints/$model/model.safetensors" ]]; then
+    if [[ -f "$ROOT/checkpoints/$model/model.safetensors" ]] || \
+      [[ -f "$ROOT/checkpoints/$model/model.safetensors.index.json" ]]; then
       doctor_ok "$label model"
     else
       doctor_warn "$label model is not downloaded"
@@ -277,9 +278,9 @@ Commands:
   install    Install dependencies and prepare the web app, without model files.
   models     Download or resume ACE-Step model downloads only.
   models-core
-             Download the default iterate profile only (~9 GB).
+             Download the default iterate profile only (~10 GB).
   models-standard
-             Download every profile except optional XL quality (~19 GB).
+             Download every profile except optional XL quality (~20 GB).
   server     Start Lyre's HTTP server on 127.0.0.1:8421.
   worker     Start Lyre's local GPU worker.
   smoke-gpu  Run the manual ACE-Step GPU smoke test.

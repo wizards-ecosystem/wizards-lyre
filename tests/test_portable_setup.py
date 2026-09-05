@@ -86,7 +86,9 @@ def test_release_bundle_install_skips_node_and_development_dependencies(tmp_path
     git = tools / "git"
     git.write_text(
         "#!/usr/bin/env bash\n"
-        'if [[ "$*" == *"rev-parse --is-inside-work-tree"* ]]; then\n'
+        'if [[ "$*" == "--version" ]]; then\n'
+        '  echo "git version fixture"\n'
+        'elif [[ "$*" == *"rev-parse --is-inside-work-tree"* ]]; then\n'
         "  echo true\n"
         'elif [[ "$*" == *"rev-parse HEAD"* ]]; then\n'
         "  printf '%040d\\n' 0 | tr 0 a\n"
@@ -121,6 +123,23 @@ def test_release_bundle_install_skips_node_and_development_dependencies(tmp_path
     uv_commands = uv_log.read_text(encoding="utf-8")
     assert "--no-install-project" in uv_commands
     assert "--extra dev" not in uv_commands
+
+    for model in ("acestep-v15-turbo", "acestep-v15-sft", "acestep-v15-base"):
+        model_file = bundle / "checkpoints" / model / "model.safetensors"
+        model_file.parent.mkdir(parents=True, exist_ok=True)
+        model_file.touch()
+    xl_index = bundle / "checkpoints" / "acestep-v15-xl-turbo" / "model.safetensors.index.json"
+    xl_index.parent.mkdir(parents=True)
+    xl_index.write_text("{}\n", encoding="ascii")
+    doctor = subprocess.run(
+        [launcher, "doctor"],
+        capture_output=True,
+        check=False,
+        text=True,
+        env={"PATH": f"{tools}:/usr/bin:/bin", "UV_LOG": str(uv_log)},
+    )
+    assert doctor.returncode == 0, doctor.stderr
+    assert "[ok]   quality model" in doctor.stdout
 
 
 def test_no_legacy_project_name_survives() -> None:

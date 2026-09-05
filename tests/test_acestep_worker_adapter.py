@@ -53,6 +53,13 @@ _RESET_STATE = {
 }
 
 
+def test_default_checkpoint_root_is_the_checkout_root() -> None:
+    assert (
+        Path(__file__).resolve().parents[1] / "checkpoints"
+        == acestep_worker.settings.CHECKPOINTS_ROOT
+    )
+
+
 @pytest.fixture(autouse=True)
 def _reset_worker_state():
     acestep_worker._STATE.update(_RESET_STATE)

@@ -50,7 +50,7 @@ LM_BACKEND = "pt"
 # directory. That keeps the model store in one portable Lyre checkout even
 # if the worker is launched through an absolute module path elsewhere.
 CHECKPOINTS_ROOT = Path(
-    os.environ.get("LYRE_CHECKPOINTS_DIR", Path(__file__).resolve().parent.parent / "checkpoints")
+    os.environ.get("LYRE_CHECKPOINTS_DIR", Path(__file__).resolve().parents[2] / "checkpoints")
 ).resolve()
 DEVICE = os.environ.get("LYRE_DEVICE", "cuda")
 
