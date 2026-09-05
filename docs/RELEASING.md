@@ -1,8 +1,9 @@
 # Release guide
 
-Releases are source releases from the `main` branch. The package version may be
-a release candidate before a tag exists; [CHANGELOG.md](../CHANGELOG.md) is the
-authority on whether a version has actually shipped.
+Each release has two layers: GitHub's tag-based source archive for contributors,
+and reproducible, slim Linux/WSL2 runtime archives for users. The package
+version may be a release candidate before a tag exists; [CHANGELOG.md](../CHANGELOG.md)
+is the authority on whether a version has actually shipped.
 
 ## 1. Prepare the candidate
 
@@ -32,12 +33,19 @@ From a clean checkout:
 ./scripts/lyre lint
 ./scripts/lyre audit
 uv build
+./scripts/lyre release --version X.Y.Z
 ```
 
-Inspect the wheel and source archive produced under `dist/`; they must contain
-all `server.*` and `worker.*` subpackages, the README, and the MIT license, and
-must not contain model weights, generated audio, runtime databases, caches, or
-`vendor/`.
+`release` rebuilds the web app and writes a `.tar.gz`, `.zip`, and `SHA256SUMS`
+under `dist/release/`. Repeating it from the same commit and toolchain must
+produce byte-identical archives. Inspect both formats: they must contain the
+prebuilt UI, all `server.*` and `worker.*` runtime packages, launcher, lockfiles,
+MIT license, notices, and `LYRE_RELEASE.json`. They must not contain tests,
+source UI, community documents, model weights, generated audio, runtime
+databases, caches, or `vendor/`.
+
+Also inspect the wheel and source archive written directly under `dist/`; they
+must contain every Python subpackage and must not contain runtime state.
 
 ## 3. Run the hardware gates
 
@@ -67,9 +75,13 @@ release candidate must not silently present it as tested.
 1. Confirm CI, dependency review, and CodeQL are green on the exact commit.
 2. Create a signed or annotated tag: `git tag -s vX.Y.Z` (use `-a` if signing
    is unavailable), then push the tag.
-3. Create the GitHub release from that tag. Copy the matching changelog section,
-   add hardware verification notes, and attach the source artifacts if desired.
-4. Verify links and installation commands from the published release page.
-5. Restore an empty `Unreleased` section and begin the next development cycle.
+3. The release workflow repeats the GPU-free gates, validates the tag against
+   both package versions, creates the runtime archives and checksums, records a
+   GitHub build-provenance attestation, and opens a **draft** GitHub release.
+4. Add the matching changelog section and hardware verification notes to the
+   draft. Download an archive, verify `SHA256SUMS` and `gh attestation verify`,
+   then follow only its bundled README on a fresh machine or directory.
+5. Publish the reviewed draft. Verify its links and installation commands.
+6. Restore an empty `Unreleased` section and begin the next development cycle.
 
 Do not publish model weights or generated user data as release assets.

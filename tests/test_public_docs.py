@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 from urllib.parse import unquote
@@ -34,6 +35,9 @@ def _markdown_files() -> list[Path]:
         path
         for path in ROOT.rglob("*.md")
         if not any(part in SKIP_PARTS for part in path.relative_to(ROOT).parts)
+        # These two templates are moved to the archive root before their
+        # links are resolved; test_release_bundle.py verifies that form.
+        and path.name not in {"BUNDLE_README.md", "BUNDLE_NOTICES.md"}
     ]
 
 
@@ -65,3 +69,17 @@ def test_readme_uses_the_checked_in_accessible_hero() -> None:
     assert 'src="docs/assets/lyre-hero.svg"' in readme
     assert "<title" in hero
     assert "<desc" in hero
+
+
+def test_every_compiled_web_dependency_has_a_versioned_license_notice() -> None:
+    lock = json.loads((ROOT / "web" / "package-lock.json").read_text(encoding="utf-8"))
+    notices = (ROOT / "docs" / "WEB_THIRD_PARTY_LICENSES.md").read_text(encoding="utf-8")
+
+    runtime_packages = {
+        path.rsplit("node_modules/", 1)[-1]: record["version"]
+        for path, record in lock["packages"].items()
+        if path and not record.get("dev", False)
+    }
+    assert runtime_packages
+    for package, version in runtime_packages.items():
+        assert f"| {package} | {version} |" in notices

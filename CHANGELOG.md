@@ -50,6 +50,12 @@ current candidate, not an incremental change from a prior published version.
   need yet.
 - Pull-request dependency review and scheduled CodeQL scanning, alongside
   frontend dependency auditing in CI.
+- Reproducible `.tar.gz` and `.zip` Linux/WSL2 runtime bundles with a prebuilt
+  UI, minimal bundled documentation, a per-file manifest, SHA-256 checksums,
+  and a Node-free install path.
+- A tag-driven release workflow that repeats the GPU-free quality gates,
+  attests the runtime archives, and creates a draft GitHub release for manual
+  hardware-note review before publication.
 
 ### Changed
 
@@ -112,5 +118,7 @@ are recorded because they shaped the code a contributor will read.
   the frontend lockfile. The remaining upstream constraints have explicit,
   reachability-reviewed exceptions in `docs/SECURITY_AUDIT.md`; new advisories
   still fail the audit.
+- GitHub Actions dependencies are pinned to verified full commit SHAs and kept
+  current by Dependabot.
 
 [Unreleased]: https://github.com/wizards-ecosystem/wizards-lyre/commits/main

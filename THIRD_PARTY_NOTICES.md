@@ -39,6 +39,12 @@ licenses and copyright notices. The lockfiles identify exact resolved versions;
 package metadata and installed license files are the authoritative notices for
 those packages.
 
+Runnable release archives redistribute a compiled frontend. The copyright
+notices and license terms for every resolved production JavaScript dependency
+used to build it are preserved in
+[licenses for the compiled web runtime](docs/WEB_THIRD_PARTY_LICENSES.md) and
+included beside the release README.
+
 ACE-Step's installed environment receives a small, exact security overlay and
 does not retain the unused upstream Gradio packages. The versions and reviewed
 exceptions are documented in

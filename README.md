@@ -9,6 +9,7 @@
 <p align="center">
   <a href="https://github.com/wizards-ecosystem/wizards-lyre/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/wizards-ecosystem/wizards-lyre/actions/workflows/ci.yml/badge.svg"></a>
   <a href="https://github.com/wizards-ecosystem/wizards-lyre/actions/workflows/codeql.yml"><img alt="CodeQL" src="https://github.com/wizards-ecosystem/wizards-lyre/actions/workflows/codeql.yml/badge.svg"></a>
+  <a href="https://github.com/wizards-ecosystem/wizards-lyre/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/wizards-ecosystem/wizards-lyre?include_prereleases&color=8d7dff"></a>
   <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-e7b654"></a>
   <a href="pyproject.toml"><img alt="Python 3.11 and 3.12" src="https://img.shields.io/badge/python-3.11%20%7C%203.12-6f7cff"></a>
   <img alt="Local only" src="https://img.shields.io/badge/inference-local%20only-76d7df">
@@ -35,9 +36,26 @@ and reshape. Throw a seed, listen, keep what works, and push it somewhere new.
 
 ## Quick start
 
-The supported path is Linux or Windows 11 with WSL2, an NVIDIA GPU, `git`,
-[`uv`][uv], and Node.js 20.19+ or 22.12+. The defaults are tuned for 16 GB
-VRAM. A full setup needs about 40 GB free before space for your music.
+The supported path is Linux x86-64 or Windows 11 with WSL2, an NVIDIA GPU,
+`git`, and [`uv`][uv]. The defaults are tuned for 16 GB VRAM. A full setup
+needs about 40 GB free before space for your music.
+
+For the smallest download, get the `.tar.gz` or `.zip` runtime bundle from the
+[latest release](https://github.com/wizards-ecosystem/wizards-lyre/releases/latest),
+extract it, and run:
+
+```bash
+./scripts/lyre bootstrap
+./scripts/lyre doctor
+```
+
+Release bundles include the compiled studio UI, so they do not need Node.js,
+npm, the test suite, or contributor documentation. They fetch the pinned
+ACE-Step source and model weights during setup; those large upstream artifacts
+are not redistributed in the download.
+
+To work from source instead, install Node.js 20.19+ or 22.12+ and clone the
+repository:
 
 ```bash
 git clone https://github.com/wizards-ecosystem/wizards-lyre.git
@@ -47,16 +65,17 @@ cd wizards-lyre
 ```
 
 `bootstrap` creates a local Python environment, installs the pinned ACE-Step
-source, builds the web app, and downloads every model profile. It is resumable.
-For a smaller start, install only the default generation models:
+source, prepares the web app, and downloads every model profile. It is
+resumable. For a smaller start, install only the default generation models:
 
 ```bash
 ./scripts/lyre install
 ./scripts/lyre models-core
 ```
 
-See the [installation guide](docs/INSTALLATION.md) for prerequisites, WSL2,
-model footprints, updating, backups, and the GPU-free developer setup.
+See the [installation guide](docs/INSTALLATION.md) for archive verification,
+prerequisites, WSL2, model footprints, updating, backups, and the GPU-free
+developer setup.
 
 Start two processes in separate terminals:
 

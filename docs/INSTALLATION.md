@@ -1,7 +1,8 @@
 # Installation
 
-Wizard's Lyre installs into a source checkout. It does not need Docker, an
-account, an API key, or a system-wide Python environment.
+Wizard's Lyre installs into either a slim release directory or a source
+checkout. It does not need Docker, an account, an API key, or a system-wide
+Python environment.
 
 ## Supported environment
 
@@ -11,8 +12,8 @@ account, an API key, or a system-wide Python environment.
 | GPU | NVIDIA CUDA GPU; 16 GB VRAM is the tuned baseline |
 | Driver | A working NVIDIA driver visible to `nvidia-smi` |
 | Python | 3.11 or 3.12; `uv` installs 3.12 locally when needed |
-| Node.js | 20.19+ or 22.12+ |
-| Tools | `git`, [`uv`](https://docs.astral.sh/uv/), Node.js and npm |
+| Node.js | Not needed for a release bundle; 20.19+ or 22.12+ for a source checkout |
+| Tools | `git` and [`uv`](https://docs.astral.sh/uv/); Node.js and npm only for source |
 | Optional | FFmpeg, required only for training LoRA style packs |
 
 Native Windows is not currently supported by Lyre's Bash launcher. WSL2 is the
@@ -38,9 +39,47 @@ downloads are resumable.
 Allow about 40 GB free for a full environment plus all models, and additional
 space for projects and exported audio.
 
-## Install
+## Install a release bundle (recommended)
 
-Clone the repository, then choose one path:
+Open the [latest release](https://github.com/wizards-ecosystem/wizards-lyre/releases/latest)
+and download either `wizards-lyre-*-linux-x86_64.tar.gz` or the equivalent
+`.zip`. Download `SHA256SUMS` alongside it, then verify from the download
+directory:
+
+```bash
+sha256sum --ignore-missing --check SHA256SUMS
+```
+
+The checksum file covers both archive formats, so a missing format may be
+reported; the archive you downloaded must report `OK`. You can additionally
+verify its signed build provenance with the
+[GitHub CLI](https://cli.github.com/):
+
+```bash
+gh attestation verify wizards-lyre-*-linux-x86_64.tar.gz \
+  --repo wizards-ecosystem/wizards-lyre
+```
+
+Extract the archive into a durable location, enter its top-level directory,
+and choose one setup path:
+
+```bash
+# One command: dependencies and every model profile.
+./scripts/lyre bootstrap
+
+# Or start smaller with only the default generation profile.
+./scripts/lyre install
+./scripts/lyre models-core
+```
+
+The bundle includes a compiled web app, runtime code, license/notices, locked
+install metadata, and a file-hash manifest. It deliberately excludes source UI
+files, tests, contributor tooling, model weights, caches, and user data. If an
+unzip tool loses the executable bit, restore it with `chmod +x scripts/lyre`.
+
+## Install from source
+
+Install Node.js 20.19+ or 22.12+, clone the repository, then choose one path:
 
 ```bash
 git clone https://github.com/wizards-ecosystem/wizards-lyre.git
@@ -50,7 +89,7 @@ cd wizards-lyre
 ./scripts/lyre bootstrap
 ```
 
-For a smaller first install:
+For a smaller source install:
 
 ```bash
 ./scripts/lyre install       # dependencies + production UI, no weights
@@ -100,8 +139,15 @@ back it up first.
 
 ## Updating
 
-Read [CHANGELOG.md](../CHANGELOG.md), stop both processes, back up `projects/`,
-then update the checkout and reconcile the locked dependencies:
+Always stop both processes and back up `projects/` first.
+
+For a release bundle, download and verify the new archive, extract it into a
+new directory, run `./scripts/lyre install`, then copy the backed-up `projects/`
+directory into it. Keep the old directory until the updated install opens your
+library correctly.
+
+For a source checkout, read [CHANGELOG.md](../CHANGELOG.md), update the checkout,
+and reconcile the locked dependencies:
 
 ```bash
 git pull --ff-only

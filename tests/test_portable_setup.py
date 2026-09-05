@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -48,8 +49,78 @@ def test_portable_setup_pins_ace_step_and_downloads_all_lyre_profiles() -> None:
     help_result = subprocess.run(
         [str(LAUNCHER), "help"], capture_output=True, text=True, check=True
     )
-    for command in ("models-core", "models-standard", "models", "doctor", "audit"):
+    for command in (
+        "models-core",
+        "models-standard",
+        "models",
+        "doctor",
+        "audit",
+        "release",
+    ):
         assert command in help_result.stdout
+
+    assert 'RELEASE_MANIFEST="$ROOT/LYRE_RELEASE.json"' in source
+    assert "Using the prebuilt release UI (Node.js is not required)." in source
+
+
+def test_release_bundle_install_skips_node_and_development_dependencies(tmp_path: Path) -> None:
+    bundle = tmp_path / "bundle"
+    launcher = bundle / "scripts" / "lyre"
+    launcher.parent.mkdir(parents=True)
+    shutil.copy2(LAUNCHER, launcher)
+    (bundle / "ACE_STEP_REVISION").write_text("a" * 40 + "\n", encoding="ascii")
+    (bundle / "LYRE_RELEASE.json").write_text("{}\n", encoding="ascii")
+    (bundle / "requirements").mkdir()
+    (bundle / "requirements" / "ace-step-security.txt").write_text("", encoding="utf-8")
+    (bundle / "web" / "dist").mkdir(parents=True)
+    (bundle / "web" / "dist" / "index.html").write_text("Lyre\n", encoding="utf-8")
+    (bundle / "vendor" / "ACE-Step-1.5" / ".git").mkdir(parents=True)
+    (bundle / ".venv" / "bin").mkdir(parents=True)
+    (bundle / ".venv" / "bin" / "activate").write_text("", encoding="utf-8")
+    python = bundle / ".venv" / "bin" / "python"
+    python.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    python.chmod(0o755)
+
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    git = tools / "git"
+    git.write_text(
+        "#!/usr/bin/env bash\n"
+        'if [[ "$*" == *"rev-parse --is-inside-work-tree"* ]]; then\n'
+        "  echo true\n"
+        'elif [[ "$*" == *"rev-parse HEAD"* ]]; then\n'
+        "  printf '%040d\\n' 0 | tr 0 a\n"
+        "else\n"
+        "  exit 90\n"
+        "fi\n",
+        encoding="utf-8",
+    )
+    uv = tools / "uv"
+    uv.write_text('#!/usr/bin/env bash\nprintf "%s\\n" "$*" >> "$UV_LOG"\n', encoding="utf-8")
+    for executable in (git, uv):
+        executable.chmod(0o755)
+    for name in ("node", "npm"):
+        forbidden = tools / name
+        forbidden.write_text("#!/usr/bin/env bash\nexit 91\n", encoding="utf-8")
+        forbidden.chmod(0o755)
+
+    uv_log = tmp_path / "uv.log"
+    result = subprocess.run(
+        [launcher, "install"],
+        capture_output=True,
+        check=False,
+        text=True,
+        env={
+            "PATH": f"{tools}:/usr/bin:/bin",
+            "UV_LOG": str(uv_log),
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "prebuilt release UI" in result.stdout
+    uv_commands = uv_log.read_text(encoding="utf-8")
+    assert "--no-install-project" in uv_commands
+    assert "--extra dev" not in uv_commands
 
 
 def test_no_legacy_project_name_survives() -> None:
