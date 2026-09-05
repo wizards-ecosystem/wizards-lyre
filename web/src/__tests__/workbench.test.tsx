@@ -95,16 +95,17 @@ describe("Resonance Workbench interactions", () => {
     const input = screen.getByLabelText("Project title") as HTMLInputElement;
     fireEvent.change(input, { target: { value: "Resonant Study" } });
     fireEvent.keyDown(input, { key: "Enter" });
+    fireEvent.blur(input);
 
     await waitFor(() => {
       expect(
-        app!.server.requests.some(
+        app!.server.requests.filter(
           (request) =>
             request.method === "PATCH" &&
             request.url === "/api/projects/proj-1" &&
             (request.body as { title?: string }).title === "Resonant Study",
         ),
-      ).toBe(true);
+      ).toHaveLength(1);
     });
     await screen.findByRole("heading", { name: "Resonant Study" });
 

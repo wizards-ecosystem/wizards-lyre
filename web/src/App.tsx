@@ -64,6 +64,9 @@ export default function App() {
   const [planDetailsOpen, setPlanDetailsOpen] = useState(true);
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
+  // Enter is followed by blur as the input closes. This synchronous guard
+  // prevents both events from racing identical PATCH requests.
+  const titleSavingRef = useRef(false);
   const [confirmation, setConfirmation] = useState<ConfirmationRequest | null>(null);
   // A dropped local file (SPEC.md sec 12 Phase 6) is an alternative
   // cover/repaint source to a selected take -- server.jobs
@@ -427,6 +430,8 @@ export default function App() {
     setLoraName("");
     setSelectedLoraId(null);
     setTrainingJobs([]);
+    setEditingTitle(false);
+    setTitleDraft("");
     if (activeId) {
       refreshDetail(activeId).catch((err) => setErrorMsg(String(err)));
       refreshLoras(activeId).catch((err) => setErrorMsg(String(err)));
@@ -604,24 +609,31 @@ export default function App() {
   }
 
   async function commitProjectTitle(): Promise<void> {
-    if (!activeId || !detail) return;
+    if (!activeId || !detail || titleSavingRef.current) return;
+    const projectId = activeId;
     const nextTitle = titleDraft.trim() || "Untitled";
     if (nextTitle === detail.project.title) {
       setEditingTitle(false);
       setTitleDraft(detail.project.title);
       return;
     }
+    titleSavingRef.current = true;
     try {
-      const project = await api.patchProject(activeId, { title: nextTitle });
+      const project = await api.patchProject(projectId, { title: nextTitle });
       setDetail((current) =>
-        current ? { ...current, project: { ...current.project, title: project.title } } : current,
+        current?.project.id === projectId
+          ? { ...current, project: { ...current.project, title: project.title } }
+          : current,
       );
-      setTitleDraft(project.title);
-      setEditingTitle(false);
+      if (activeIdRef.current === projectId) {
+        setTitleDraft(project.title);
+        setEditingTitle(false);
+      }
       await refreshProjects();
     } catch (err) {
       setErrorMsg(String(err));
-      setTitleDraft(detail.project.title);
+    } finally {
+      titleSavingRef.current = false;
     }
   }
 

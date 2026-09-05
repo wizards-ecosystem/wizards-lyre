@@ -28,6 +28,12 @@ from server.storage.plan import _read_plan_or_default, default_plan, validate_pl
 VALID_DIT_PROFILES = {"iterate", "polish", "quality", "studio_ops"}
 
 
+def _normalize_title(title: str | None) -> str:
+    """Strip display padding and keep project titles visibly non-empty."""
+    cleaned = (title or "").strip()
+    return cleaned or "Untitled"
+
+
 def _update_project(project_id: str, mutate: Callable[[dict], None]) -> dict:
     """Atomically read-modify-write project.json: load it, apply `mutate`
     in place, bump `updated_at`, and write it back, all under the
@@ -68,7 +74,7 @@ def create_project(
     now = _now()
     project = {
         "id": project_id,
-        "title": title or "Untitled",
+        "title": _normalize_title(title),
         "created_at": now,
         "updated_at": now,
         "dit_profile": dit_profile,
@@ -205,7 +211,7 @@ def merge_plan_patch(project_id: str, patch: dict) -> dict:
 def patch_project(project_id: str, patch: dict) -> dict:
     def mutate(project: dict) -> None:
         if patch.get("title") is not None:
-            project["title"] = patch["title"]
+            project["title"] = _normalize_title(patch["title"])
         if patch.get("dit_profile") is not None:
             if patch["dit_profile"] not in VALID_DIT_PROFILES:
                 raise ValueError(f"invalid dit_profile: {patch['dit_profile']}")
