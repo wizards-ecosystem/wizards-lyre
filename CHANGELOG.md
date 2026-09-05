@@ -56,6 +56,9 @@ combined public baseline.
 - A tag-driven release workflow that repeats the GPU-free quality gates,
   attests the runtime archives, and creates a draft GitHub release for manual
   hardware-note review before publication.
+- The public repository launch, with protected `main` and `v*` refs, private
+  vulnerability reporting, secret push protection, least-privilege Actions,
+  and a contribution path backed by required review and CI.
 
 ### Changed
 
