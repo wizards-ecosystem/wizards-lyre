@@ -7,10 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.1.0] — 2026-08-29
-
-First public release. Everything below is the state of the project at the point
-it was prepared to be shared, not an incremental change from a prior release.
+Release candidate for the first public release. Everything below describes the
+current candidate, not an incremental change from a prior published version.
 
 ### Added
 
@@ -44,6 +42,14 @@ it was prepared to be shared, not an incremental change from a prior release.
   worker, and GPU. It covers what the mocked suite cannot: the base-model
   swap, plan persistence through the real LM, and whether generated takes are
   actually audible rather than well-formed silence.
+- A release-ready public project surface: illustrated README, full installation
+  and release guides, support routing, third-party/model notices, machine-readable
+  REUSE licensing, and an explicit inbound-contribution license policy.
+- `./scripts/lyre doctor` plus core, standard, and full model-download choices,
+  so a user can validate an install and avoid downloading profiles they do not
+  need yet.
+- Pull-request dependency review and scheduled CodeQL scanning, alongside
+  frontend dependency auditing in CI.
 
 ### Changed
 
@@ -67,6 +73,10 @@ are recorded because they shaped the code a contributor will read.
 - 1024 CSS declarations and 284 whole rules that later layers already
   overrode are gone; the bundled stylesheet drops from 81.8 kB to 53.0 kB
   with a verified-identical effective cascade.
+- The Python package configuration now discovers every nested `server.*` and
+  `worker.*` package in built source artifacts.
+- Vite, Vitest, and the React plugin were upgraded to maintained releases; the
+  documented Node.js floor now matches their actual runtime requirement.
 
 ### Fixed
 
@@ -88,6 +98,19 @@ are recorded because they shaped the code a contributor will read.
   three, so the annotation misdescribed the worker contract.
 - `enqueue_job` built a style pack's adapter path from the raw client-supplied
   `lora_id` instead of the resolved, validated record.
+- The frontend lockfile no longer contains the five known advisories reported
+  by `npm audit`, including the critical Vitest file-read issue and Vite path
+  traversal issues.
+- Source builds no longer combine a PEP 639 license expression with the
+  superseded license classifier, which recent Setuptools rejects.
 
-[Unreleased]: https://github.com/wizards-ecosystem/wizards-lyre/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/wizards-ecosystem/wizards-lyre/releases/tag/v0.1.0
+### Security
+
+- Setup removes ACE-Step's unused Gradio UI packages and applies a small exact
+  overlay for patched versions of shared runtime dependencies.
+- `./scripts/lyre audit` checks the complete installed ACE-Step environment and
+  the frontend lockfile. The remaining upstream constraints have explicit,
+  reachability-reviewed exceptions in `docs/SECURITY_AUDIT.md`; new advisories
+  still fail the audit.
+
+[Unreleased]: https://github.com/wizards-ecosystem/wizards-lyre/commits/main

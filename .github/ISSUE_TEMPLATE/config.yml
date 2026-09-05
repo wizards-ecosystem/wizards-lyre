@@ -4,5 +4,5 @@ contact_links:
     url: https://github.com/wizards-ecosystem/wizards-lyre/security/advisories/new
     about: Report privately, not as a public issue. See SECURITY.md for the threat model.
   - name: Setup or usage question
-    url: https://github.com/wizards-ecosystem/wizards-lyre/blob/main/docs/TROUBLESHOOTING.md
-    about: Stuck jobs, worker startup, VRAM, and build problems are covered here.
+    url: https://github.com/wizards-ecosystem/wizards-lyre/issues/new?template=help.yml
+    about: Ask for help after checking the installation and troubleshooting guides.

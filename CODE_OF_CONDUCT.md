@@ -121,6 +121,9 @@ community.
 This Code of Conduct is adapted from the [Contributor Covenant][homepage],
 version 2.1, available at
 https://www.contributor-covenant.org/version/2/1/code_of_conduct.html.
+Contributor Covenant 2.1 is licensed under the
+[Creative Commons Attribution 4.0 International License][cc-by]. This adapted
+version is distributed under the same license.
 
 Community Impact Guidelines were inspired by
 [Mozilla's code of conduct enforcement ladder][mozilla].
@@ -131,3 +134,4 @@ https://www.contributor-covenant.org/translations.
 
 [homepage]: https://www.contributor-covenant.org
 [mozilla]: https://github.com/mozilla/inclusion
+[cc-by]: https://creativecommons.org/licenses/by/4.0/

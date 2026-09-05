@@ -6,15 +6,17 @@ trying to become — see [Scope](#scope) below before starting anything large.
 
 ## Getting set up
 
-You need `git`, [`uv`](https://docs.astral.sh/uv/), and Node.js 20 or newer.
-Everything else is installed inside the checkout. FFmpeg is additionally
-required to *train* style packs, but not to run anything else — see
-[docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
+You need `git`, [`uv`](https://docs.astral.sh/uv/), and Node.js 20.19+ or
+22.12+. Everything else is installed inside the checkout. FFmpeg is
+additionally required to *train* style packs, but not to run anything else.
+The [installation guide](docs/INSTALLATION.md) has the full platform and disk
+requirements.
 
 ```bash
 git clone https://github.com/wizards-ecosystem/wizards-lyre.git
 cd wizards-lyre
 ./scripts/lyre install     # dependencies + frontend build, no model weights
+./scripts/lyre doctor
 ```
 
 `install` is the contributor setup: it clones the pinned ACE-Step source and
@@ -37,12 +39,16 @@ LYRE_WORKER=mock ./scripts/lyre worker   # terminal 1: writes silent WAVs, never
 ./scripts/lyre test        # pytest, mocked worker, no GPU
 ./scripts/lyre test-web    # vitest + React Testing Library against a mocked backend
 ./scripts/lyre lint        # ruff, mypy, tsc, eslint, prettier, shellcheck
+./scripts/lyre audit       # known advisories in installed Python and locked JS deps
 ./scripts/lyre format      # fix what is auto-fixable
 ```
 
-CI runs exactly these, and enforces them: ESLint runs at `--max-warnings 0`,
-and pytest fails below 88% coverage. `shellcheck` is the one optional piece —
-install it from your package manager, or let CI catch launcher issues.
+CI enforces these gates: ESLint runs at `--max-warnings 0`, pytest fails below
+88% coverage, and REUSE verifies the file-level license declarations.
+`shellcheck` is the one optional local piece — install it from your package
+manager, or let CI catch launcher issues. CI also builds the Python source
+artifacts, audits the frontend lockfile, runs dependency review on pull
+requests, and scans Python and TypeScript with CodeQL.
 
 If you need to suppress a lint rule, do it at the site with the reason written
 above it, rather than weakening the rule for the whole project. The existing
@@ -121,6 +127,22 @@ and a test fails if one appears.
 - New behavior needs a test. Bug fixes need a test that fails without the fix —
   and it is worth confirming it actually fails, not assuming it would.
 
+## Licensing contributions
+
+Unless agreed otherwise in the pull request, contributions are licensed under
+the license already declared for the file: MIT for Lyre's original source,
+documentation, and artwork; CC BY 4.0 for the adapted Code of Conduct. By
+submitting a contribution, you confirm that you have the right to do so under
+those terms. The project does not require a separate contributor license
+agreement.
+
+Do not commit generated audio, third-party model weights, training data, or
+copied code whose license is incompatible or unclear. If a change adds a new
+dependency or incorporates third-party material, update the relevant lockfile,
+attribution, and [third-party notices](THIRD_PARTY_NOTICES.md).
+
 ## Code of conduct
 
 By participating you agree to the [Code of Conduct](CODE_OF_CONDUCT.md).
+Questions that are not code changes belong in the paths described by
+[SUPPORT.md](SUPPORT.md).

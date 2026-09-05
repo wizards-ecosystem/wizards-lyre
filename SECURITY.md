@@ -1,5 +1,11 @@
 # Security
 
+## Supported versions
+
+Security fixes are made on `main` and included in the next release. Only the
+latest published release is supported; older releases should be upgraded
+before reporting a version-specific issue.
+
 ## Threat model, stated plainly
 
 Wizard's Lyre is a **single-user tool for one machine**. It is not hardened for
@@ -41,10 +47,24 @@ covered by tests:
 Please report anything security-relevant privately rather than in a public
 issue: open a [security advisory][advisory] on the repository.
 
+Include the affected revision, impact, reproduction steps or a proof of
+concept, and any suggested remediation. Do not include private audio or model
+weights. Maintainers will acknowledge reports on a best-effort basis, keep the
+report private while it is assessed, and coordinate disclosure after a fix is
+available. This volunteer project cannot promise a response or remediation
+deadline.
+
 Because of the threat model above, "the API has no authentication" and
 "anyone on localhost can call it" are known and intended, not vulnerabilities.
 Reports about the path jail, the upload limits, the archive builder, or
 anything that lets Lyre read or write outside its own directories are very
 much wanted.
+
+Dependency vulnerabilities without a demonstrated Lyre impact are still
+useful, but please check the lockfiles and existing Dependabot alerts before
+reporting. Pull requests are scanned by dependency review, and the repository
+is scanned with CodeQL. The installed ACE-Step environment, patched dependency
+overlay, and narrowly reviewed audit exceptions are documented in
+[docs/SECURITY_AUDIT.md](docs/SECURITY_AUDIT.md).
 
 [advisory]: https://github.com/wizards-ecosystem/wizards-lyre/security/advisories/new

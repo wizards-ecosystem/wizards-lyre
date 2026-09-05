@@ -7,11 +7,12 @@ local-tool aesthetic — a project library plus a three-pane project workspace
 ## Setup
 
 ```
-./scripts/lyre bootstrap
+./scripts/lyre install
 ```
 
 Run this once from the repository root. It installs `web/node_modules` locally
-and keeps npm's cache inside the repository.
+and keeps npm's cache inside the repository. Node.js 20.19+ or 22.12+ is
+required. Model weights and a GPU are unnecessary for frontend work.
 
 ## Dev server
 
@@ -63,9 +64,10 @@ Generate button — is the only place they're documented:
 
 ## Notes
 
-- The Vitest config pins `pool: "forks"` with `singleFork: true`. Each test
-  installs its own mock backend on the module-scope `fetch`, and `App` runs a
-  5 s health poll, so parallel workers would interleave state across files.
+- The Vitest config uses the forks pool with one worker and file parallelism
+  disabled. Each test installs its own mock backend on the module-scope
+  `fetch`, and `App` runs a 5 s health poll, so parallel workers would
+  interleave state across files.
 - The waveform is a real wavesurfer.js instance with the regions plugin: it is
   remounted per selected take and owns both the repaint drag-selection and the
   plan's named section labels (SPEC.md §9.2).

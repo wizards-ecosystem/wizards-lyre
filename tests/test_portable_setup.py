@@ -45,6 +45,12 @@ def test_portable_setup_pins_ace_step_and_downloads_all_lyre_profiles() -> None:
     ):
         assert f"--model {model} --skip-main" in source
 
+    help_result = subprocess.run(
+        [str(LAUNCHER), "help"], capture_output=True, text=True, check=True
+    )
+    for command in ("models-core", "models-standard", "models", "doctor", "audit"):
+        assert command in help_result.stdout
+
 
 def test_no_legacy_project_name_survives() -> None:
     """Lyre's runtime contract is LYRE_* and its database is lyre.db.

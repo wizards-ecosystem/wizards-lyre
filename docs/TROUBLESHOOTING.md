@@ -1,5 +1,14 @@
 # Troubleshooting
 
+Start with the readiness check; it catches missing tools, an incomplete local
+install, an unbuilt UI, absent model profiles, GPU visibility, and FFmpeg:
+
+```bash
+./scripts/lyre doctor
+```
+
+For setup and disk requirements, see [Installation](INSTALLATION.md).
+
 ## Jobs sit at `queued` and never run
 
 The server only *enqueues* jobs; a separate worker process runs them
@@ -28,7 +37,9 @@ retrying forever.
 the same `.venv` as Lyre.
 
 **Weights are missing** — run `./scripts/lyre models`. It is resumable; re-run
-it after an interrupted download. `./scripts/lyre paths` shows where they land.
+it after an interrupted download. If you only need default Generate, Cover,
+and Repaint, `./scripts/lyre models-core` is the smaller download.
+`./scripts/lyre paths` shows where the files land.
 
 **`LYRE_CHECKPOINTS_DIR ... must be a directory named 'checkpoints'`** — this
 is deliberate. Upstream ACE-Step resolves weights as
@@ -93,6 +104,9 @@ Or run the dev server with hot reload, which proxies `/api` to the backend:
 ```bash
 ./scripts/lyre web     # http://localhost:5173
 ```
+
+**Node.js is too old** — the current Vite toolchain needs Node.js 20.19+ or
+22.12+. Upgrade Node, then re-run `./scripts/lyre install`.
 
 ## The UI says "server offline"
 
