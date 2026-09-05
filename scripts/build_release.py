@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build reproducible, runnable Wizard's Lyre release archives.
+"""Build reproducible, runnable The Wizard's Lyre release archives.
 
 The archives intentionally contain only the local runtime surface. ACE-Step
 source and model weights remain separate downloads performed by scripts/lyre.
@@ -24,7 +24,7 @@ from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-PROJECT_NAME = "Wizard's Lyre"
+PROJECT_NAME = "The Wizard's Lyre"
 PROJECT_SLUG = "wizards-lyre"
 RELEASE_TARGET = "linux-x86_64"
 SOURCE_URL = "https://github.com/wizards-ecosystem/wizards-lyre"
@@ -67,7 +67,13 @@ def _run_git(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
 
 def _source_state(root: Path, *, allow_dirty: bool) -> SourceState:
     revision_result = _run_git(root, "rev-parse", "HEAD")
-    if revision_result.returncode == 0:
+    top_level_result = _run_git(root, "rev-parse", "--show-toplevel")
+    is_checkout_root = (
+        revision_result.returncode == 0
+        and top_level_result.returncode == 0
+        and Path(top_level_result.stdout.strip()).resolve() == root.resolve()
+    )
+    if is_checkout_root:
         revision = revision_result.stdout.strip()
         status_result = _run_git(root, "status", "--porcelain", "--untracked-files=all")
         if status_result.returncode != 0:

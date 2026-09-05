@@ -3,7 +3,7 @@
 Each release has two layers: GitHub's tag-based source archive for contributors,
 and reproducible, slim Linux/WSL2 runtime archives for users. The package
 version may be a release candidate before a tag exists; [CHANGELOG.md](../CHANGELOG.md)
-is the authority on whether a version has actually shipped.
+is the authority on whether a version has shipped.
 
 ## 1. Prepare the candidate
 
@@ -40,12 +40,12 @@ uv build
 under `dist/release/`. Repeating it from the same commit and toolchain must
 produce byte-identical archives. Inspect both formats: they must contain the
 prebuilt UI, all `server.*` and `worker.*` runtime packages, launcher, lockfiles,
-MIT license, notices, and `LYRE_RELEASE.json`. They must not contain tests,
+MIT license, notices, and `LYRE_RELEASE.json`. They must exclude tests,
 source UI, community documents, model weights, generated audio, runtime
 databases, caches, or `vendor/`.
 
 Also inspect the wheel and source archive written directly under `dist/`; they
-must contain every Python subpackage and must not contain runtime state.
+must contain every Python subpackage and exclude runtime state.
 
 ## 3. Run the hardware gates
 

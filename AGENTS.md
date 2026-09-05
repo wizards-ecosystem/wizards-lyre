@@ -1,4 +1,4 @@
-# Agent rules — Wizard's Lyre
+# Agent rules: The Wizard's Lyre
 
 Rules for coding agents working in this repository. Human contributors want
 [CONTRIBUTING.md](CONTRIBUTING.md), which covers the same scope constraints
@@ -19,6 +19,6 @@ alongside setup and the test loop.
   and keep Lyre's HTTP schema stable.
 - `server/storage`, `server/jobs`, and `worker/acestep_worker` are packages
   whose `__init__` re-exports their modules' surface. When patching one of
-  these in a test, patch the **defining module**, not the package re-export —
+  these in a test, patch the **defining module**, not the package re-export;
   patching the re-export leaves internal callers on the real implementation and
   the test will pass while exercising nothing.

@@ -64,10 +64,10 @@ describe("Resonance Workbench interactions", () => {
 
   it("announces plan autosave progress and completion", async () => {
     app = await renderOpenedProject();
-    fireEvent.change(screen.getByPlaceholderText("Describe the song you want to explore…"), {
+    fireEvent.change(screen.getByPlaceholderText("Describe the song you want to explore..."), {
       target: { value: "a restrained chamber pulse" },
     });
-    expect(screen.getByText("Saving…")).toBeTruthy();
+    expect(screen.getByText("Saving...")).toBeTruthy();
     await screen.findByText("Saved");
   });
 

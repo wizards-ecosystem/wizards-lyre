@@ -1,14 +1,14 @@
-# Contributing to Wizard's Lyre
+# Contributing to The Wizard's Lyre
 
-Thanks for taking a look. This is a small, opinionated project, so the fastest
-way to have a change accepted is to understand what it is deliberately *not*
-trying to become — see [Scope](#scope) below before starting anything large.
+Thanks for taking a look. This is a small, opinionated project. Read
+[Scope](#scope) before starting a large change so your proposal stays within
+the product boundary.
 
 ## Getting set up
 
 You need `git`, [`uv`](https://docs.astral.sh/uv/), and Node.js 20.19+ or
-22.12+. Everything else is installed inside the checkout. FFmpeg is
-additionally required to *train* style packs, but not to run anything else.
+22.12+. Everything else is installed inside the checkout. FFmpeg is required
+only to *train* style packs; generation works without it.
 The [installation guide](docs/INSTALLATION.md) has the full platform and disk
 requirements.
 
@@ -21,7 +21,7 @@ cd wizards-lyre
 
 `install` is the contributor setup: it clones the pinned ACE-Step source and
 builds the SPA, but skips the ~20 GB of model downloads. Use
-`./scripts/lyre bootstrap` instead only when you actually want to generate
+`./scripts/lyre bootstrap` when you want to generate
 audio locally.
 
 **You do not need a GPU to work on Lyre.** The entire test suite runs against
@@ -45,7 +45,7 @@ LYRE_WORKER=mock ./scripts/lyre worker   # terminal 1: writes silent WAVs, never
 
 CI enforces these gates: ESLint runs at `--max-warnings 0`, pytest fails below
 88% coverage, and REUSE verifies the file-level license declarations.
-`shellcheck` is the one optional local piece — install it from your package
+`shellcheck` is the one optional local piece. Install it from your package
 manager, or let CI catch launcher issues. CI also builds the Python source
 artifacts, audits the frontend lockfile, runs dependency review on pull
 requests, and scans Python and TypeScript with CodeQL.
@@ -62,9 +62,9 @@ Two checks need a real GPU and are never part of `pytest`:
 ```
 
 `live-check` drives the real HTTP API against a running server and worker, and
-covers the layer the mocked suite cannot reach — most importantly the
-base-model swap, and whether generated audio is actually audio rather than a
-well-formed silent file. See [docs/LIVE_STACK_TEST.md](docs/LIVE_STACK_TEST.md).
+covers the layer the mocked suite cannot reach, including the base-model swap
+and whether generated files contain audible audio. See
+[docs/LIVE_STACK_TEST.md](docs/LIVE_STACK_TEST.md).
 Run it before a release.
 
 ## Scope
@@ -72,9 +72,9 @@ Run it before a release.
 `SPEC.md` is the product spec and takes precedence over any other document
 here, including this one. The constraints that matter most:
 
-- **ACE-Step 1.5 on the local GPU is the only engine.** No Suno/Udio wrappers,
-  no Lyria, ElevenLabs, Stability, Magenta, LeVo, or YuE — not even as an
-  optional adapter or a stub. `tests/test_spec_lock.py` enforces this by
+- **ACE-Step 1.5 on the local GPU is the only engine.** Suno/Udio wrappers,
+  Lyria, ElevenLabs, Stability, Magenta, LeVo, YuE, and optional adapters or
+  stubs are outside scope. `tests/test_spec_lock.py` enforces this by
   scanning the source, and it will fail your build.
 - **No Gradio.** ACE-Step's own demo UI is upstream's; Lyre owns its product UI.
 - **Localhost only, no auth.** See [SECURITY.md](SECURITY.md).
@@ -82,37 +82,42 @@ here, including this one. The constraints that matter most:
   If you are testing worker behavior, follow the pattern in
   `tests/test_acestep_worker_adapter.py`, which installs fake `acestep.*`
   modules matching upstream's real signatures.
-- **No mixer, MIDI, plugins, Docker, or cloud deploy.** Lyre is a studio for
-  iterating on takes, not a DAW.
+- **No mixer, MIDI, plugins, Docker, or cloud deploy.** Lyre focuses on
+  generating and iterating on takes; DAW features are outside scope.
 
-If you want something outside this, a fork is a completely reasonable answer
-and no hard feelings.
+Forks may pursue features outside these boundaries under the MIT license.
 
 ## Things worth knowing before you edit
 
-**The package `__init__` files re-export deliberately.** `server/storage`,
+### Package exports
+
+The package `__init__` files re-export by design. `server/storage`,
 `server/jobs`, and `worker/acestep_worker` are packages whose `__init__.py`
 re-exports their modules' surface, including some private helpers, so that
 `storage.<name>` keeps working. If you patch one of these in a test, **patch
-the module that defines it** (`server.storage.jsonio._write_json`), not the
-package re-export — patching the re-export silently does nothing to internal
+the module that defines it** (`server.storage.jsonio._write_json`) instead of
+the package re-export. Patching the re-export does nothing to internal
 callers, and your test will pass while exercising the unpatched code. This has
 bitten before; see the comments in `server/storage/jsonio.py`.
 
-**The stylesheet is layered, not modular.** `web/src/styles.css` imports eight
-numbered files, and the order is the design: 03–08 are successive refinements
+### Stylesheet layers
+
+The stylesheet uses cascade layers. `web/src/styles.css` imports eight
+numbered files, and the order is the design: 03-08 are successive refinements
 that override each other by cascade position. Adding a rule at the end of
 `08-lyre-instrument.css` is usually what you want.
 
 Declarations a later layer provably overrode have already been removed, so
-what is left in each file is what that layer actually contributes. If you
+what is left in each file is what that layer currently contributes. If you
 prune further, the safe rule is deletion-only where a *later* rule has the
-identical selector in the identical at-rule context — same selector means same
-specificity and same matched elements, so document order alone decides.
+identical selector in the identical at-rule context. The same selector means
+the same specificity and matched elements, so document order alone decides.
 Anything beyond that needs real-browser verification, which the DOM-level test
 suite does not provide.
 
-**Environment variables are all `LYRE_*`.** See
+### Environment variables
+
+Environment variables are all `LYRE_*`. See
 [docs/CONFIGURATION.md](docs/CONFIGURATION.md). Nothing reads any other prefix,
 and a test fails if one appears.
 
@@ -121,11 +126,11 @@ and a test fails if one appears.
 - One concern per PR. Keep formatting-only changes in their own commit.
 - Both suites and the linters green.
 - Explain *why* in the commit message. This codebase comments the reasoning
-  behind non-obvious decisions heavily and deliberately — please match that;
+  behind non-obvious decisions heavily. Match that approach;
   it is the main reason the tricky concurrency and adapter code is
   maintainable.
-- New behavior needs a test. Bug fixes need a test that fails without the fix —
-  and it is worth confirming it actually fails, not assuming it would.
+- New behavior needs a test. Bug fixes need a test that fails without the fix.
+  Confirm the regression test fails before applying the fix.
 
 ## Licensing contributions
 

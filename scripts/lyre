@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Wizard's Lyre local launcher. Run this instead of invoking Python, npm, or
+# The Wizard's Lyre local launcher. Run this instead of invoking Python, npm, or
 # ACE-Step directly so all writable state stays under this checkout.
 set -euo pipefail
 
@@ -207,7 +207,7 @@ doctor() {
     failures=$((failures + 1))
   }
 
-  echo "Wizard's Lyre readiness check"
+  echo "The Wizard's Lyre readiness check"
   if command -v git >/dev/null 2>&1; then doctor_ok "git $(git --version | awk '{print $3}')"; else doctor_fail "git is missing"; fi
   if command -v uv >/dev/null 2>&1; then doctor_ok "$(uv --version)"; else doctor_fail "uv is missing"; fi
 

@@ -368,10 +368,10 @@ describe("LoRA style packs (SPEC.md sec 4.4)", () => {
 
     // Recovered purely from GET /api/jobs on project open -- this test
     // never clicked Train.
-    expect(screen.getByText("Training style pack…")).toBeTruthy();
+    expect(screen.getByText("Training style pack...")).toBeTruthy();
     expect(screen.getByText("running")).toBeTruthy();
     expect(app.server.jobRequests("train_lora")).toHaveLength(0);
-    const train = screen.getByRole("button", { name: /Training…/ }) as HTMLButtonElement;
+    const train = screen.getByRole("button", { name: /Training\.\.\./ }) as HTMLButtonElement;
     expect(train.disabled).toBe(true);
     expect(train.title).toBe("A style pack is already training for this project");
   });
@@ -386,7 +386,7 @@ describe("LoRA style packs (SPEC.md sec 4.4)", () => {
       // setInterval, hanging the test. Advancing past the real poll
       // interval on the real clock avoids that trap.
       app = await renderProjectWithSeededTraining("running");
-      expect(screen.getByText("Training style pack…")).toBeTruthy();
+      expect(screen.getByText("Training style pack...")).toBeTruthy();
 
       // The training finishes behind the scenes (as it would in another
       // tab, or a worker that outlives this page's own poller) -- flip the
@@ -397,7 +397,7 @@ describe("LoRA style packs (SPEC.md sec 4.4)", () => {
 
       await waitFor(
         () => {
-          expect(screen.queryByText("Training style pack…")).toBeNull();
+          expect(screen.queryByText("Training style pack...")).toBeNull();
         },
         { timeout: LORA_TRAIN_RECOVERY_POLL_MS + 2000 },
       );
@@ -414,7 +414,7 @@ describe("LoRA style packs (SPEC.md sec 4.4)", () => {
 
     const badge = await screen.findByRole("button", { name: "style: good-style" });
     expect(badge.title).toBe(
-      'Generated with style pack "good-style" — click to select it for the next Generate/Cover/Repaint',
+      'Generated with style pack "good-style". Select it for the next Generate/Cover/Repaint',
     );
 
     fireEvent.click(badge);
@@ -430,7 +430,7 @@ describe("LoRA style packs (SPEC.md sec 4.4)", () => {
     const badge = await screen.findByText("style: bad-style");
     expect(badge.tagName).toBe("SPAN");
     expect(badge.title).toBe(
-      `Generated with style pack "bad-style" (${FAILED_LORA.id}) — it failed training and cannot be loaded`,
+      `Generated with style pack "bad-style" (${FAILED_LORA.id}). Training failed, so it cannot be loaded`,
     );
   });
 

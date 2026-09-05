@@ -2,45 +2,45 @@
 
 ```
 Browser (127.0.0.1:8421)
-        │
-        ▼
+        |
+        v
    web/          Vite + React + TypeScript SPA
-        │        dev: Vite proxies /api → FastAPI
-        │        prod: FastAPI serves web/dist directly
-        ▼
+        |        dev: Vite proxies /api -> FastAPI
+        |        prod: FastAPI serves web/dist directly
+        v
    server/       FastAPI. HTTP, project files, job rows.
-        │        Never imports acestep. Never touches CUDA.
-        │
-        │  SQLite (projects/lyre.db)
-        │  queued → running → done | error
-        ▼
+        |        Never imports acestep. Never touches CUDA.
+        |
+        |  SQLite (projects/lyre.db)
+        |  queued -> running -> done | error
+        v
    worker/       Separate OS process. Loads ACE-Step and CUDA.
                  Runs one job at a time under a GPU lease.
-                 │
-                 ▼
+                 |
+                 v
             projects/<id>/   project.json, plan.json, takes/, loras/
 ```
 
 ## Why three processes
 
-The split is the single most load-bearing design decision (SPEC.md §5).
+The split is the single most load-bearing design decision (SPEC.md section 5).
 
 **The server never imports `acestep` or `torch`.** A generation can take
 minutes and a native CUDA crash can take the whole process down. Keeping that
-in a separate OS process means a GPU failure fails the *job*, not HTTP — the UI
-stays up and reports the error. `server/jobs/worker_registry.py` is the only
+in a separate OS process means a GPU failure fails the *job* while the server
+stays up and the UI reports the error. `server/jobs/worker_registry.py` is the only
 module that can reach a worker backend, and it only does so from worker-side
 code paths.
 
-**They communicate through SQLite, not a socket.** The queue is the IPC. The
-server inserts `queued` rows and never runs anything; the worker claims,
+**They communicate through SQLite.** The queue is the IPC. The server inserts
+`queued` rows and never runs anything; the worker claims,
 executes, and updates them. This means either side can restart independently
 without the other noticing, and a crashed worker leaves recoverable state on
 disk rather than in memory.
 
 **A claimed job carries a heartbeat lease.** `run_claimed_job` touches
 `heartbeat_at` while it works. If the worker dies mid-job the heartbeat stops,
-and the next `reclaim_stale_jobs` requeues the job — or, past `MAX_ATTEMPTS`,
+and the next `reclaim_stale_jobs` requeues the job. Past `MAX_ATTEMPTS`, it
 marks it `error` rather than leaving it `running` forever.
 
 **One GPU occupant.** A separate `worker_lease` row means two worker processes
@@ -52,7 +52,7 @@ without the server ever asking CUDA anything.
 
 | Path | Role |
 |---|---|
-| `server/app.py` | Route definitions and exception→HTTP mapping. Thin. |
+| `server/app.py` | Route definitions and exception-to-HTTP mapping. Thin. |
 | `server/config.py` | Paths and bind settings from `LYRE_*`. |
 | `server/storage/` | Project/plan/take persistence and the path jail. |
 | `server/jobs/` | The queue: schema, validation, enqueue/claim, execution, deletion. |
@@ -95,15 +95,15 @@ temp-file-plus-`os.replace`. A reader never sees a partial file.
 
 ## Where the constraints are enforced
 
-- **Path jail** — `server/storage/paths.py`. Nothing outside `projects/` or
+- **Path jail:** `server/storage/paths.py`. Nothing outside `projects/` or
   `output/` is writable.
-- **Localhost bind** — `server/config.py`, asserted by
+- **Localhost bind:** `server/config.py`, asserted by
   `tests/test_spec_lock.py`, which fails the build on a public bind host.
-- **No other engines** — `tests/test_spec_lock.py` scans Lyre's own source for
+- **No other engines:** `tests/test_spec_lock.py` scans this project's source for
   forbidden imports and vendor names.
-- **No GPU in tests** — the default backend under `pytest` is
+- **No GPU in tests:** the default backend under `pytest` is
   `worker/mock_worker.py`, and nothing imports `acestep` or `torch` at module
   scope, so CI installs neither.
-- **One GPU occupant** — `worker/run_worker.py` holds both an OS-level file
+- **One GPU occupant:** `worker/run_worker.py` holds both an OS-level file
   lock and the SQLite lease before initializing anything, covered by
   `tests/test_worker_singleton.py`.

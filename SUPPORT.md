@@ -1,6 +1,6 @@
 # Support
 
-Wizard's Lyre is a volunteer-maintained local tool. Help is offered on a
+The Wizard's Lyre is a volunteer-maintained local tool. Help is offered on a
 best-effort basis; there is no guaranteed response time or commercial support.
 
 ## Start here
@@ -20,8 +20,8 @@ template instead.
 Include your operating system, GPU and VRAM, worker backend, the output of
 `./scripts/lyre doctor`, and the relevant server or worker log. Remove personal
 paths or project names if they are sensitive. Never attach model weights,
-private audio, generated projects, or secrets unless you deliberately intend to
-publish them.
+private audio, generated projects, or secrets unless you intend to publish
+them.
 
 ## Scope of support
 
@@ -32,4 +32,4 @@ an explanation; forks remain welcome under the MIT license.
 
 Security vulnerabilities must be reported privately as described in
 [SECURITY.md](SECURITY.md). Conduct concerns use the private path in
-[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md), not a public issue.
+[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) through its private reporting path.

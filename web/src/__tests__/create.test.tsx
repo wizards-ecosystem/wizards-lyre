@@ -78,7 +78,7 @@ it("creates a project from a title and simple query, and switches to it", async 
   expect(screen.getByText("Test Song")).toBeTruthy();
   expect(screen.getByRole("heading", { name: "Goblin Ballad" })).toBeTruthy();
   const queryInput = screen.getByPlaceholderText(
-    "Describe the song you want to explore…",
+    "Describe the song you want to explore...",
   ) as HTMLTextAreaElement;
   expect(queryInput.value).toBe("upbeat goblin tavern song");
 

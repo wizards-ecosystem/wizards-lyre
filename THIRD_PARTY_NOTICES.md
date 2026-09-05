@@ -1,10 +1,10 @@
 # Third-party software and model notices
 
-This file explains the boundaries between Wizard's Lyre, the software it
-installs, and the model artifacts it downloads. It is an aid to redistributors,
-not a replacement for the license texts supplied by each upstream project.
+This file explains the boundaries between The Wizard's Lyre, the software it
+installs, and the model artifacts it downloads. It aids redistributors and
+supplements the license texts supplied by each upstream project.
 
-## Wizard's Lyre
+## The Wizard's Lyre
 
 Lyre's original source code, documentation, and artwork are licensed under the
 [MIT License](LICENSE). The adapted [Code of Conduct](CODE_OF_CONDUCT.md) is

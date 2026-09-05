@@ -1,13 +1,13 @@
 # HTTP API
 
-All JSON, all under `http://127.0.0.1:8421` by default. No authentication —
+All JSON, all under `http://127.0.0.1:8421` by default. No authentication;
 see [SECURITY.md](../SECURITY.md).
 
 The server is FastAPI, so the authoritative, always-current reference is the
 generated schema while it is running:
 
-- **<http://127.0.0.1:8421/docs>** — interactive Swagger UI
-- **<http://127.0.0.1:8421/openapi.json>** — raw OpenAPI schema
+- **<http://127.0.0.1:8421/docs>:** interactive Swagger UI
+- **<http://127.0.0.1:8421/openapi.json>:** raw OpenAPI schema
 
 This page is the orientation; the schema is the specification.
 
@@ -65,7 +65,7 @@ default shown.
 
 What is validated at enqueue time, before anything reaches the GPU:
 
-- `cover`, `repaint`, `extract`, `lego`, and `complete` need a real source —
+- `cover`, `repaint`, `extract`, `lego`, and `complete` need a real source:
   either `source_take_id` or an `upload_path` from the uploads endpoint.
 - `extract`, `lego`, and `complete` are forced to the `studio_ops` profile.
 - `lora_id` only applies to `generate`, `cover`, and `repaint`, and the pack
@@ -73,7 +73,7 @@ What is validated at enqueue time, before anything reaches the GPU:
 - `train_lora` needs a non-empty `name` and at least 8 distinct source takes.
 - `seed: -1` means the worker picks one and records the actual value.
 - `batch_size` is forced to 1.
-- `audio_cover_strength` must be within `0.0`–`1.0` (which also rejects NaN
+- `audio_cover_strength` must be within `0.0`-`1.0` (which also rejects NaN
   and infinities).
 
 ## Job lifecycle
@@ -82,13 +82,13 @@ Enqueuing only inserts a row. Poll `GET /api/jobs/{job_id}` until `status`
 leaves `queued`/`running`:
 
 ```
-queued ──▶ running ──▶ done      take_id is set
-                   └─▶ error     error is set, and a meta.json records the failure
+queued ---> running ---> done      take_id is set
+                    `--> error     error is set, and a meta.json records the failure
 ```
 
-A job stays `queued` forever if no worker is running — check `/api/health`.
+A job stays `queued` while no worker is running. Check `/api/health`.
 
-`GET /api/jobs?project_id=…&action=train_lora&active=true` returns a project's
+`GET /api/jobs?project_id=...&action=train_lora&active=true` returns a project's
 complete still-active worklist with no recency truncation. That is what lets
 the UI rediscover an hour-long training run after a page refresh, even when
 newer jobs have piled up behind it.

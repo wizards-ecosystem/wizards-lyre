@@ -5,20 +5,18 @@ body:
   - type: markdown
     attributes:
       value: |
-        **Please check the scope first.** Lyre is deliberately narrow, and
-        [SPEC.md §2](https://github.com/wizards-ecosystem/wizards-lyre/blob/main/SPEC.md)
-        rules some things out permanently:
+        **Please check the scope first.** Lyre has a narrow product boundary.
+        [SPEC.md section 2](https://github.com/wizards-ecosystem/wizards-lyre/blob/main/SPEC.md)
+        permanently excludes:
 
-        - Any generation engine other than ACE-Step 1.5 — no Suno/Udio
-          wrappers, Lyria, ElevenLabs, Stability, Magenta, LeVo, or YuE, not
-          even as an optional adapter
+        - Generation engines other than ACE-Step 1.5, including Suno/Udio
+          wrappers, Lyria, ElevenLabs, Stability, Magenta, LeVo, and YuE
         - A full DAW: mixer, MIDI piano roll, VST/AU plugins, automation lanes
         - Authentication, multi-user, reverse proxy, Docker, or cloud GPU
         - Shipping ACE-Step's Gradio UI
 
-        Requests for these will be closed — not because they are bad ideas, but
-        because they are a different product. A fork is a completely reasonable
-        answer.
+        Requests for these will be closed because they define a different
+        product. Forks may pursue them under the MIT license.
 
   - type: textarea
     id: problem
@@ -40,5 +38,5 @@ body:
     attributes:
       label: Scope
       options:
-        - label: I have read SPEC.md §2 and this is not one of the excluded items
+        - label: I have read SPEC.md section 2 and this request is within scope
           required: true

@@ -213,7 +213,7 @@ def _acquire_os_singleton_lock(stop_event: threading.Event) -> BinaryIO | None:
             return handle
         if not announced:
             print(
-                "Wizard's Lyre worker: another worker process holds the OS-level "
+                "The Wizard's Lyre worker: another worker process holds the OS-level "
                 "GPU lock; waiting for it to exit..."
             )
             announced = True
@@ -233,7 +233,7 @@ def _acquire_lease_or_wait(owner_id: str, stop_event: threading.Event) -> bool:
             return True
         if not announced:
             print(
-                "Wizard's Lyre worker: another worker process already holds the "
+                "The Wizard's Lyre worker: another worker process already holds the "
                 "GPU lease; waiting for it to finish or go stale..."
             )
             announced = True
@@ -263,7 +263,7 @@ def _lease_heartbeat_loop(owner_id: str, stop_event: threading.Event) -> None:
             traceback.print_exc()
             continue
         if not renewed:
-            print("Wizard's Lyre worker: lost the GPU lease to another worker; stopping.")
+            print("The Wizard's Lyre worker: lost the GPU lease to another worker; stopping.")
             stop_event.set()
             return
 
@@ -325,7 +325,7 @@ def run_loop(stop_event: threading.Event, poll_interval: float = DEFAULT_POLL_IN
 
 def main() -> None:
     stop_event = threading.Event()
-    print("Wizard's Lyre worker: polling for queued jobs (Ctrl+C to stop)...")
+    print("The Wizard's Lyre worker: polling for queued jobs (Ctrl+C to stop)...")
     try:
         run_loop(stop_event)
     except KeyboardInterrupt:

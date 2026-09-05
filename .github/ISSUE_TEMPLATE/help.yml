@@ -1,5 +1,5 @@
 name: Setup or usage question
-description: Ask for help installing or using Wizard's Lyre
+description: Ask for help installing or using The Wizard's Lyre
 labels: ["question"]
 body:
   - type: markdown

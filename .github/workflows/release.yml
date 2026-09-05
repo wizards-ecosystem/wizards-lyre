@@ -92,5 +92,5 @@ jobs:
               --draft \
               --verify-tag \
               --generate-notes \
-              --title "Wizard's Lyre ${RELEASE_TAG#v}"
+              --title "The Wizard's Lyre ${RELEASE_TAG#v}"
           fi

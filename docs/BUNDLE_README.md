@@ -1,7 +1,7 @@
-# Wizard's Lyre @VERSION@
+# The Wizard's Lyre @VERSION@
 
-This is the slim, runnable Linux/WSL2 release of Wizard's Lyre. It includes the
-prebuilt studio interface, so Node.js and npm are **not** required.
+This is the slim, runnable Linux/WSL2 release of Lyre. It includes the prebuilt
+studio interface and runs without Node.js or npm.
 
 ## What you need
 
@@ -10,16 +10,15 @@ prebuilt studio interface, so Node.js and npm are **not** required.
 - `git` and [`uv`](https://docs.astral.sh/uv/)
 - about 20 GB free for the environment and default models, or at least 55 GB
   for every model profile
-- optionally, FFmpeg for style-pack training
+- optionally, FFmpeg for style-pack training; generation works without it
 
 Confirm that `nvidia-smi` sees your GPU before setup. Native Windows, macOS, and
-non-NVIDIA accelerators are not currently supported.
+non-NVIDIA accelerators are outside the current support boundary.
 
 ## Install
 
-Extract this archive into a durable location. Everything—including projects,
-models, package caches, and the Python environment—stays inside that directory.
-Then run:
+Extract this archive into a durable location. Projects, models, package caches,
+and the Python environment stay inside that directory. Then run:
 
 ```bash
 ./scripts/lyre install
@@ -68,7 +67,7 @@ the output of `./scripts/lyre doctor` when asking for setup support.
 
 ## Build identity
 
-- Wizard's Lyre: `@VERSION@`
+- Lyre: `@VERSION@`
 - Source revision: `@SOURCE_REVISION@`
 - ACE-Step revision: `@ACE_REVISION@`
 
@@ -76,6 +75,6 @@ the output of `./scripts/lyre doctor` when asking for setup support.
 file. Verify the archive itself with the accompanying `SHA256SUMS` file and the
 GitHub artifact attestation on the release page.
 
-Wizard's Lyre is provided under the [MIT License](LICENSE). ACE-Step source,
+Lyre is provided under the [MIT License](LICENSE). ACE-Step source,
 model weights, and dependencies are fetched separately and retain their own
 terms; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

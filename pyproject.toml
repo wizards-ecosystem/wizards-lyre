@@ -6,7 +6,7 @@ readme = "README.md"
 requires-python = ">=3.11,<3.13"
 license = "MIT"
 license-files = ["LICENSE"]
-authors = [{ name = "Wizard's Conclave" }]
+authors = [{ name = "The Wizard's Conclave" }]
 keywords = ["music", "generative", "ace-step", "local-first", "audio", "diffusion"]
 classifiers = [
     "Development Status :: 4 - Beta",

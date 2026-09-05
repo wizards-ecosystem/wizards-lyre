@@ -1030,9 +1030,9 @@ export default function App() {
   // publishes worker_status as soon as the worker backend confirms the swap
   // itself is done (right before generation starts), not just once the
   // whole job finishes -- otherwise dit_loaded would stay on the pre-swap
-  // profile for the entire job and this would say "loading base model…"
+  // profile for the whole job and this would say "loading base model..."
   // throughout the actual extraction too. Falls back to the normal
-  // "<verb>ing… (status)" text once the worker reports studio_ops loaded.
+  // "<verb>ing... (status)" text once the worker reports studio_ops loaded.
   const studioOpsActivity =
     Boolean(selectedLoraId) ||
     ["extract", "lego", "complete", "style pack training"].includes(activeJobAction ?? "");
@@ -1065,20 +1065,20 @@ export default function App() {
   const selectedTake = detail?.takes.find((take) => take.id === selectedTakeId) ?? null;
   const jobStatusLabel = activeJobAction
     ? busyStatus === "queued"
-      ? `Waiting for GPU · ${activeJobAction}`
+      ? `Waiting for GPU: ${activeJobAction}`
       : busyStatus === "running" && studioOpsLoading
-        ? `Loading base model · ${activeJobAction}`
+        ? `Loading base model: ${activeJobAction}`
         : busyStatus === "running"
-          ? `Running · ${activeJobAction}`
+          ? `Running: ${activeJobAction}`
           : busyStatus === "done"
-            ? `Complete · ${activeJobAction}`
+            ? `Complete: ${activeJobAction}`
             : busyStatus === "error"
-              ? `Interrupted · ${activeJobAction}`
+              ? `Interrupted: ${activeJobAction}`
               : activeJobAction
     : null;
   const saveStateLabel =
     saveState === "saving"
-      ? "Saving…"
+      ? "Saving..."
       : saveState === "saved"
         ? "Saved"
         : saveState === "error"
@@ -1103,7 +1103,7 @@ export default function App() {
             <Icon name="wave" />
           </span>
           <div>
-            <h1>Wizard's Lyre</h1>
+            <h1>The Wizard's Lyre</h1>
             <span className="brand-subtitle">A local music sketchbook</span>
           </div>
         </div>
@@ -1118,8 +1118,8 @@ export default function App() {
                 <kbd>Space</kbd> Play / pause
               </span>
               <span>
-                <kbd>↑</kbd>
-                <kbd>↓</kbd> Previous / next take
+                <kbd>Up</kbd>
+                <kbd>Down</kbd> Previous / next take
               </span>
               <span>
                 <kbd>Ctrl</kbd>
@@ -1338,7 +1338,7 @@ export default function App() {
                         Starting idea
                         <textarea
                           value={detail.plan.query}
-                          placeholder="Describe the song you want to explore…"
+                          placeholder="Describe the song you want to explore..."
                           onChange={(event) => savePlanField("query", event.target.value)}
                         />
                       </label>
@@ -1511,7 +1511,7 @@ export default function App() {
                             id="plan-lyrics"
                             ref={lyricsTextareaRef}
                             value={detail.plan.lyrics}
-                            placeholder="A lyric, a hook, or simply leave this open…"
+                            placeholder="Add a lyric or a hook, or leave this blank..."
                             onChange={(event) => savePlanField("lyrics", event.target.value)}
                           />
                         </div>
@@ -1528,7 +1528,7 @@ export default function App() {
                               Cue map
                             </span>
                             <small>
-                              {detail.plan.sections.length} mapped · or draw on the waveform
+                              {detail.plan.sections.length} mapped, or draw on the waveform
                             </small>
                           </div>
                           <button
@@ -1570,7 +1570,7 @@ export default function App() {
                                     updateSection(index, { start_sec: Number(event.target.value) })
                                   }
                                 />
-                                <span className="section-sep">–</span>
+                                <span className="section-sep">-</span>
                                 <input
                                   className="section-time"
                                   type="number"
@@ -1703,7 +1703,7 @@ export default function App() {
                             className="generate-button"
                             onClick={generate}
                             disabled={busy}
-                            title="Shortcuts: g generate · space play/pause · ↑/↓ prev/next take · ctrl/cmd+s save plan"
+                            title="Shortcuts: G generate; Space play/pause; Up/Down previous/next take; Ctrl/Cmd+S save plan"
                           >
                             <Icon name="spark" /> Generate
                           </button>
@@ -1858,7 +1858,7 @@ export default function App() {
                         <code>
                           {selectedTake.duration_sec != null
                             ? `${selectedTake.duration_sec.toFixed(1)}s`
-                            : "—"}
+                            : "n/a"}
                         </code>
                       </div>
                     ) : (
@@ -1964,7 +1964,7 @@ export default function App() {
                   <div className={`region-bar ${region ? "has-region" : ""}`}>
                     <span>
                       {region
-                        ? `Region: ${region.start.toFixed(1)}s – ${region.end.toFixed(1)}s`
+                        ? `Region: ${region.start.toFixed(1)}s - ${region.end.toFixed(1)}s`
                         : "Drag across the waveform to select a repaint region."}
                     </span>
                     <div>
@@ -2011,7 +2011,7 @@ export default function App() {
                           </div>
                           <div className="compare-panel">
                             <div className="compare-slot">
-                              <span className="compare-label">A · selected</span>
+                              <span className="compare-label">A: selected</span>
                               {selectedTake && !selectedTake.error ? (
                                 <audio
                                   controls
@@ -2030,7 +2030,7 @@ export default function App() {
                               Swap A/B
                             </button>
                             <div className="compare-slot">
-                              <span className="compare-label">B · comparing</span>
+                              <span className="compare-label">B: comparing</span>
                               <audio
                                 controls
                                 src={api.takeAudioUrl(detail.project.id, compareTakeId)}
@@ -2135,9 +2135,11 @@ export default function App() {
                           </div>
                           <div className="take-facts">
                             <span>
-                              {take.duration_sec != null ? `${take.duration_sec.toFixed(1)}s` : "—"}
+                              {take.duration_sec != null
+                                ? `${take.duration_sec.toFixed(1)}s`
+                                : "n/a"}
                             </span>
-                            <span>score {take.score ?? "—"}</span>
+                            <span>score {take.score ?? "n/a"}</span>
                             <span>{take.dit_profile}</span>
                           </div>
                           {take.lora_id &&
@@ -2147,7 +2149,7 @@ export default function App() {
                                 <button
                                   type="button"
                                   className="take-lora-badge"
-                                  title={`Generated with style pack "${pack.name}" — click to select it for the next Generate/Cover/Repaint`}
+                                  title={`Generated with style pack "${pack.name}". Select it for the next Generate/Cover/Repaint`}
                                   onClick={(event) => {
                                     event.stopPropagation();
                                     setSelectedLoraId(pack.id);
@@ -2160,7 +2162,7 @@ export default function App() {
                                   className="take-lora-badge"
                                   title={
                                     pack
-                                      ? `Generated with style pack "${pack.name}" (${take.lora_id}) — it failed training and cannot be loaded`
+                                      ? `Generated with style pack "${pack.name}" (${take.lora_id}). Training failed, so it cannot be loaded`
                                       : `Generated with style pack ${take.lora_id} (not found in this project)`
                                   }
                                 >

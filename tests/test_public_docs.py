@@ -19,6 +19,7 @@ SKIP_PARTS = {
     ".tools",
     ".venv",
     "checkpoints",
+    "dist",
     "node_modules",
     "output",
     "projects",
@@ -28,6 +29,11 @@ SKIP_PARTS = {
 INLINE_LINK = re.compile(r"!?\[[^]]*]\(([^)\s]+)")
 REFERENCE_LINK = re.compile(r"^\[[^]]+]:\s+(\S+)", re.MULTILINE)
 HTML_LINK = re.compile(r"(?:href|src)=\"([^\"]+)\"")
+DISPLAY_NAME_WITHOUT_ARTICLE = re.compile(r"(?<!The )Wizard's Lyre")
+BANNED_DECORATIVE_CHARACTERS = frozenset(
+    "\u2014\u2192\u25ba\u00a7\u2026\u2191\u2193\u2194\u00d7\u2713\u2717\u00b7\u2013"
+)
+PUBLIC_COPY_SUFFIXES = {".css", ".html", ".md", ".py", ".svg", ".ts", ".tsx", ".yaml", ".yml"}
 
 
 def _markdown_files() -> list[Path]:
@@ -69,6 +75,50 @@ def test_readme_uses_the_checked_in_accessible_hero() -> None:
     assert 'src="docs/assets/lyre-hero.svg"' in readme
     assert "<title" in hero
     assert "<desc" in hero
+
+
+def test_public_copy_uses_ecosystem_name_and_punctuation() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    assert '<h1 align="center">The Wizard\'s Lyre</h1>' in readme
+
+    problems: list[str] = []
+    for path in ROOT.rglob("*"):
+        if not path.is_file() or path.suffix not in PUBLIC_COPY_SUFFIXES:
+            continue
+        relative = path.relative_to(ROOT)
+        if any(part in SKIP_PARTS for part in relative.parts) or relative.parts[0] in {
+            "LICENSES",
+            "tests",
+        }:
+            continue
+        text = path.read_text(encoding="utf-8")
+        banned = sorted(BANNED_DECORATIVE_CHARACTERS.intersection(text))
+        if banned:
+            problems.append(f"{relative}: decorative characters {''.join(banned)}")
+        if DISPLAY_NAME_WITHOUT_ARTICLE.search(text):
+            problems.append(f"{relative}: project display name is missing 'The'")
+
+    assert problems == []
+
+
+def test_public_art_uses_the_ecosystem_palette() -> None:
+    stylesheet = (ROOT / "web" / "src" / "styles" / "08-lyre-instrument.css").read_text(
+        encoding="utf-8"
+    )
+    hero = (ROOT / "docs" / "assets" / "lyre-hero.svg").read_text(encoding="utf-8")
+    palette = {
+        "--wz-ink": "#100d15",
+        "--wz-violet": "#241345",
+        "--wz-arcane": "#bd94ef",
+        "--wz-arcane-deep": "#5d32a8",
+        "--wz-gold": "#f2b85e",
+        "--wz-teal": "#75c8ba",
+        "--wz-parchment": "#fffaf0",
+        "--wz-vellum": "#fffdf8",
+    }
+    for token, color in palette.items():
+        assert f"{token}: {color};" in stylesheet
+        assert color in hero
 
 
 def test_every_compiled_web_dependency_has_a_versioned_license_notice() -> None:

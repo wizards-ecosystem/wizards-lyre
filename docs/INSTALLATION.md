@@ -1,6 +1,6 @@
 # Installation
 
-Wizard's Lyre installs into either a slim release directory or a source
+The Wizard's Lyre installs into either a slim release directory or a source
 checkout. It does not need Docker, an account, an API key, or a system-wide
 Python environment.
 
@@ -14,10 +14,10 @@ Python environment.
 | Python | 3.11 or 3.12; `uv` installs 3.12 locally when needed |
 | Node.js | Not needed for a release bundle; 20.19+ or 22.12+ for a source checkout |
 | Tools | `git` and [`uv`](https://docs.astral.sh/uv/); Node.js and npm only for source |
-| Optional | FFmpeg, required only for training LoRA style packs |
+| Optional | FFmpeg, required only for training LoRA style packs; generation is unaffected |
 
-Native Windows is not currently supported by Lyre's Bash launcher. WSL2 is the
-recommended Windows path and uses the same commands as Linux. macOS and
+Lyre's Bash launcher supports Windows through WSL2, using the same commands as
+Linux. macOS and
 non-NVIDIA accelerators are outside the product scope.
 
 Before setup, confirm that `nvidia-smi` sees the GPU. Under WSL2, install the
@@ -39,7 +39,7 @@ space. Model sizes are approximate and downloads are resumable.
 Allow at least 55 GB free for a full environment, package cache, and all models,
 plus additional space for projects and exported audio. These figures were
 measured against the pinned ACE-Step revision; upstream artifact layouts can
-change when that pin is deliberately updated.
+change when that pin is updated.
 
 ## Install a release bundle (recommended)
 
@@ -75,7 +75,7 @@ and choose one setup path:
 ```
 
 The bundle includes a compiled web app, runtime code, license/notices, locked
-install metadata, and a file-hash manifest. It deliberately excludes source UI
+install metadata, and a file-hash manifest. It excludes source UI
 files, tests, contributor tooling, model weights, caches, and user data. If an
 unzip tool loses the executable bit, restore it with `chmod +x scripts/lyre`.
 
@@ -107,9 +107,9 @@ Check the result:
 ./scripts/lyre doctor
 ```
 
-Warnings about models only disable the profiles they name. A missing FFmpeg
-warning affects style-pack training, not generation. Developers without a GPU
-can use the mock worker described in [CONTRIBUTING.md](../CONTRIBUTING.md).
+Warnings about models only disable the profiles they name. Missing FFmpeg stops
+style-pack training; generation remains available. Developers without a GPU can
+use the mock worker described in [CONTRIBUTING.md](../CONTRIBUTING.md).
 
 ## Run
 

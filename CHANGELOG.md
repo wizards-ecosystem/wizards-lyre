@@ -8,11 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 Release candidate for the first public release. Everything below describes the
-current candidate, not an incremental change from a prior published version.
+combined public baseline.
 
 ### Added
 
-- **Generate.** FastAPI server, SQLite job queue (`queued → running →
+- **Generate.** FastAPI server, SQLite job queue (`queued -> running ->
   done | error`), and a dedicated worker process that loads ACE-Step 1.5 and
   drains the queue. A React SPA with a project library and a three-pane
   workspace. Simple mode seeds a plan from a natural-language query via the
@@ -41,7 +41,7 @@ current candidate, not an incremental change from a prior published version.
 - `./scripts/lyre live-check`, an end-to-end pass against a running server,
   worker, and GPU. It covers what the mocked suite cannot: the base-model
   swap, plan persistence through the real LM, and whether generated takes are
-  actually audible rather than well-formed silence.
+  audible rather than well-formed silence.
 - A release-ready public project surface: illustrated README, full installation
   and release guides, support routing, third-party/model notices, machine-readable
   REUSE licensing, and an explicit inbound-contribution license policy.
@@ -89,11 +89,12 @@ are recorded because they shaped the code a contributor will read.
 - **Simple-mode generation never worked against real ACE-Step.** The adapter
   passed `create_sample(lm_handler=...)`; upstream spells it `llm_handler`.
 - **Pinned seeds were recorded but never applied.** Upstream resolves the seed
-  from `GenerationConfig.seeds`, not `GenerationParams.seed`, so every "fixed"
-  seed silently produced different audio each run.
+  from `GenerationConfig.seeds`; the adapter had populated
+  `GenerationParams.seed`, so every "fixed" seed produced different audio each
+  run.
 - Style-pack training now explains itself when it labels zero source files,
-  which means FFmpeg is missing rather than anything being wrong with the
-  takes.
+  identifying missing FFmpeg as the gate for style-pack LoRA training while
+  leaving generation unaffected.
 - `storage.touch_project` had been defined and exported since the first commit
   without ever being called.
 - `scripts/lyre` was recorded in git as non-executable, so the README's first

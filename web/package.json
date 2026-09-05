@@ -37,6 +37,6 @@
     "vite": "^7.3.6",
     "vitest": "^4.1.11"
   },
-  "description": "Vite + React studio UI for Wizard's Lyre",
+  "description": "Vite + React studio UI for The Wizard's Lyre",
   "license": "MIT"
 }

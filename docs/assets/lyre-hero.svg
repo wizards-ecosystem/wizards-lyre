@@ -3,32 +3,32 @@
   <desc id="description">A luminous lyre surrounded by an audio waveform and studio panels.</desc>
   <defs>
     <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#080b18"/>
-      <stop offset="0.52" stop-color="#11152d"/>
-      <stop offset="1" stop-color="#070916"/>
+      <stop offset="0" stop-color="#100d15"/>
+      <stop offset="0.52" stop-color="#241345"/>
+      <stop offset="1" stop-color="#100d15"/>
     </linearGradient>
     <linearGradient id="gold" x1="0" y1="0" x2="1" y2="1">
-      <stop stop-color="#ffe8a3"/>
-      <stop offset="0.45" stop-color="#e7b654"/>
-      <stop offset="1" stop-color="#a66d2c"/>
+      <stop stop-color="#fffaf0"/>
+      <stop offset="0.45" stop-color="#f2b85e"/>
+      <stop offset="1" stop-color="#5d32a8"/>
     </linearGradient>
     <linearGradient id="wave" x1="0" y1="0" x2="1" y2="0">
-      <stop stop-color="#6f7cff" stop-opacity="0"/>
-      <stop offset="0.24" stop-color="#9b8cff"/>
-      <stop offset="0.52" stop-color="#e4b85b"/>
-      <stop offset="0.78" stop-color="#76d7df"/>
-      <stop offset="1" stop-color="#76d7df" stop-opacity="0"/>
+      <stop stop-color="#bd94ef" stop-opacity="0"/>
+      <stop offset="0.24" stop-color="#bd94ef"/>
+      <stop offset="0.52" stop-color="#f2b85e"/>
+      <stop offset="0.78" stop-color="#75c8ba"/>
+      <stop offset="1" stop-color="#75c8ba" stop-opacity="0"/>
     </linearGradient>
     <radialGradient id="glow">
-      <stop stop-color="#8c74ff" stop-opacity="0.3"/>
-      <stop offset="1" stop-color="#8c74ff" stop-opacity="0"/>
+      <stop stop-color="#bd94ef" stop-opacity="0.3"/>
+      <stop offset="1" stop-color="#bd94ef" stop-opacity="0"/>
     </radialGradient>
     <filter id="soft-glow" x="-60%" y="-60%" width="220%" height="220%">
       <feGaussianBlur stdDeviation="10" result="blur"/>
       <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
     </filter>
     <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
-      <path d="M32 0H0V32" fill="none" stroke="#9aa4d8" stroke-opacity="0.055"/>
+      <path d="M32 0H0V32" fill="none" stroke="#d8cfe0" stroke-opacity="0.055"/>
     </pattern>
   </defs>
 
@@ -36,19 +36,19 @@
   <rect width="1200" height="430" rx="28" fill="url(#grid)"/>
   <ellipse cx="600" cy="208" rx="335" ry="245" fill="url(#glow)"/>
 
-  <g opacity="0.48" fill="#11172e" stroke="#59618f" stroke-opacity="0.38">
+  <g opacity="0.48" fill="#201925" stroke="#877c8c" stroke-opacity="0.38">
     <rect x="54" y="74" width="264" height="254" rx="18"/>
     <rect x="882" y="74" width="264" height="254" rx="18"/>
   </g>
-  <g fill="#8992c7" opacity="0.62">
+  <g fill="#a69bab" opacity="0.62">
     <circle cx="81" cy="102" r="4"/><circle cx="96" cy="102" r="4"/><circle cx="111" cy="102" r="4"/>
     <circle cx="909" cy="102" r="4"/><circle cx="924" cy="102" r="4"/><circle cx="939" cy="102" r="4"/>
   </g>
-  <g stroke="#7079aa" stroke-opacity="0.35" stroke-width="2" fill="none">
+  <g stroke="#877c8c" stroke-opacity="0.35" stroke-width="2" fill="none">
     <path d="M80 144h206M80 176h154M80 208h187M80 240h126M80 272h173"/>
     <path d="M908 144h206M908 176h134M908 208h184M908 240h154M908 272h192"/>
   </g>
-  <g fill="#8f79ff" opacity="0.72">
+  <g fill="#bd94ef" opacity="0.72">
     <rect x="80" y="137" width="72" height="14" rx="7"/>
     <rect x="80" y="201" width="112" height="14" rx="7"/>
     <rect x="908" y="169" width="88" height="14" rx="7"/>
@@ -60,14 +60,14 @@
 
   <g transform="translate(514 53)" filter="url(#soft-glow)">
     <path d="M86 17c-33 25-49 56-49 94 0 48 18 93 49 123 31-30 49-75 49-123 0-38-16-69-49-94Z"
-          fill="#171a36" stroke="url(#gold)" stroke-width="7"/>
+          fill="#241345" stroke="url(#gold)" stroke-width="7"/>
     <path d="M38 105c-13 5-23 17-25 31M134 105c13 5 23 17 25 31M86 18v217M59 45l8 174M113 45l-8 174"
           fill="none" stroke="url(#gold)" stroke-width="5" stroke-linecap="round"/>
     <path d="M46 233c24 14 56 14 80 0M27 263h118" fill="none" stroke="url(#gold)" stroke-width="8" stroke-linecap="round"/>
-    <circle cx="86" cy="17" r="7" fill="#fff3bd"/>
+    <circle cx="86" cy="17" r="7" fill="#75c8ba"/>
   </g>
 
-  <text x="600" y="371" text-anchor="middle" fill="#f8f4e8" font-family="ui-serif, Georgia, serif" font-size="42" font-weight="600" letter-spacing="1">THE WIZARD'S LYRE</text>
-  <text x="600" y="402" text-anchor="middle" fill="#aeb6d8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="15" letter-spacing="4">LOCAL GENERATIVE MUSIC STUDIO</text>
-  <rect x="0.75" y="0.75" width="1198.5" height="428.5" rx="27.25" fill="none" stroke="#8f79ff" stroke-opacity="0.3" stroke-width="1.5"/>
+  <text x="600" y="371" text-anchor="middle" fill="#fffdf8" font-family="ui-serif, Georgia, serif" font-size="42" font-weight="600" letter-spacing="1">THE WIZARD'S LYRE</text>
+  <text x="600" y="402" text-anchor="middle" fill="#d8cfe0" font-family="ui-sans-serif, system-ui, sans-serif" font-size="15" letter-spacing="4">LOCAL GENERATIVE MUSIC STUDIO</text>
+  <rect x="0.75" y="0.75" width="1198.5" height="428.5" rx="27.25" fill="none" stroke="#bd94ef" stroke-opacity="0.3" stroke-width="1.5"/>
 </svg>

@@ -50,9 +50,9 @@ export function StylePackPanel({
       <ul className="lora-list">
         {trainingJobs.map((job) => (
           <li key={job.id} className="lora-training">
-            <span className="lora-name">Training style pack…</span>
+            <span className="lora-name">Training style pack...</span>
             <span className="lora-status">
-              {job.status === "queued" ? "queued — waiting for the GPU" : "running"}
+              {job.status === "queued" ? "queued: waiting for the GPU" : "running"}
             </span>
           </li>
         ))}
@@ -60,7 +60,7 @@ export function StylePackPanel({
           <li key={lora.id} className={lora.error ? "lora-error" : ""}>
             <span className="lora-name">{lora.name}</span>
             <span className="lora-status">
-              {lora.error ? `error: ${lora.error}` : (lora.status ?? "—")}
+              {lora.error ? `error: ${lora.error}` : (lora.status ?? "n/a")}
             </span>
             <span className="lora-loss">
               {lora.final_loss != null ? `loss ${lora.final_loss.toFixed(4)}` : ""}
@@ -88,8 +88,8 @@ export function StylePackPanel({
               <span>
                 <strong>{take.task_type}</strong>
                 <small>
-                  seed {take.seed} ·{" "}
-                  {take.duration_sec != null ? `${take.duration_sec.toFixed(1)}s` : "—"}
+                  seed {take.seed} /{" "}
+                  {take.duration_sec != null ? `${take.duration_sec.toFixed(1)}s` : "n/a"}
                 </small>
               </span>
             </label>
@@ -125,9 +125,9 @@ export function StylePackPanel({
           }
         >
           {busy && activeJobAction === "style pack training"
-            ? "Training…"
+            ? "Training..."
             : trainingJobs.length > 0
-              ? `Training… (${trainingJobs[0].status})`
+              ? `Training... (${trainingJobs[0].status})`
               : "Train style pack"}
         </button>
       </div>

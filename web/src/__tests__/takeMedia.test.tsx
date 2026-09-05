@@ -1,5 +1,5 @@
 // Regression tests for the Takes pane's score display and per-take media
-// links (SPEC.md sec 8/10): the "score N" / "score —" fallback, the
+// links (SPEC.md sec 8/10): the "score N" / "score n/a" fallback, the
 // download link's href/filename, and the conditional "lyrics (.lrc)" link
 // that only appears when a take has an LRC file. Everything runs against
 // the mocked fetch backend in src/test/mockServer.ts -- no FastAPI, CUDA,
@@ -44,13 +44,13 @@ function takeRows(): HTMLElement[] {
 }
 
 describe("Takes pane score and media links", () => {
-  it("renders a take's numeric score, and a '—' fallback when score is null", async () => {
+  it("renders a take's numeric score, and an 'n/a' fallback when score is null", async () => {
     const takes = [makeTake("take-01", 1, { score: 87 }), makeTake("take-02", 2, { score: null })];
     app = await renderOpenedProject({ takes });
     const [firstRow, secondRow] = takeRows();
 
     expect(within(firstRow).getByText("score 87")).toBeTruthy();
-    expect(within(secondRow).getByText("score —")).toBeTruthy();
+    expect(within(secondRow).getByText("score n/a")).toBeTruthy();
   });
 
   it("shows the 'lyrics (.lrc)' link only for takes with has_lrc: true", async () => {
