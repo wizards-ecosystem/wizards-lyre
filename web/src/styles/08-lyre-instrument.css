@@ -1,0 +1,506 @@
+/* --------------------------------------------------------------------------
+   The Lyre instrument
+
+   A light, tactile control surface: the prompt is the played surface, the
+   gold control starts a take, and the adjacent sound field answers back.
+   Supporting tools are quieter than the instrument itself.
+   -------------------------------------------------------------------------- */
+
+:root {
+  --wz-ink: #100d15;
+  --wz-violet: #241345;
+  --wz-arcane: #bd94ef;
+  --wz-arcane-deep: #5d32a8;
+  --wz-gold: #f2b85e;
+  --wz-teal: #75c8ba;
+  --wz-parchment: #fffaf0;
+  --wz-vellum: #fffdf8;
+  --canvas: #f5eee2;
+  --surface: var(--wz-parchment);
+  --surface-raised: var(--wz-vellum);
+  --surface-hover: #e9ddff;
+  --rule: #e5ddce;
+  --rule-strong: #b1a795;
+  --text: #342c3a;
+  --text-soft: #5f5565;
+  --muted: #746a77;
+  --muted-dim: #b1a795;
+  --signal: var(--wz-arcane-deep);
+  --signal-strong: #32185f;
+  --signal-ink: var(--wz-vellum);
+  --success: #287c70;
+  --focus: var(--wz-arcane-deep);
+}
+
+body,
+.app {
+  background: var(--canvas);
+}
+.topbar {
+  height: 58px;
+  flex-basis: 58px;
+  border-top: 4px solid var(--wz-arcane-deep);
+  border-bottom-color: var(--rule);
+  background: var(--wz-vellum);
+}
+.brand-mark {
+  width: 29px;
+  height: 29px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--wz-violet);
+  color: var(--wz-vellum);
+}
+.topbar h1 {
+  color: var(--wz-arcane-deep);
+  font-family: var(--display);
+  font-size: 19px;
+}
+.brand-subtitle {
+  color: var(--muted);
+}
+.health {
+  border-left-color: var(--rule);
+}
+.health.ok .dot {
+  background: var(--wz-teal);
+  box-shadow: 0 0 0 3px rgba(117, 200, 186, 0.18);
+}
+.shortcut-popover {
+  border-color: var(--wz-arcane-deep);
+  background: var(--wz-vellum);
+  box-shadow: 6px 7px 0 #e9ddff;
+}
+
+.workspace {
+  background: var(--canvas);
+}
+.workspace-header {
+  min-height: 72px;
+  border-bottom-color: var(--rule);
+  background: var(--wz-parchment);
+  padding: 12px 30px;
+}
+.project-heading h2 {
+  color: var(--wz-arcane-deep);
+  font-family: var(--display);
+  font-size: 27px;
+}
+.project-heading h2::before {
+  background: var(--wz-arcane-deep);
+}
+.project-context {
+  color: var(--muted);
+}
+.export-link {
+  border-color: var(--wz-arcane-deep);
+  color: var(--wz-arcane-deep);
+}
+
+@media (min-width: 1100px) {
+  .panes {
+    grid-template-columns: minmax(540px, 1.14fr) minmax(390px, 0.86fr);
+  }
+}
+.plan {
+  border-right: 0;
+  background: var(--surface);
+}
+.waveform {
+  border-left: 1px solid var(--rule);
+  background: var(--canvas);
+  padding: 26px 28px 0;
+}
+.pane-heading {
+  min-height: 66px;
+  border-bottom-color: var(--rule);
+  background: var(--surface);
+  padding: 11px 30px;
+}
+.pane-heading h3 {
+  color: var(--wz-arcane-deep);
+  font-family: var(--display);
+  font-size: 18px;
+}
+.pane-heading .eyebrow {
+  color: var(--wz-arcane-deep);
+}
+.save-state {
+  color: var(--muted);
+}
+
+/* The control surface starts with the idea, then presents the actions that
+   make it audible. The rest of authorship remains available below it. */
+.plan-scroll {
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+}
+.builder-brief {
+  order: 1;
+  border-bottom: 0;
+  background: var(--surface);
+  padding: 29px 30px 18px;
+}
+.builder-section-heading h4 {
+  color: var(--text);
+  font-family: var(--display);
+  font-size: 19px;
+}
+.builder-brief .intent-field {
+  color: var(--text-soft);
+}
+.intent-field textarea {
+  min-height: 166px;
+  border: 1px solid var(--rule-strong);
+  border-radius: 12px;
+  background: var(--wz-vellum);
+  box-shadow: inset 0 0 0 4px var(--canvas);
+  padding: 16px 17px;
+  font-size: 15px;
+  line-height: 1.55;
+}
+.intent-field textarea:focus {
+  border-color: var(--focus);
+  box-shadow:
+    inset 0 0 0 4px #e9ddff,
+    0 0 0 2px rgba(93, 50, 168, 0.16);
+}
+.builder-tip {
+  color: var(--muted);
+}
+
+.plan-scroll > .operation-dock {
+  order: 2;
+  display: block;
+  margin: 0 30px 24px;
+  border: 1px solid var(--rule-strong);
+  border-radius: 14px;
+  background: var(--wz-parchment);
+  overflow: hidden;
+}
+.plan-scroll > .operation-dock .operation-group,
+.plan-scroll > .operation-dock .operation-group:nth-child(2),
+.plan-scroll > .operation-dock .operation-group:nth-child(3) {
+  display: grid;
+  min-height: 0;
+  grid-template-columns: 106px minmax(0, 1fr);
+  gap: 14px;
+  border: 0;
+  border-bottom: 1px solid var(--rule);
+  background: transparent;
+  padding: 15px 16px;
+}
+.plan-scroll > .operation-dock .operation-group:last-child {
+  border-bottom: 0;
+}
+.operation-heading {
+  padding-top: 3px;
+}
+.operation-heading > span {
+  display: none;
+}
+.operation-heading strong {
+  color: var(--text);
+  font-family: var(--display);
+  font-size: 16px;
+}
+.operation-heading small {
+  color: var(--muted);
+  line-height: 1.35;
+}
+.operation-controls {
+  align-content: center;
+  gap: 8px;
+}
+.operation-controls label {
+  color: var(--text-soft);
+}
+.operation-controls input,
+.operation-controls select {
+  border-color: var(--rule-strong);
+  background: var(--wz-vellum);
+}
+.operation-controls .generate-button {
+  width: 72px;
+  min-width: 72px;
+  height: 72px;
+  min-height: 72px;
+  border: 3px solid var(--wz-vellum);
+  border-radius: 50%;
+  background: var(--wz-gold);
+  box-shadow: 0 0 0 2px var(--wz-gold);
+  color: var(--wz-ink);
+  font-size: 10px;
+  font-weight: 750;
+}
+.operation-controls .generate-button .icon {
+  width: 16px;
+  height: 16px;
+}
+.operation-controls .generate-button:hover:not(:disabled) {
+  background: #d99a35;
+  box-shadow: 0 0 0 2px #d99a35;
+}
+.dit-profile-picker {
+  padding: 3px;
+  border: 1px solid var(--rule-strong);
+  border-radius: 8px;
+  background: var(--wz-vellum);
+}
+.dit-profile-caption {
+  color: var(--muted);
+}
+.dit-profile-option {
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-soft);
+}
+.dit-profile-option.selected {
+  border: 0;
+  background: #e9ddff;
+  color: #32185f;
+}
+.operation-group.transform-group,
+.operation-group.tracks-group {
+  background: var(--wz-vellum);
+}
+.operation-group::before,
+.operation-group:nth-child(2)::before,
+.operation-group:nth-child(3)::before {
+  background: var(--wz-arcane-deep);
+}
+
+.builder-disclosure {
+  order: 3;
+  border-top: 1px solid var(--rule);
+  border-bottom: 1px solid var(--rule);
+  background: var(--canvas);
+  padding: 15px 30px;
+}
+.builder-disclosure:hover {
+  background: #e9ddff;
+}
+.builder-disclosure-copy strong {
+  color: var(--text);
+  font-family: var(--display);
+  font-size: 16px;
+}
+.builder-disclosure-copy small {
+  display: flex;
+  color: var(--muted);
+}
+.builder-disclosure > span:last-child {
+  color: var(--wz-arcane-deep);
+}
+.builder-details {
+  order: 4;
+}
+.builder-section,
+.builder-lyrics,
+.builder-song-details {
+  border-bottom-color: var(--rule);
+  background: var(--surface);
+  padding: 28px 30px;
+}
+.builder-song-details {
+  padding-top: 25px;
+}
+.builder-settings-grid input,
+.builder-lyrics .lyrics-field textarea {
+  border-color: var(--rule-strong);
+  background: var(--wz-vellum);
+}
+.builder-lyrics .lyrics-field textarea {
+  min-height: 245px;
+  border-radius: 9px;
+}
+.builder-switches .checkbox strong {
+  color: var(--text-soft);
+}
+.lyrics-tag-button {
+  border-color: var(--rule-strong);
+  border-radius: 999px;
+  background: var(--wz-vellum);
+  color: var(--text-soft);
+}
+.lyrics-tag-button:hover:not(:disabled) {
+  border-color: var(--wz-arcane-deep);
+  background: #e9ddff;
+  color: #32185f;
+}
+.plan-sections-title {
+  color: var(--text);
+  font-family: var(--display);
+  font-size: 19px;
+}
+
+/* The sound field is a display, not another form. */
+.stage-heading {
+  border-bottom-color: var(--rule);
+}
+.stage-heading .eyebrow {
+  color: var(--wz-arcane-deep);
+}
+.stage-heading h3 {
+  color: var(--wz-arcane-deep);
+  font-family: var(--display);
+  font-size: 22px;
+}
+.source-shelf {
+  border-bottom-color: var(--rule);
+}
+.waveform-canvas {
+  min-height: 280px;
+  border: 1px solid var(--rule-strong);
+  border-radius: 18px;
+  background-color: var(--wz-vellum);
+  background-image: radial-gradient(
+    circle at center,
+    transparent 0 20%,
+    rgba(93, 50, 168, 0.1) 20.4% 20.9%,
+    transparent 21.3% 34%,
+    rgba(117, 200, 186, 0.17) 34.4% 34.9%,
+    transparent 35.3% 47%,
+    rgba(189, 148, 239, 0.13) 47.4% 47.9%,
+    transparent 48.3%
+  );
+  box-shadow: inset 0 0 0 7px var(--canvas);
+}
+.waveform-canvas::before,
+.waveform-canvas::after {
+  display: none;
+}
+.waveform-empty {
+  color: var(--muted);
+}
+.waveform-empty .icon {
+  width: 42px;
+  height: 42px;
+  color: var(--wz-arcane-deep);
+}
+.stage-transport {
+  min-height: 62px;
+  border-bottom-color: var(--rule);
+}
+.transport-button {
+  width: 40px;
+  height: 40px;
+  border: 2px solid var(--wz-vellum);
+  background: var(--wz-violet);
+  box-shadow: 0 0 0 2px var(--wz-violet);
+}
+.transport-button-small {
+  border-color: var(--rule-strong);
+  border-radius: 50%;
+  background: var(--wz-vellum);
+}
+.loudness-meter {
+  border-color: var(--rule-strong);
+  border-radius: 4px;
+  background: var(--wz-vellum);
+}
+.region-bar {
+  border-bottom-color: var(--rule);
+}
+.compare {
+  border-color: var(--rule-strong);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.workspace-empty .empty-mark {
+  border-color: var(--wz-arcane-deep);
+  background: #e9ddff;
+  box-shadow: 5px 5px 0 var(--canvas);
+  color: var(--wz-arcane-deep);
+}
+.confirm-dialog {
+  border-color: var(--wz-arcane-deep);
+  background: var(--wz-vellum);
+  box-shadow: 8px 9px 0 #e9ddff;
+}
+
+.library,
+.studio-inspector {
+  top: 58px;
+  border-color: var(--rule-strong);
+  background: var(--surface);
+}
+.drawer-scrim {
+  inset: 58px 0 0;
+  background: rgba(16, 13, 21, 0.22);
+}
+.library {
+  box-shadow: 14px 0 38px rgba(16, 13, 21, 0.14);
+}
+.studio-inspector {
+  box-shadow: -14px 0 38px rgba(16, 13, 21, 0.14);
+}
+.project-list li {
+  border-bottom-color: var(--rule);
+}
+.project-list li.active {
+  border-left-color: var(--wz-arcane-deep);
+  background: #e9ddff;
+}
+.inspector-tabs {
+  background: var(--canvas);
+}
+
+@media (max-width: 1099px) {
+  .topbar {
+    height: 58px;
+    flex-basis: 58px;
+  }
+  .library,
+  .studio-inspector,
+  .plan {
+    top: 58px;
+  }
+  .waveform {
+    border-left: 0;
+  }
+  .plan-scroll > .operation-dock {
+    margin-right: 20px;
+    margin-left: 20px;
+  }
+}
+
+@media (max-width: 560px) {
+  .topbar {
+    height: 54px;
+    flex-basis: 54px;
+  }
+  .library,
+  .studio-inspector,
+  .plan {
+    top: 54px;
+  }
+  .drawer-scrim {
+    inset: 54px 0 0;
+  }
+  .pane-heading,
+  .builder-brief,
+  .builder-section,
+  .builder-lyrics,
+  .builder-song-details {
+    padding-right: 18px;
+    padding-left: 18px;
+  }
+  .plan-scroll > .operation-dock {
+    margin-right: 18px;
+    margin-left: 18px;
+  }
+  .plan-scroll > .operation-dock .operation-group {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+  .operation-controls .generate-button {
+    width: 62px;
+    min-width: 62px;
+    height: 62px;
+    min-height: 62px;
+  }
+}

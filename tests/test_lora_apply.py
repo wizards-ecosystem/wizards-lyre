@@ -12,46 +12,16 @@ tests/test_acestep_worker_adapter.py, same split as every other action.
 
 from __future__ import annotations
 
-import threading
-import time
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from helpers import wait_for_job
 
 from server import jobs as jobs_module
 from server import storage
-from server.app import app
-from worker.run_worker import run_loop
 
 MIN_LORA_SOURCE_TAKES = 8
-
-
-@pytest.fixture()
-def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("BARD_PROJECTS_DIR", str(tmp_path / "projects"))
-    monkeypatch.setenv("BARD_DB_PATH", str(tmp_path / "bard.db"))
-    monkeypatch.setenv("BARD_WORKER", "mock")
-
-    stop_event = threading.Event()
-    worker_thread = threading.Thread(target=run_loop, args=(stop_event, 0.01), daemon=True)
-    worker_thread.start()
-    try:
-        with TestClient(app) as c:
-            yield c
-    finally:
-        stop_event.set()
-        worker_thread.join(timeout=5)
-
-
-def _wait_for_job(client: TestClient, job_id: str, timeout: float = 5.0) -> dict:
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        job = client.get(f"/api/jobs/{job_id}").json()
-        if job["status"] in ("done", "error"):
-            return job
-        time.sleep(0.01)
-    raise TimeoutError(f"job {job_id} did not finish within {timeout}s")
 
 
 def _make_takes(client: TestClient, project_id: str, count: int) -> list[str]:
@@ -62,7 +32,7 @@ def _make_takes(client: TestClient, project_id: str, count: int) -> list[str]:
             json={"action": "generate", "dit_profile": "iterate"},
         )
         assert resp.status_code == 200
-        job = _wait_for_job(client, resp.json()["id"])
+        job = wait_for_job(client, resp.json()["id"])
         assert job["status"] == "done", job.get("error")
         take_ids.append(job["take_id"])
     return take_ids
@@ -75,7 +45,7 @@ def _train_lora(client: TestClient, project_id: str, name: str = "dreamy synthwa
         json={"action": "train_lora", "name": name, "source_take_ids": source_take_ids},
     )
     assert resp.status_code == 200
-    job = _wait_for_job(client, resp.json()["id"], timeout=10.0)
+    job = wait_for_job(client, resp.json()["id"], timeout=10.0)
     assert job["status"] == "done", job.get("error")
     lora_id = job["lora_id"]
     assert lora_id
@@ -103,7 +73,7 @@ def test_generate_with_lora_id_is_coerced_to_studio_ops_and_recorded_on_the_take
         json={"action": "generate", "lora_id": lora_id},
     )
     assert resp.status_code == 200
-    job = _wait_for_job(client, resp.json()["id"])
+    job = wait_for_job(client, resp.json()["id"])
     assert job["status"] == "done", job.get("error")
     assert job["dit_profile"] == "studio_ops"
 
@@ -225,8 +195,8 @@ def test_resolve_lora_rejects_missing_failed_or_unfinished(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Direct unit coverage for _resolve_lora."""
-    monkeypatch.setenv("BARD_PROJECTS_DIR", str(tmp_path / "projects"))
-    monkeypatch.setenv("BARD_DB_PATH", str(tmp_path / "bard.db"))
+    monkeypatch.setenv("LYRE_PROJECTS_DIR", str(tmp_path / "projects"))
+    monkeypatch.setenv("LYRE_DB_PATH", str(tmp_path / "lyre.db"))
 
     project = storage.create_project(title="Unit Test")
     project_id = project["id"]
@@ -234,21 +204,21 @@ def test_resolve_lora_rejects_missing_failed_or_unfinished(
     with pytest.raises(jobs_module.JobError):
         jobs_module._resolve_lora(project_id, "does-not-exist")
 
-    failed_id, failed_dir = storage.allocate_lora_dir(project_id)
+    failed_id, _ = storage.allocate_lora_dir(project_id)
     storage.write_lora_meta(
         project_id, failed_id, {"id": failed_id, "status": None, "error": "training blew up"}
     )
     with pytest.raises(jobs_module.JobError):
         jobs_module._resolve_lora(project_id, failed_id)
 
-    unfinished_id, unfinished_dir = storage.allocate_lora_dir(project_id)
+    unfinished_id, _ = storage.allocate_lora_dir(project_id)
     storage.write_lora_meta(
         project_id, unfinished_id, {"id": unfinished_id, "status": None, "error": None}
     )
     with pytest.raises(jobs_module.JobError):
         jobs_module._resolve_lora(project_id, unfinished_id)
 
-    ok_id, ok_dir = storage.allocate_lora_dir(project_id)
+    ok_id, _ = storage.allocate_lora_dir(project_id)
     storage.write_lora_meta(
         project_id, ok_id, {"id": ok_id, "status": "epoch 10/10", "error": None}
     )

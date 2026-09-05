@@ -7,6 +7,11 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+/dist/
+/build/
 .cache/
 .config/
 .data/
@@ -18,8 +23,6 @@ web/node_modules/
 web/dist/
 web/.vite/
 web/*.tsbuildinfo
-web/.dev-vendor/
-web/.dev-vendor-src/
 
 # Downloaded third-party source (pinned by ACE_STEP_REVISION and bootstrapped
 # by scripts/lyre; its environment and metadata stay inside vendor/).
@@ -38,13 +41,18 @@ checkpoints/
 
 # Env / secrets
 .env
-.env.local
+.env.*
+!.env.example
+.envrc
+*.key
+*.pem
+*.p12
+*.pfx
+credentials.json
+secrets.json
 
 # OS / IDE
 .DS_Store
 Thumbs.db
 .idea/
 .vscode/
-
-# Conclave worktrees (jail colocates these under this repo)
-.conclave-wt/

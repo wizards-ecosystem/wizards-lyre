@@ -1,132 +1,201 @@
-# Wizard's Lyre
+<p align="center">
+  <img src="docs/assets/lyre-hero.svg" alt="The Wizard's Lyre: local generative music studio" width="100%">
+</p>
 
-Local generative music studio. ACE-Step 1.5 on the GPU. No cloud music APIs.
+<h1 align="center">The Wizard's Lyre</h1>
 
-The product spec is **[SPEC.md](SPEC.md)**. Implement that file. Do not invent extra engines.
+<p align="center">
+  Shape music on your own GPU. Keep every take. Send nothing to the cloud.
+</p>
 
-## Status
+<p align="center">
+  <a href="https://github.com/wizards-ecosystem/wizards-lyre/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/wizards-ecosystem/wizards-lyre/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://github.com/wizards-ecosystem/wizards-lyre/actions/workflows/codeql.yml"><img alt="CodeQL" src="https://github.com/wizards-ecosystem/wizards-lyre/actions/workflows/codeql.yml/badge.svg"></a>
+  <a href="https://github.com/wizards-ecosystem/wizards-lyre/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/wizards-ecosystem/wizards-lyre?include_prereleases&color=5d32a8"></a>
+  <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-241345"></a>
+  <a href="pyproject.toml"><img alt="Python 3.11 and 3.12" src="https://img.shields.io/badge/python-3.11%20%7C%203.12-bd94ef"></a>
+  <img alt="Local only" src="https://img.shields.io/badge/inference-local%20only-75c8ba">
+</p>
 
-All six phases in SPEC.md sec 12 are implemented:
+<p align="center">
+  <a href="docs/INSTALLATION.md">Install</a> |
+  <a href="#the-studio-loop">Studio loop</a> |
+  <a href="docs/TROUBLESHOOTING.md">Troubleshoot</a> |
+  <a href="CONTRIBUTING.md">Contribute</a>
+</p>
 
-- **Phase 1 (scaffold + generate):** FastAPI health/projects/plan/takes/jobs API, a SQLite
-  `queued -> running -> done|error` job queue, a dedicated worker process (`worker/run_worker.py`)
-  that drains it, a React shell, and a mocked worker for tests. The production job backend is
-  `worker/acestep_worker.py`, which calls ACE-Step 1.5's `generate_music` -- it requires ACE-Step
-  installed and weights downloaded (see below).
-- **Phase 2 (studio loop):** project library, the plan editor (simple + custom), waveform + region
-  display/select, `cover` (take source select + strength), and `repaint` (take/region source, no
-  strength control), reusing generate's plan-save/poll UX.
-- **Phase 3 (base swap):** worker unload/load, `extract` / `lego` / `complete` job types, and a
-  confirmation UI for the `studio_ops` base-model swap.
-- **Phase 4 (polish):** a quality score on takes, LRC output when ACE-Step supplies timestamps,
-  and a LoRA train/load path (style-pack UI to train from selected takes, then load a trained
-  LoRA into generation).
-- **Phase 5 (studio ergonomics):** A/B take compare, project export as a zip (`project.json`,
-  `plan.json`, active mix, optional stems), keyboard shortcuts (generate, play/pause, next/prev
-  take, save plan), and a UI to walk `parent_take_id` and restore an earlier take.
-- **Phase 6 (library and ingest):** project search, favorites for projects/takes, free-text take
-  notes, a loudness/peak meter on the player, and drag-drop of a local WAV/MP3 as a cover/repaint
-  source.
+Lyre is a local, human-guided generative music studio powered by
+[ACE-Step 1.5][acestep]. There are no accounts, API keys, subscriptions, or
+cloud music services. After setup, generation stays on your machine.
 
-This describes what the code implements, not verified GPU performance -- generation quality, LoRA
-training throughput, etc. depend on ACE-Step and real hardware and are not something this repo's
-test suite exercises.
+Each song is a project with an editable composition plan, an immutable lineage
+of takes, and a waveform you can select and reshape. Throw a seed, listen, keep
+what works, and push it somewhere new.
 
-## Machine
+| Compose | Transform | Finish |
+|---|---|---|
+| Start from a simple idea or write the caption, lyrics, BPM, key, meter, sections, and duration yourself. | Cover a take, repaint a selected region, isolate a track, add or replace an instrument, or complete an arrangement. | Compare takes A/B, score and annotate them, restore any earlier take, train a style pack, and export a DAW-ready archive. |
 
-WSL Ubuntu (`limb06`), RTX 4070 Ti SUPER 16 GB. Checkout: `/home/limb06/wizards-lyre`.
-Default: ACE-Step 2B turbo + 1.7B LM. Bind `127.0.0.1:8421`.
+> **Status: Working.** All six implementation phases in [SPEC.md](SPEC.md) are
+> built. Version 0.1.0 is the first public release candidate. Missing FFmpeg
+> stops style-pack LoRA training; generation remains available.
 
-## Layout
+## Quick start
 
-| Path | Role |
-|---|---|
-| `SPEC.md` | Sole product spec |
-| `server/` | FastAPI (HTTP, jobs, files) |
-| `worker/` | `run_worker.py` (dedicated process entry point), `acestep_worker.py` (real backend), test-only `mock_worker.py` |
-| `web/` | Vite + React studio |
-| `tests/` | pytest, mocked worker, no GPU |
-| `scripts/lyre` | portable setup, launch, and test commands |
-| `scripts/smoke-gpu.py` | Real ACE-Step turbo smoke (manual, not part of pytest) |
+The supported path is Linux x86-64 or Windows 11 with WSL2, an NVIDIA GPU,
+`git`, and [`uv`][uv]. The defaults are tuned for 16 GB VRAM. A full setup
+needs at least 55 GB free before space for your music.
 
-## One-folder setup
-
-Install the small system prerequisites (`git`, `uv`, and Node.js/npm), clone this repository, then
-run one command from its root:
+For the smallest download, get the `.tar.gz` or `.zip` runtime bundle from the
+[latest release](https://github.com/wizards-ecosystem/wizards-lyre/releases/latest),
+extract it, and run:
 
 ```bash
 ./scripts/lyre bootstrap
+./scripts/lyre doctor
 ```
 
-It pins and downloads ACE-Step 1.5 into `vendor/ACE-Step-1.5`, creates the Python environment in
-`.venv`, installs frontend dependencies in `web/node_modules`, builds the SPA, and downloads every
-ACE-Step profile Lyre exposes into `checkpoints/` (Turbo, SFT, base, and XL Turbo). It is resumable:
-re-running it reuses files already present in this checkout.
+Release bundles include the compiled studio UI, so they do not need Node.js,
+npm, the test suite, or contributor documentation. They fetch the pinned
+ACE-Step source and model weights during setup; those large upstream artifacts
+are not redistributed in the download.
 
-If you only need the web/API shell or want to defer the large model downloads, use
-`./scripts/lyre install` first and `./scripts/lyre models` when ready.
-
-The launcher redirects package-manager, Hugging Face, ModelScope, PyTorch/CUDA, compiler, and
-temporary-file caches to this project. Runtime data remains under `projects/` and `output/`; no
-Lyre-owned state needs to be stored in a home-directory cache. The NVIDIA driver and CUDA runtime
-remain normal system prerequisites.
-
-Use `./scripts/lyre paths` to show the exact locations. `vendor/`, models, environments, caches,
-and generated music are intentionally ignored by Git. The `ACE_STEP_REVISION` file records the
-pinned upstream source revision used by the installer.
-
-For a GPU-free UI/API development session, set `BARD_WORKER=mock` before starting
-`./scripts/lyre worker`; it writes silent WAVs and never loads CUDA.
-
-## Run the server + worker
-
-Two separate processes (SPEC.md sec 5): the FastAPI server only ever reads/writes SQLite and
-disk; the worker is where CUDA and ACE-Step actually load, so a GPU crash can't take HTTP down
-and a long generation never blocks a request.
+To work from source instead, install Node.js 20.19+ or 22.12+ and clone the
+repository:
 
 ```bash
-./scripts/lyre server  # terminal 1: HTTP API + built SPA
-./scripts/lyre worker  # terminal 2: claims queued jobs one at a time
+git clone https://github.com/wizards-ecosystem/wizards-lyre.git
+cd wizards-lyre
+./scripts/lyre bootstrap
+./scripts/lyre doctor
 ```
 
-`server.app` binds `127.0.0.1:8421` by default; override with `BARD_PORT`. If `web/dist` exists,
-it serves the built SPA at `/`; otherwise `/` returns a hint to build or run the frontend dev
-server. Jobs posted to `/api/projects/{id}/jobs` sit as `queued` until `worker.run_worker` (or
-`BARD_WORKER=mock` for a GPU-free worker) picks them up.
-
-## Frontend
+`bootstrap` creates a local Python environment, installs the pinned ACE-Step
+source, prepares the web app, and downloads every model profile. It is
+resumable. For a smaller start, install only the default generation models:
 
 ```bash
-./scripts/lyre build-web  # writes web/dist, served by FastAPI
-./scripts/lyre web        # Vite dev server with a /api proxy to BARD_PORT
+./scripts/lyre install
+./scripts/lyre models-core
 ```
 
-## Tests
+See the [installation guide](docs/INSTALLATION.md) for archive verification,
+prerequisites, WSL2, model footprints, updating, backups, and the GPU-free
+developer setup.
+
+Start two processes in separate terminals:
 
 ```bash
-./scripts/lyre test
+./scripts/lyre server   # API + built SPA at 127.0.0.1:8421
 ```
-
-Default pytest must not load CUDA or ACE-Step weights (it pins `BARD_WORKER=mock`).
-
-Frontend regression tests: `./scripts/lyre test-web` (Vitest + React Testing
-Library against a mocked backend, no FastAPI/CUDA/ACE-Step required) — see
-web/README.md's Tests section for details.
-
-## GPU smoke (manual)
 
 ```bash
-./scripts/lyre smoke-gpu
+./scripts/lyre worker   # the only process that loads CUDA
 ```
 
-Loads ACE-Step turbo, generates ~10s of instrumental `text2music`, prints the output path, exits
-0. Not part of `pytest`; requires a real GPU and installed weights.
+Then open <http://127.0.0.1:8421>.
 
-## Location
+The split is deliberate: generation never blocks the API, a GPU failure does
+not take down the server, and jobs posted while the worker is stopped wait in
+the local SQLite queue.
 
-Canonical checkout: `/home/limb06/wizards-lyre` (WSL Ubuntu, next to the other limb06 projects).
-Studio data (`projects/`) lives in this tree and is gitignored.
+## The studio loop
 
-Conclave on Windows cannot jail a WSL path, so the legacy
-`config/projects/wizards-bard.yaml` remains `active: false`. Do not recreate a Windows clone
-under `.projects/` unless you want Conclave to drive Lyre again.
+```text
+idea -> plan -> generate -> listen -> keep / branch / reshape -> export
+                    `-------- immutable take history --------'
+```
+
+- **Generate:** Simple mode lets ACE-Step's 5 Hz planner expand a natural
+  language seed. Custom mode gives you direct control over the composition.
+- **Cover / Repaint:** Remix a source or drag across the waveform to rewrite
+  only that region.
+- **Extract / Lego / Complete:** Isolate a track, add or replace one, or fill
+  an arrangement using the base checkpoint.
+- **Style packs:** Train and apply a LoRA from at least eight of your own takes.
+  FFmpeg is required for training; generation works without it.
+- **Traceable iteration:** Every generated take is immutable and points to its
+  parent. Ratings, favorites, and notes remain yours to change.
+- **Local library:** Search projects, ingest WAV/MP3 sources, compare A/B, use
+  keyboard shortcuts, watch loudness, and export a complete zip.
+
+The four model profiles trade speed, detail, memory, and editing capability.
+The default `iterate` profile uses the 2B turbo checkpoint; the optional 4B
+`quality` profile needs CPU offload on a 16 GB card. See
+[Configuration](docs/CONFIGURATION.md) for the exact map.
+
+## Local means local
+
+```text
+Browser ----> FastAPI server ----> SQLite + project files
+                       ^
+                       `-------- dedicated ACE-Step GPU worker
+```
+
+Only installation downloads packages, the pinned upstream source, and model
+weights. Runtime inference does not call an external music API. Writable state
+is kept under the checkout; `./scripts/lyre paths` shows every location.
+
+Lyre binds to `127.0.0.1` and intentionally has no authentication. Never expose
+it through port forwarding, a reverse proxy, or a public bind. Read the
+[security policy](SECURITY.md) before changing that boundary.
+
+## Documentation
+
+| Guide | What it answers |
+|---|---|
+| [Installation](docs/INSTALLATION.md) | Prerequisites, model sizes, WSL2, first run, updates, and backups |
+| [Architecture](docs/ARCHITECTURE.md) | Process boundaries, queue leases, storage, and failure recovery |
+| [Configuration](docs/CONFIGURATION.md) | Every `LYRE_*` setting and all DiT profiles |
+| [HTTP API](docs/API.md) | Stable routes and request/response shapes; live OpenAPI is at `/docs` |
+| [Troubleshooting](docs/TROUBLESHOOTING.md) | Worker startup, missing weights, VRAM, FFmpeg, and stuck jobs |
+| [Live stack test](docs/LIVE_STACK_TEST.md) | End-to-end verification against real weights and a real GPU |
+| [Contributing](CONTRIBUTING.md) | GPU-free setup, project scope, test loop, and pull requests |
+| [Governance](GOVERNANCE.md) | Maintainer responsibilities, decisions, and repository authority |
+| [Support](SUPPORT.md) | Where to ask for help and what diagnostics to include |
+| [Release guide](docs/RELEASING.md) | Reproducible, security, browser, and GPU release gates |
+| [Repository settings](docs/REPOSITORY_SETTINGS.md) | GitHub contribution, branch, workflow, and release controls |
+| [Dependency audit](docs/SECURITY_AUDIT.md) | ACE-Step overlay and reachability-reviewed advisory exceptions |
+
+`SPEC.md` is the sole product specification and the authority when any other
+document disagrees.
+
+## Development
+
+You do not need a GPU to work on Lyre. The mock worker writes silent WAV files
+while exercising the same server/UI contract:
+
+```bash
+LYRE_WORKER=mock ./scripts/lyre worker
+./scripts/lyre server
+./scripts/lyre web
+```
+
+The ordinary quality gate is GPU-free:
+
+```bash
+./scripts/lyre test        # pytest against the mocked worker
+./scripts/lyre test-web    # Vitest + Testing Library against a mocked API
+./scripts/lyre lint        # Ruff, mypy, TypeScript, ESLint, Prettier, REUSE, ShellCheck
+./scripts/lyre audit       # installed Python environment + frontend lockfile
+```
+
+Real-GPU checks are manual and isolated in `smoke-gpu` and `live-check`. Please
+read [CONTRIBUTING.md](CONTRIBUTING.md) and the
+[Code of Conduct](CODE_OF_CONDUCT.md) before opening a pull request.
+
+## License and responsible use
+
+Lyre is free and open-source software under the [MIT License](LICENSE).
+ACE-Step source and model artifacts are fetched separately, retain their own
+notices, and are not redistributed by this repository. See
+[Third-party notices](THIRD_PARTY_NOTICES.md) for the exact boundaries and
+machine-readable licensing information.
+
+You are responsible for having the rights needed for audio and lyrics you
+upload or use to train a style pack, and for evaluating generated music before
+publishing or commercial use. Lyre does not upload, license, or clear that
+material for you.
+
+[acestep]: https://github.com/ace-step/ACE-Step-1.5
+[uv]: https://docs.astral.sh/uv/

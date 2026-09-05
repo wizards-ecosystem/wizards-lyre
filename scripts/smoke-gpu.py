@@ -22,8 +22,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from server import storage  # noqa: E402
-from worker.acestep_worker import WorkerUnavailable, run_job  # noqa: E402
+from server import storage
+from worker.acestep_worker import WorkerUnavailable, run_job
 
 INSTRUMENTAL_PLAN = {
     "caption": "warm analog synth pad, gentle percussion, instrumental",
@@ -75,7 +75,7 @@ def main() -> int:
             file=sys.stderr,
         )
         return 2
-    except Exception as exc:  # noqa: BLE001 - a CUDA/driver error or other
+    except Exception as exc:
         # local setup failure can surface directly from torch/acestep here,
         # not wrapped as WorkerUnavailable (e.g. no GPU attached at all) --
         # report it as a clean local-setup message instead of a raw

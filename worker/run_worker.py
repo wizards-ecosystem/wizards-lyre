@@ -6,8 +6,8 @@ generation never blocks HTTP and a native GPU crash never touches it:
     python -m worker.run_worker
 
 Polls `server.jobs`' SQLite queue for `queued` rows, claims and runs one at
-a time against the backend selected by `BARD_WORKER` (default: `acestep`;
-set `BARD_WORKER=mock` for local dev/tests without a GPU). Never imports
+a time against the backend selected by `LYRE_WORKER` (default: `acestep`;
+set `LYRE_WORKER=mock` for local dev/tests without a GPU). Never imports
 FastAPI or binds a port (SPEC.md sec 10 point 4).
 
 On startup and on every poll, it also reclaims jobs a previous, now-dead
@@ -173,10 +173,7 @@ def _publish_train_lora_capability(module, ready: bool, message: str) -> None:
     reason = (
         None
         if supported
-        else (
-            f"worker backend '{module.__name__}' does not implement train_lora "
-            "(SPEC.md sec 4.4)"
-        )
+        else (f"worker backend '{module.__name__}' does not implement train_lora (SPEC.md sec 4.4)")
     )
     jobs.publish_worker_capability("train_lora", supported, reason)
 
@@ -216,7 +213,7 @@ def _acquire_os_singleton_lock(stop_event: threading.Event) -> BinaryIO | None:
             return handle
         if not announced:
             print(
-                "Wizard's Lyre worker: another worker process holds the OS-level "
+                "The Wizard's Lyre worker: another worker process holds the OS-level "
                 "GPU lock; waiting for it to exit..."
             )
             announced = True
@@ -236,7 +233,7 @@ def _acquire_lease_or_wait(owner_id: str, stop_event: threading.Event) -> bool:
             return True
         if not announced:
             print(
-                "Wizard's Lyre worker: another worker process already holds the "
+                "The Wizard's Lyre worker: another worker process already holds the "
                 "GPU lease; waiting for it to finish or go stale..."
             )
             announced = True
@@ -266,7 +263,7 @@ def _lease_heartbeat_loop(owner_id: str, stop_event: threading.Event) -> None:
             traceback.print_exc()
             continue
         if not renewed:
-            print("Wizard's Lyre worker: lost the GPU lease to another worker; stopping.")
+            print("The Wizard's Lyre worker: lost the GPU lease to another worker; stopping.")
             stop_event.set()
             return
 
@@ -307,7 +304,10 @@ def run_loop(stop_event: threading.Event, poll_interval: float = DEFAULT_POLL_IN
                     _refresh_published_state(startup_ready, startup_message)
                     last_status_refresh = time.monotonic()
                 else:
-                    if time.monotonic() - last_status_refresh >= jobs.WORKER_STATUS_HEARTBEAT_INTERVAL_SEC:
+                    if (
+                        time.monotonic() - last_status_refresh
+                        >= jobs.WORKER_STATUS_HEARTBEAT_INTERVAL_SEC
+                    ):
                         # Idle, but still alive -- keep touching worker_status so
                         # server.jobs' freshness check doesn't start reporting a
                         # perfectly healthy worker as dead (see module docstring).
@@ -325,7 +325,7 @@ def run_loop(stop_event: threading.Event, poll_interval: float = DEFAULT_POLL_IN
 
 def main() -> None:
     stop_event = threading.Event()
-    print("Wizard's Lyre worker: polling for queued jobs (Ctrl+C to stop)...")
+    print("The Wizard's Lyre worker: polling for queued jobs (Ctrl+C to stop)...")
     try:
         run_loop(stop_event)
     except KeyboardInterrupt:

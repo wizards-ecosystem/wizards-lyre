@@ -12,44 +12,13 @@ and tests/test_acestep_worker_adapter.py's `_write_tiny_wav` helper.
 from __future__ import annotations
 
 import io
-import threading
-import time
 import wave
-from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from helpers import wait_for_job
 
 from server import storage
-from server.app import app
-from worker.run_worker import run_loop
-
-
-@pytest.fixture()
-def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("BARD_PROJECTS_DIR", str(tmp_path / "projects"))
-    monkeypatch.setenv("BARD_DB_PATH", str(tmp_path / "bard.db"))
-    monkeypatch.setenv("BARD_WORKER", "mock")
-
-    stop_event = threading.Event()
-    worker_thread = threading.Thread(target=run_loop, args=(stop_event, 0.01), daemon=True)
-    worker_thread.start()
-    try:
-        with TestClient(app) as c:
-            yield c
-    finally:
-        stop_event.set()
-        worker_thread.join(timeout=5)
-
-
-def _wait_for_job(client: TestClient, job_id: str, timeout: float = 5.0) -> dict:
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        job = client.get(f"/api/jobs/{job_id}").json()
-        if job["status"] in ("done", "error"):
-            return job
-        time.sleep(0.01)
-    raise TimeoutError(f"job {job_id} did not finish within {timeout}s")
 
 
 def _tiny_wav_bytes() -> bytes:
@@ -151,7 +120,7 @@ def test_cover_from_uploaded_source(client: TestClient) -> None:
         },
     )
     assert cover_resp.status_code == 200, cover_resp.text
-    cover_job = _wait_for_job(client, cover_resp.json()["id"])
+    cover_job = wait_for_job(client, cover_resp.json()["id"])
     assert cover_job["status"] == "done", cover_job.get("error")
     cover_take_id = cover_job["take_id"]
     assert cover_take_id

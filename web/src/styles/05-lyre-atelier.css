@@ -1,0 +1,569 @@
+/* --------------------------------------------------------------------------
+   Lyre Atelier
+
+   Light blue is the air around the studio, not the whole studio. The working
+   areas use warm stock-paper tones, while indigo keeps the architecture clear
+   and vermilion marks the moments that make sound. This keeps the density of
+   a real tool while giving each part of the workspace a distinct material.
+   -------------------------------------------------------------------------- */
+
+:root {
+  color-scheme: light;
+  --danger: #bd3b48;
+  --danger-bg: #fae8e5;
+  --display: Iowan Old Style, Palatino Linotype, Book Antiqua, Palatino, Georgia, serif;
+}
+
+body {
+  background-size: 64px 64px;
+}
+
+input,
+textarea,
+select {
+  border-color: #bdad95;
+  border-radius: 1px;
+  background: #fffdf7;
+  color: var(--text);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9);
+}
+
+input:focus,
+textarea:focus,
+select:focus {
+  border-color: var(--focus);
+  background: #fffdf7;
+  box-shadow: 0 0 0 2px rgba(54, 94, 170, 0.16);
+}
+
+.button-primary,
+.generate-button,
+.new-project-trigger,
+.operation-controls > button:not(.dit-profile-option),
+.lora-train-panel > button {
+  border-color: var(--signal);
+  border-radius: 2px;
+  background: var(--signal);
+  color: var(--signal-ink);
+  letter-spacing: 0.015em;
+}
+
+.button-primary:hover:not(:disabled),
+.generate-button:hover:not(:disabled),
+.new-project-trigger:hover:not(:disabled),
+.operation-controls > button:hover:not(:disabled),
+.lora-train-panel > button:hover:not(:disabled) {
+  border-color: var(--signal-strong);
+  background: var(--signal-strong);
+}
+
+.button-primary:active:not(:disabled),
+.generate-button:active:not(:disabled),
+.new-project-trigger:active:not(:disabled),
+.operation-controls > button:active:not(:disabled) {
+  box-shadow: 1px 1px 0 #223f64;
+}
+
+.button-secondary,
+.panel-action,
+.take-actions button,
+.take-actions a,
+.swap-compare,
+.lyrics-tag-button,
+.dit-profile-option,
+.export-link,
+.icon-button,
+.button-danger {
+  border-radius: 1px;
+}
+
+.topbar {
+  box-shadow: none;
+}
+
+.brand-cluster {
+  gap: 10px;
+}
+.brand-mark .icon {
+  width: 20px;
+  height: 20px;
+  stroke-width: 1.75;
+}
+.topbar h1 {
+  font-weight: 700;
+  letter-spacing: -0.04em;
+}
+.brand-subtitle {
+  font-family: var(--mono);
+  font-size: 8px;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+}
+.topbar-tools {
+  gap: 11px;
+}
+.health {
+  border-left: 1px solid #c8b89e;
+  border-radius: 0;
+  background: transparent;
+  padding-left: 12px;
+}
+.health.ok .dot {
+  background: var(--success);
+  box-shadow: 0 0 0 3px rgba(8, 125, 115, 0.12);
+}
+.health-copy strong {
+  color: #314d68;
+}
+.shortcut-help summary {
+  border-color: #c8b89e;
+  border-radius: 0;
+  background: #fffdf7;
+  color: #31506e;
+}
+.shortcut-popover {
+  border-color: #263f89;
+  border-radius: 0;
+  background: #fffaf0;
+  box-shadow: 6px 7px 0 #e7c759;
+}
+
+.body {
+  gap: 0;
+  padding: 0;
+}
+.library,
+.workspace {
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+.library {
+  flex-basis: 255px;
+  padding: 18px 10px 12px;
+}
+.rail-heading {
+  border-bottom: 1px solid #8dbab8;
+  padding: 0 8px 14px;
+}
+.rail-heading h2,
+.pane-heading h3,
+.stage-heading h3,
+.compare-heading h3,
+.style-heading h3 {
+  color: #1d3d65;
+  font-family: var(--display);
+  font-weight: 700;
+}
+.rail-heading .eyebrow {
+  color: #28716e;
+}
+.new-project-trigger {
+  width: calc(100% - 12px);
+  margin-top: 14px;
+}
+.new-project {
+  border-color: #8dbab8;
+  border-radius: 0;
+  background: #f7fbf4;
+}
+.search-field {
+  margin-top: 14px;
+}
+.library-search {
+  background: rgba(255, 253, 247, 0.8);
+}
+.project-list {
+  gap: 0;
+  margin-top: 8px;
+}
+.project-list li {
+  min-height: 57px;
+  border: 0;
+  border-bottom: 1px solid #a6ceca;
+  border-left: 4px solid transparent;
+  border-radius: 0;
+}
+.project-list li.active {
+  box-shadow: none;
+}
+.project-row {
+  padding-left: 8px;
+}
+.favorite-btn.favorited {
+  color: #d84d35 !important;
+}
+.project-heading h2 {
+  font-weight: 700;
+  letter-spacing: -0.04em;
+}
+.project-heading h2::before {
+  margin: 0 9px 3px 0;
+  border: 1px solid #203b77;
+  content: "";
+}
+.job-strip {
+  border-bottom-color: #cbbda6;
+  color: #43516c;
+}
+.job-strip.status-done {
+  background: #def2e8;
+  color: #087d73;
+}
+.workspace-empty {
+  align-items: center;
+  text-align: center;
+}
+.workspace-empty .empty-mark {
+  border: 1px solid #263f89;
+  border-radius: 50%;
+  background: #e7c759;
+  box-shadow: 5px 5px 0 #d8efed;
+  color: #263f89;
+}
+.workspace-empty h2 {
+  font-family: var(--display);
+  color: #203b77;
+}
+.pane {
+  background: #f8efe0;
+}
+.disclosure-button,
+.toggle-row,
+.plan-sections,
+.section-row {
+  border-color: #d4c4ac;
+}
+.stage-heading {
+  border-bottom: 1px solid #cbbda6;
+  padding: 0 0 14px;
+}
+.source-shelf {
+  border: 0;
+  border-bottom: 1px dashed #9c8b73;
+  border-radius: 0;
+  background: transparent;
+  padding: 8px 0;
+}
+.source-shelf.has-source {
+  border-color: #087d73;
+  background: transparent;
+}
+.waveform-canvas {
+  margin-top: 17px;
+}
+.stage-transport,
+.region-bar {
+  border-bottom-color: #cbbda6;
+}
+.transport-button {
+  border-color: #d84d35;
+  border-radius: 50%;
+}
+.transport-button-small {
+  color: #294864;
+}
+.loudness-meter-fill {
+  background: #087d73;
+}
+
+.operation-dock {
+  gap: 0;
+  padding: 0;
+}
+.operation-group {
+  position: relative;
+  display: grid;
+  flex: 1 1 0;
+  grid-template-columns: 72px minmax(0, 1fr);
+  align-items: start;
+  gap: 11px;
+  border: 0;
+  border-radius: 0;
+  padding: 14px 11px;
+}
+.operation-group:last-child {
+  border-right: 0;
+}
+.operation-group::before {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  height: 5px;
+  background: #d84d35;
+  content: "";
+}
+.operation-group:nth-child(2)::before {
+  background: #087d73;
+}
+.operation-group:nth-child(3)::before {
+  background: #e7c759;
+}
+.operation-heading {
+  gap: 7px;
+}
+.operation-heading > span {
+  color: #d84d35;
+}
+.operation-group:nth-child(2) .operation-heading > span {
+  color: #087d73;
+}
+.operation-group:nth-child(3) .operation-heading > span {
+  color: #9c7911;
+}
+.operation-controls {
+  justify-content: flex-start;
+  margin-top: 0;
+}
+.dit-profile-option.selected {
+  border-color: #263f89;
+  border-radius: 1px;
+}
+.inspector-tabs > button[aria-selected="true"] {
+  color: #263f89;
+}
+.take-list > li {
+  border-left-width: 4px;
+  border-radius: 0;
+}
+.take-list > li.selected {
+  border-left-color: #d84d35;
+}
+.take-list > li.active-take::after {
+  background: #087d73;
+}
+.take-notes {
+  background: #fffdf7;
+}
+.style-packs {
+  padding: 16px 14px 28px;
+}
+.lora-list li.lora-training,
+.style-source-heading span {
+  color: #d84d35;
+}
+.dialog-backdrop {
+  background: rgba(31, 48, 75, 0.36);
+  backdrop-filter: none;
+}
+.confirm-dialog {
+  border-color: #263f89;
+  border-radius: 0;
+  background: #fffaf0;
+  box-shadow: 8px 9px 0 #e7c759;
+}
+
+@media (max-width: 1359px) {
+  .library,
+  .plan {
+    border-radius: 0;
+  }
+  .drawer-scrim {
+    background: rgba(31, 48, 75, 0.3);
+  }
+  .panes {
+    grid-template-columns: minmax(0, 1fr) 310px;
+  }
+}
+
+@media (max-width: 959px) {
+  .topbar {
+    height: 60px;
+    flex-basis: 60px;
+    padding: 0 14px;
+  }
+  .library,
+  .plan,
+  .studio-inspector {
+    border-radius: 0;
+  }
+  .waveform {
+    padding: 18px 16px 0;
+  }
+  .operation-dock {
+    display: block;
+    border-right: 0;
+    border-left: 0;
+    box-shadow: none;
+  }
+  .operation-group {
+    display: none;
+    min-height: 0;
+    grid-template-columns: 1fr;
+    border: 0;
+    background: #fffaf0;
+    padding: 16px;
+  }
+  .operation-group.is-active {
+    display: grid;
+  }
+}
+
+@media (max-width: 560px) {
+  .topbar {
+    padding: 0 11px;
+  }
+  .brand-subtitle {
+    display: none;
+  }
+  .project-heading h2 {
+    font-size: 22px;
+  }
+}
+
+/* A quieter pass over the atelier: preserve its materials and warm signal,
+   but let the score and the current action be the only loud things. */
+
+body {
+  background: var(--canvas);
+  background-image: none;
+}
+
+.topbar {
+  border-top-width: 3px;
+}
+
+.library {
+  border-right-width: 1px;
+}
+.rail-heading {
+  border-bottom-color: #c8d8d2;
+}
+.library-search {
+  border-color: #c5d5cf;
+}
+.project-list li:hover,
+.project-list li:focus-within {
+  background: #e3efeb;
+}
+.project-list li.active {
+  border-color: #d1dfda;
+}
+.project-actions {
+  border-left-color: #d1dfda;
+}
+
+.workspace-header {
+  border-bottom-width: 1px;
+}
+.project-heading h2::before {
+  width: 7px;
+  height: 7px;
+  margin-right: 8px;
+  background: #e7c759;
+}
+
+.pane,
+.studio-inspector {
+  background: #fbf8f1;
+}
+.plan {
+  border-right-color: #ddd3c3;
+}
+.studio-inspector {
+  border-left-width: 1px;
+  border-left-color: #ddd3c3;
+}
+.pane-heading,
+.inspector-tabs {
+  border-bottom-color: #ddd3c3;
+}
+
+.waveform {
+  background-color: #fffdf7;
+  background-size: 42px 42px;
+}
+.stage-heading,
+.stage-transport,
+.region-bar {
+  border-bottom-color: #ddd3c3;
+}
+
+.button-primary,
+.generate-button,
+.new-project-trigger,
+.operation-controls > button:not(.dit-profile-option),
+.lora-train-panel > button {
+  box-shadow: 2px 2px 0 #385577;
+}
+.button-primary:hover:not(:disabled),
+.generate-button:hover:not(:disabled),
+.new-project-trigger:hover:not(:disabled),
+.operation-controls > button:hover:not(:disabled),
+.lora-train-panel > button:hover:not(:disabled) {
+  box-shadow: 1px 1px 0 #385577;
+}
+.operation-group {
+  min-height: 116px;
+  border-right: 1px solid #ddd3c3;
+  background: #fffdf7;
+  padding-top: 13px;
+}
+.operation-group::before {
+  display: none;
+}
+.operation-group:nth-child(2) {
+  background: #fdfaf3;
+}
+.operation-group:nth-child(3) {
+  background: #fbf9f5;
+}
+.inspector-tabs > button[aria-selected="true"] {
+  border-bottom-color: #d84d35;
+}
+.take-list > li {
+  border-bottom-color: #ddd3c3;
+}
+.take-list > li:hover,
+.take-list > li:focus-within {
+  background: #f5eee4;
+}
+.take-list > li.selected {
+  background: #f8f1e5;
+}
+.style-heading,
+.style-source-heading,
+.style-source-list,
+.style-source-list li,
+.lora-list li {
+  border-color: #ddd3c3;
+}
+
+@media (max-width: 1359px) {
+  .library,
+  .plan {
+    top: 60px;
+    box-shadow: 5px 0 0 rgba(38, 63, 137, 0.12);
+  }
+  .drawer-scrim {
+    inset: 60px 0 0;
+  }
+}
+
+@media (max-width: 959px) {
+  .library,
+  .plan,
+  .studio-inspector {
+    top: 60px;
+  }
+  .studio-inspector {
+    box-shadow: -5px 0 0 rgba(38, 63, 137, 0.12);
+  }
+  .drawer-scrim {
+    inset: 60px 0 0;
+  }
+  .operation-dock {
+    background: #fffdf7;
+  }
+  .operation-tabs {
+    border-bottom-color: #ddd3c3;
+  }
+  .operation-tabs button {
+    color: #667b8d;
+  }
+  .operation-tabs button[aria-selected="true"] {
+    border-bottom-color: #d84d35;
+    color: #263f89;
+  }
+}

@@ -13,37 +13,9 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from helpers import wait_for_job
 
 from server import storage
-from server.app import app
-from worker.run_worker import run_loop
-
-
-@pytest.fixture()
-def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("BARD_PROJECTS_DIR", str(tmp_path / "projects"))
-    monkeypatch.setenv("BARD_DB_PATH", str(tmp_path / "bard.db"))
-    monkeypatch.setenv("BARD_WORKER", "mock")
-
-    stop_event = threading.Event()
-    worker_thread = threading.Thread(target=run_loop, args=(stop_event, 0.01), daemon=True)
-    worker_thread.start()
-    try:
-        with TestClient(app) as c:
-            yield c
-    finally:
-        stop_event.set()
-        worker_thread.join(timeout=5)
-
-
-def _wait_for_job(client: TestClient, job_id: str, timeout: float = 5.0) -> dict:
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        job = client.get(f"/api/jobs/{job_id}").json()
-        if job["status"] in ("done", "error"):
-            return job
-        time.sleep(0.01)
-    raise TimeoutError(f"job {job_id} did not finish within {timeout}s")
 
 
 def _make_take(client: TestClient) -> tuple[str, str]:
@@ -53,7 +25,7 @@ def _make_take(client: TestClient) -> tuple[str, str]:
         f"/api/projects/{project_id}/jobs",
         json={"action": "generate", "dit_profile": "iterate", "seed": -1},
     )
-    job = _wait_for_job(client, resp.json()["id"])
+    job = wait_for_job(client, resp.json()["id"])
     assert job["status"] == "done"
     return project_id, job["take_id"]
 
@@ -140,14 +112,18 @@ def test_concurrent_favorite_and_notes_patches_do_not_lose_updates(
     `_project_lock`) and passes reliably with it."""
     project_id, take_id = _make_take(client)
 
-    original_get_take = storage.get_take
+    # Patch the *defining* module: update_take_annotations calls get_take
+    # through server.storage.takes' own globals, so patching the package
+    # re-export would leave the real function running and never widen the
+    # race this test exists to force.
+    original_get_take = storage.takes.get_take
 
     def slow_get_take(pid: str, tid: str) -> dict:
         meta = original_get_take(pid, tid)
         time.sleep(0.05)
         return meta
 
-    monkeypatch.setattr(storage, "get_take", slow_get_take)
+    monkeypatch.setattr(storage.takes, "get_take", slow_get_take)
 
     responses: list = []
 
@@ -207,9 +183,7 @@ def test_legacy_take_missing_favorite_and_notes_gets_defaults(
 
     # Patching just one field on a legacy take must not surface the other as
     # missing -- it should come back as its normalized default.
-    resp = client.patch(
-        f"/api/projects/{project_id}/takes/{take_id}", json={"favorite": True}
-    )
+    resp = client.patch(f"/api/projects/{project_id}/takes/{take_id}", json={"favorite": True})
     assert resp.status_code == 200
     body = resp.json()
     assert body["favorite"] is True

@@ -149,7 +149,7 @@ export function makeProjectDetail(takes: Take[]): ProjectDetail {
 // The mock server itself.
 // ---------------------------------------------------------------------------
 
-export function createMockBardServer() {
+export function createMockLyreServer() {
   const requests: RecordedRequest[] = [];
   const state = {
     projects: [makeProjectSummary()],
@@ -273,7 +273,7 @@ export function createMockBardServer() {
       const payload = (body ?? {}) as { title?: string; query?: string };
       projectCounter += 1;
       const id = `proj-created-${projectCounter}`;
-      const title = payload.title || "Untitled";
+      const title = payload.title?.trim() || "Untitled";
       const project: Project = {
         id,
         title,
@@ -304,10 +304,9 @@ export function createMockBardServer() {
     }
     if (method === "PATCH" && m) {
       const patch = (body ?? {}) as Partial<Pick<Project, "title" | "dit_profile" | "favorite">>;
+      if (patch.title !== undefined) patch.title = patch.title.trim() || "Untitled";
       state.detail = { ...state.detail, project: { ...state.detail.project, ...patch } };
-      state.projects = state.projects.map((p) =>
-        p.id === m![1] ? { ...p, ...patch } : p,
-      );
+      state.projects = state.projects.map((p) => (p.id === m![1] ? { ...p, ...patch } : p));
       return Promise.resolve(jsonResponse(state.detail.project));
     }
     if (method === "DELETE" && m) {
@@ -373,9 +372,7 @@ export function createMockBardServer() {
         return Promise.resolve(jsonResponse(failure.body, failure.status));
       }
       uploadCounter += 1;
-      return Promise.resolve(
-        jsonResponse({ upload_path: `uploads/upload-${uploadCounter}.wav` }),
-      );
+      return Promise.resolve(jsonResponse({ upload_path: `uploads/upload-${uploadCounter}.wav` }));
     }
 
     m = url.match(/^\/api\/projects\/([^/]+)\/jobs$/);
@@ -502,4 +499,4 @@ export function createMockBardServer() {
   };
 }
 
-export type MockBardServer = ReturnType<typeof createMockBardServer>;
+export type MockLyreServer = ReturnType<typeof createMockLyreServer>;

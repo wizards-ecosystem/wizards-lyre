@@ -1,8 +1,8 @@
-# Wizard's Lyre — SPEC
+# The Wizard's Lyre: spec
 
-This file is the sole product spec. Implement it in phase order. Do not invent extra engines, unofficial APIs, or a one-click generate page. Do not follow `wizards-conclave/docs/BARD_HANDOFF.md`; that document is a pointer here.
+This file is the sole product spec. Implement it in phase order. Do not invent extra engines, unofficial APIs, or a one-click generate page.
 
-**Machine:** Windows, RTX 4070 Ti SUPER 16 GB, 32 GB RAM, i7-13700KF.
+**Target hardware:** a 16 GB-class NVIDIA GPU (developed against an RTX 4070 Ti SUPER) on Linux/WSL2 or Windows.
 **User:** single local user. No auth. No cloud deploy.
 **Bind:** `127.0.0.1` only.
 
@@ -10,7 +10,7 @@ This file is the sole product spec. Implement it in phase order. Do not invent e
 
 ## 1. Vision
 
-ACE-Step 1.5 is built for **human-centered generation**, not one-click vendor mode. Lyre is a local generative **studio**: throw a seed, listen to takes, iterate with Cover / Repaint / Extract / Lego / Complete, export. The human rides the model; the model does not deliver a finished Spotify track from one prompt.
+ACE-Step 1.5 supports **human-centered generation**. Lyre is a local generative **studio**: throw a seed, listen to takes, iterate with Cover / Repaint / Extract / Lego / Complete, export. The human rides the model; the model does not deliver a finished Spotify track from one prompt.
 
 The product ACE-Step's authors reject (and the old handoff specified): one page with prompt, lyrics, duration, generate, play, download.
 
@@ -21,8 +21,8 @@ The product this spec locks: a library of song **projects**, each with a **plan*
 ## 2. Non-goals (forbidden)
 
 - Unofficial Suno / Udio wrappers or reverse-engineered APIs
-- **Lyria 3, Lyria RealTime, ElevenLabs Music, Stability Audio** — no adapters, no stubs, no API keys, no Gemini client. `agy` Google login is Conclave coding, not music.
-- Magenta RealTime 2 (Apple Silicon realtime; Windows JAX is offline jam, not this product)
+- **Lyria 3, Lyria RealTime, ElevenLabs Music, Stability Audio:** no adapters, stubs, API keys, or Gemini client.
+- Magenta RealTime 2 (Apple Silicon realtime; its Windows JAX mode is an offline jam tool outside this product)
 - LeVo 2 / SongGeneration (VRAM + non-commercial Tencent license)
 - YuE as a second generator
 - Full DAW: mixer, MIDI piano roll, VST/AU plugins, automation lanes
@@ -35,7 +35,7 @@ The product this spec locks: a library of song **projects**, each with a **plan*
 
 ## 3. Fully local (locked)
 
-Every generate / cover / repaint / extract / lego / complete / LoRA job runs **ACE-Step 1.5 on the RTX 4070 Ti SUPER**. No network is required after weights are on disk. Hugging Face download happens once at install (`uv run acestep-download` or equivalent). Runtime inference must not call Google, ElevenLabs, or any music API.
+Every generate / cover / repaint / extract / lego / complete / LoRA job runs **ACE-Step 1.5 on the local GPU**. No network is required after weights are on disk. Hugging Face download happens once at install (`uv run acestep-download` or equivalent). Runtime inference must not call Google, ElevenLabs, or any music API.
 
 ---
 
@@ -64,14 +64,14 @@ Default LM: `acestep-5Hz-lm-1.7B`. Fallback if VRAM is tight: `acestep-5Hz-lm-0.
 
 ### 4.2 Windows backend
 
-ACE-Step docs recommend `vllm` on 8–16 GB. **vLLM is not a reliable native-Windows backend.** Lock:
+ACE-Step docs recommend `vllm` on 8-16 GB. **vLLM is unreliable on native Windows.** Lock:
 
 - Default LM backend: **`pt`**
 - Use `vllm` only if the worker detects a working install at startup; never fail install because vLLM is missing
 
 ### 4.3 VRAM (16 GB card)
 
-One GPU occupant. One loaded DiT + one LM. Jobs **serialize**. Switching `iterate` ↔ `studio_ops` **unloads** the previous DiT before loading the next. Show “loading base model…” in the UI when swapping.
+One GPU occupant. One loaded DiT + one LM. Jobs **serialize**. Switching between `iterate` and `studio_ops` **unloads** the previous DiT before loading the next. Show “loading base model...” in the UI when swapping.
 
 Do not load XL and base at the same time. Do not load a stem-separation net alongside ACE-Step.
 
@@ -100,21 +100,21 @@ Caption is the highest-leverage text field (style, instruments, emotion, vocal, 
 
 ```
 Browser (127.0.0.1)
-    → web/     Vite + React + TypeScript
-    → server/  FastAPI + SQLite job queue
-    → worker/  dedicated process, ACE-Step GPU lock
-    → disk     projects/ and output/ (gitignored audio)
+    -> web/     Vite + React + TypeScript
+    -> server/  FastAPI + SQLite job queue
+    -> worker/  dedicated process, ACE-Step GPU lock
+    -> disk     projects/ and output/ (gitignored audio)
 ```
 
 Three processes conceptually:
 
-1. **server** — HTTP, projects, jobs, file serving. No CUDA.
-2. **worker** — loads ACE-Step, runs one job at a time, writes takes to disk, posts status. CUDA lives here so a GPU crash does not kill HTTP.
-3. **web** — SPA. Dev: Vite proxy to FastAPI. Prod: FastAPI serves `web/dist`.
+1. **server:** HTTP, projects, jobs, file serving. No CUDA.
+2. **worker:** loads ACE-Step, runs one job at a time, writes takes to disk, posts status. CUDA lives here so a GPU crash does not kill HTTP.
+3. **web:** SPA. Dev: Vite proxy to FastAPI. Prod: FastAPI serves `web/dist`.
 
-IPC: worker pulls jobs from SQLite (`queued` → `running` → `done` | `error`) or a localhost queue endpoint. Pick one and stick to it. SQLite is enough.
+IPC: worker pulls jobs from SQLite (`queued` -> `running` -> `done` | `error`) or a localhost queue endpoint. Pick one and stick to it. SQLite is enough.
 
-Port: **8421** (Conclave dashboard is 8420). Override with `BARD_PORT`.
+Port: **8421**. Override with `LYRE_PORT`.
 
 ---
 
@@ -122,7 +122,7 @@ Port: **8421** (Conclave dashboard is 8420). Override with `BARD_PORT`.
 
 ```
 SPEC.md                 this file
-AGENTS.md               Conclave / coding-agent rules
+AGENTS.md               coding-agent rules
 README.md               how to run
 pyproject.toml
 .gitignore
@@ -136,7 +136,7 @@ output/                 extra exports if needed (gitignored)
 checkpoints/            ACE-Step weights (gitignored)
 ```
 
-Python 3.11+ (stable, not 3.14 for the app venv). Package manager: `uv` preferred, pip acceptable.
+Python 3.11+ is supported; the app environment excludes Python 3.14. Package manager: `uv` preferred, pip acceptable.
 
 ---
 
@@ -277,7 +277,7 @@ Write audio only under `projects/` (and `output/` if you keep a flat export fold
 
 ## 9. UI (web)
 
-One SPA. Dark, dense, local-tool aesthetic — not a marketing landing page. No accounts.
+One SPA with a dense, local-tool aesthetic. No marketing landing page or accounts.
 
 ### 9.1 Library
 
@@ -285,9 +285,9 @@ List of projects. New project. Open. Delete (confirm). Play last take inline opt
 
 ### 9.2 Project workspace (three panes)
 
-1. **Plan** — Simple query field; Custom: caption, lyrics (textarea with structure tags), BPM, key, time signature, duration, language, instrumental toggle, caption-rewrite checkbox. Save plan.
-2. **Takes** — newest first. Seed, task, duration, score. Play, download WAV/MP3, set active, “use as source”.
-3. **Waveform** — wavesurfer.js (or equivalent) on the active take. Drag a region → Repaint. Buttons: Generate, Cover, Extract, Lego, Complete. Disable Extract/Lego/Complete unless user confirms base-model swap. Show job progress and “loading base model”.
+1. **Plan:** Simple query field; Custom: caption, lyrics (textarea with structure tags), BPM, key, time signature, duration, language, instrumental toggle, caption-rewrite checkbox. Save plan.
+2. **Takes:** newest first. Seed, task, duration, score. Play, download WAV/MP3, set active, “use as source”.
+3. **Waveform:** wavesurfer.js (or equivalent) on the active take. Drag a region -> Repaint. Buttons: Generate, Cover, Extract, Lego, Complete. Disable Extract/Lego/Complete unless user confirms base-model swap. Show job progress and “loading base model”.
 
 Export: download mix + optional stems + `project.json` / `plan.json` zip. User can drop files into a real DAW.
 
@@ -300,7 +300,7 @@ No mixer, no MIDI, no plugin rack.
 Python module that:
 
 1. On start: detect CUDA, log VRAM, load default `iterate` DiT + 1.7B LM with `pt` backend.
-2. Expose `run_job(job) -> take_meta` mapping job → `GenerationParams` → `generate_music(..., save_dir=take_dir)`.
+2. Expose `run_job(job) -> take_meta` mapping job -> `GenerationParams` -> `generate_music(..., save_dir=take_dir)`.
 3. Hold a process-wide lock. If a swap is needed, unload then load, then run.
 4. Never import FastAPI. Never bind a public port (localhost queue to server is OK).
 5. On failure: write `meta.json` with `error`, mark job `error`, keep GPU lock released.
@@ -316,37 +316,37 @@ Mock for tests: a `worker` that writes a tiny silent WAV and valid `meta.json` w
 Default `testCommand` is pytest. Mock ACE-Step. Cover at least:
 
 - Health and bind: app listens on 127.0.0.1 (TestClient is enough)
-- Create project → plan round-trip on disk
-- Enqueue generate → mocked worker → take appears with mix file + meta seed recorded
+- Create project -> plan round-trip on disk
+- Enqueue generate -> mocked worker -> take appears with mix file + meta seed recorded
 - Path jail: job cannot write `C:\Users\...` outside `projects/` / `output/`
-- `extract` without `studio_ops` is coerced or rejected per §8.1
+- `extract` without `studio_ops` is coerced or rejected per section 8.1
 - Forbidden engines: grep/static test that source does not import `google.genai`, ElevenLabs, Stability, or Suno/Udio client modules
 
 GPU smoke is manual only.
 
 ---
 
-## 12. Implementation phases (Conclave order)
+## 12. Implementation phases
 
 Do not skip ahead. Do not open a “add Lyria” task.
 
-### Phase 1 — Scaffold + generate
+### Phase 1: scaffold + generate
 
-FastAPI health, SQLite jobs, React shell, mocked worker in tests, real worker that can run turbo `text2music`, play/download, take history. README: venv, `acestep-download` for turbo + 1.7B, `BARD_PORT`.
+FastAPI health, SQLite jobs, React shell, mocked worker in tests, real worker that can run turbo `text2music`, play/download, take history. README: venv, `acestep-download` for turbo + 1.7B, `LYRE_PORT`.
 
-### Phase 2 — Studio loop
+### Phase 2: studio loop
 
 Project library, plan editor (simple + custom), waveform + region, cover, repaint, parent_take_id chain.
 
-### Phase 3 — Base swap
+### Phase 3: base swap
 
 Worker unload/load, extract / lego / complete, explicit loading UX, coerce `studio_ops`.
 
-### Phase 4 — Polish
+### Phase 4: polish
 
-ACE-Step quality score on takes, LRC if upstream provides timestamps, LoRA train/load (8-song path from ACE-Step Gradio training, wrapped — not Gradio itself).
+ACE-Step quality score on takes, LRC if upstream provides timestamps, LoRA train/load (8-song path from ACE-Step Gradio training, wrapped behind Lyre's UI).
 
-### Phase 5 — Studio ergonomics
+### Phase 5: studio ergonomics
 
 Still ACE-Step only. Do not open cloud-music tasks.
 
@@ -355,7 +355,7 @@ Still ACE-Step only. Do not open cloud-music tasks.
 - Keyboard shortcuts for generate, play/pause, next/prev take, save plan
 - UI to walk `parent_take_id` (restore an earlier take as active without deleting history)
 
-### Phase 6 — Library and ingest
+### Phase 6: library and ingest
 
 - Search and favorite projects/takes; free-text take notes on `meta.json`
 - Loudness / peak meter on the player (no extra mastering chain)
@@ -368,8 +368,8 @@ Still ACE-Step only. Do not open cloud-music tasks.
 - ACE-Step 1.5: https://github.com/ace-step/ACE-Step-1.5
 - Inference API: `docs/en/INFERENCE.md` in that repo (`GenerationParams`, `task_type`, `generate_music`)
 - Tutorial (mental model + DiT table): `docs/en/Tutorial.md`
-- GPU tiers: `docs/en/GPU_COMPATIBILITY.md` — 16 GB is turbo/sft + 1.7B; XL with offload
-- Install: `docs/en/INSTALL.md` — Python 3.11+ stable
+- GPU tiers: `docs/en/GPU_COMPATIBILITY.md`; 16 GB is turbo/sft + 1.7B, XL with offload
+- Install: `docs/en/INSTALL.md`; Python 3.11+ stable
 
 If upstream parameter names drift, follow ACE-Step's current `GenerationParams` and keep Lyre's HTTP schema stable with an adapter.
 

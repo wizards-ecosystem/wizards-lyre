@@ -1,0 +1,299 @@
+/* --------------------------------------------------------------------------
+   Sky Studio
+
+   A calm, luminous layer over the workstation structure above.  The app keeps
+   its dense music-making capabilities, but presents them as an open studio:
+   one clear blue action, airy white surfaces, and a little more room between
+   decisions.  Keeping the component class names stable also preserves the
+   keyboard, drawer, and narrow-window behaviors defined above.
+   -------------------------------------------------------------------------- */
+
+:root {
+  --sans: Inter, "Segoe UI Variable", "Segoe UI", system-ui, -apple-system, sans-serif;
+}
+
+body {
+  color: var(--text);
+}
+
+.app {
+  background: transparent;
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+summary:focus-visible,
+[tabindex="0"]:focus-visible {
+  box-shadow:
+    0 0 0 3px #ffffff,
+    0 0 0 5px var(--focus);
+}
+
+a {
+  color: var(--signal-strong);
+}
+
+input:hover,
+textarea:hover,
+select:hover {
+  border-color: #a9cce8;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: #9bb0c2;
+}
+input[type="checkbox"],
+input[type="range"] {
+  accent-color: var(--signal);
+}
+
+::-webkit-scrollbar-thumb {
+  background: #b4d1e8;
+  background-clip: padding-box;
+}
+
+.eyebrow {
+  color: #7d9ab4;
+  letter-spacing: 0.12em;
+}
+.hint,
+.empty-copy {
+  color: var(--muted);
+}
+
+.button-secondary,
+.panel-action,
+.take-actions button,
+.take-actions a,
+.swap-compare,
+.lyrics-tag-button,
+.dit-profile-option,
+.export-link {
+  border-color: var(--rule);
+  border-radius: 9px;
+  background: #ffffff;
+  color: var(--text-soft);
+}
+
+.button-secondary:hover:not(:disabled),
+.panel-action:hover:not(:disabled),
+.take-actions button:hover:not(:disabled),
+.take-actions a:hover,
+.swap-compare:hover:not(:disabled),
+.lyrics-tag-button:hover:not(:disabled),
+.dit-profile-option:hover:not(:disabled),
+.export-link:hover {
+  border-color: #a8cce8;
+  background: var(--surface-hover);
+  color: var(--signal-strong);
+}
+
+.button-danger {
+  border-radius: 10px;
+  color: #ffffff;
+}
+
+.icon-button {
+  border-radius: 9px;
+  color: var(--muted);
+}
+
+.icon-button:hover:not(:disabled) {
+  border-color: var(--rule);
+  background: var(--surface-hover);
+  color: var(--signal-strong);
+}
+
+/* Header and shell */
+.health-copy small {
+  color: #91a8bc;
+}
+.shortcut-help summary {
+  padding: 5px 10px;
+}
+kbd {
+  border-color: var(--rule-strong);
+  border-bottom-color: #b4d1e8;
+  background: #f8fbff;
+  color: var(--text-soft);
+}
+
+.body {
+  background: transparent;
+}
+
+.rail-heading {
+  padding-bottom: 17px;
+}
+.new-project {
+  padding: 12px;
+}
+.project-row {
+  padding: 10px 6px 10px 11px;
+  color: var(--text);
+}
+.project-title {
+  font-size: 12px;
+}
+.project-updated {
+  color: #91a9bd;
+}
+.favorite-btn.favorited,
+.take-lora-badge,
+.parent-take-link {
+  color: var(--signal-strong) !important;
+}
+
+/* Composition card */
+.workspace {
+  overflow: hidden;
+}
+.project-context i {
+  background: #a9c4d8;
+}
+.export-link {
+  min-height: 34px;
+  font-size: 11px;
+}
+.error {
+  border-color: #f1c4cd;
+  border-radius: 13px;
+  background: #fff7f8;
+  box-shadow: 0 16px 36px rgba(133, 49, 64, 0.16);
+  color: #a73e50;
+}
+.error .icon-button {
+  color: #a73e50;
+}
+.job-strip {
+  padding: 7px 24px;
+}
+.job-strip.status-error {
+  background: var(--danger-bg);
+  color: #a73e50;
+}
+.job-model {
+  color: #7191ab;
+}
+
+/* Three bright studio surfaces */
+.save-saving > span {
+  background: var(--signal);
+}
+.disclosure-button {
+  border-radius: 0;
+  color: var(--text-soft);
+}
+.disclosure-button span:last-child {
+  color: var(--signal-strong);
+}
+.stage-heading {
+  padding-bottom: 16px;
+}
+.selected-take-summary {
+  color: #7895ad;
+}
+.selected-take-summary > span {
+  color: var(--text-soft);
+}
+.selected-take-summary code {
+  border-left-color: #d6e7f5;
+  color: #7895ad;
+}
+.source-shelf.has-source {
+  border-style: solid;
+}
+[part="region-content"] {
+  color: #164b73;
+  text-shadow: none;
+}
+.transport-button-small {
+  box-shadow: none;
+}
+.region-bar {
+  color: #7391ab;
+}
+.region-bar.has-region {
+  color: var(--signal-strong);
+}
+
+/* Operations become three quiet, legible cards instead of a dense command rail. */
+.operation-dock {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  padding-bottom: 24px;
+}
+.operation-group {
+  flex-direction: column;
+}
+.lora-active-badge {
+  color: #0877bf;
+}
+
+/* Takes and dialogs */
+.inspector-tabs > button[role="tab"] {
+  color: #7694ad;
+}
+.inspector-tabs > button[role="tab"]:hover {
+  background: #f0f8ff;
+  color: var(--text-soft);
+}
+.take-identity strong,
+.style-source-list strong {
+  color: var(--text-soft);
+}
+.take-error {
+  color: #bc4256;
+}
+
+@media (max-width: 1359px) {
+  .library,
+  .plan {
+    bottom: 0;
+  }
+}
+
+@media (max-width: 959px) {
+  .body {
+    padding: 0;
+  }
+  .workspace {
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
+  .library,
+  .plan,
+  .studio-inspector {
+    bottom: 0;
+  }
+  .library,
+  .plan {
+    border-radius: 0 18px 18px 0;
+  }
+  .studio-inspector {
+    border-radius: 18px 0 0 18px;
+  }
+  .waveform {
+    background: #ffffff;
+  }
+  .operation-dock {
+    padding-bottom: 0;
+    border-top: 1px solid #d6e8f5;
+  }
+  .operation-group {
+    border-radius: 0;
+  }
+}
+
+@media (max-width: 560px) {
+  .health {
+    padding: 5px 7px;
+  }
+  .waveform-canvas {
+    min-height: 165px;
+  }
+}

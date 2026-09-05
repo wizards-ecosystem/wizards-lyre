@@ -1,1 +1,1 @@
-"""ACE-Step GPU worker. One DiT+LM loaded. Jobs serialize. See SPEC.md §10."""
+"""ACE-Step GPU worker. One DiT+LM loaded. Jobs serialize. See SPEC.md section 10."""

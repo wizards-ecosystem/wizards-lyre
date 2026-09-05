@@ -9,47 +9,17 @@ dedup helpers, and the mock worker's adapter file.
 
 from __future__ import annotations
 
-import threading
-import time
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from helpers import wait_for_job
 
 from server import jobs as jobs_module
 from server import storage
-from server.app import app
 from worker import mock_worker
-from worker.run_worker import run_loop
 
 MIN_LORA_SOURCE_TAKES = 8
-
-
-@pytest.fixture()
-def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("BARD_PROJECTS_DIR", str(tmp_path / "projects"))
-    monkeypatch.setenv("BARD_DB_PATH", str(tmp_path / "bard.db"))
-    monkeypatch.setenv("BARD_WORKER", "mock")
-
-    stop_event = threading.Event()
-    worker_thread = threading.Thread(target=run_loop, args=(stop_event, 0.01), daemon=True)
-    worker_thread.start()
-    try:
-        with TestClient(app) as c:
-            yield c
-    finally:
-        stop_event.set()
-        worker_thread.join(timeout=5)
-
-
-def _wait_for_job(client: TestClient, job_id: str, timeout: float = 5.0) -> dict:
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        job = client.get(f"/api/jobs/{job_id}").json()
-        if job["status"] in ("done", "error"):
-            return job
-        time.sleep(0.01)
-    raise TimeoutError(f"job {job_id} did not finish within {timeout}s")
 
 
 def _make_takes(client: TestClient, project_id: str, count: int) -> list[str]:
@@ -60,7 +30,7 @@ def _make_takes(client: TestClient, project_id: str, count: int) -> list[str]:
             json={"action": "generate", "dit_profile": "iterate", "seed": -1},
         )
         assert resp.status_code == 200
-        job = _wait_for_job(client, resp.json()["id"])
+        job = wait_for_job(client, resp.json()["id"])
         assert job["status"] == "done", job.get("error")
         take_ids.append(job["take_id"])
     return take_ids

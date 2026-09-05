@@ -169,8 +169,7 @@ export const api = {
       body: JSON.stringify({ title, query }),
     }),
   getProject: (id: string) => request<ProjectDetail>(`/api/projects/${id}`),
-  deleteProject: (id: string) =>
-    request<void>(`/api/projects/${id}`, { method: "DELETE" }),
+  deleteProject: (id: string) => request<void>(`/api/projects/${id}`, { method: "DELETE" }),
   patchProject: (id: string, patch: Partial<Pick<Project, "title" | "dit_profile" | "favorite">>) =>
     request<Project>(`/api/projects/${id}`, {
       method: "PATCH",
@@ -233,7 +232,9 @@ export const api = {
       method: "POST",
       body: JSON.stringify({
         action: "cover",
-        ...("takeId" in source ? { source_take_id: source.takeId } : { upload_path: source.uploadPath }),
+        ...("takeId" in source
+          ? { source_take_id: source.takeId }
+          : { upload_path: source.uploadPath }),
         audio_cover_strength: strength,
         seed,
         ...(loraId ? { lora_id: loraId } : {}),
@@ -252,7 +253,9 @@ export const api = {
       method: "POST",
       body: JSON.stringify({
         action: "repaint",
-        ...("takeId" in source ? { source_take_id: source.takeId } : { upload_path: source.uploadPath }),
+        ...("takeId" in source
+          ? { source_take_id: source.takeId }
+          : { upload_path: source.uploadPath }),
         repainting_start: start,
         repainting_end: end,
         seed,
@@ -326,12 +329,7 @@ export const api = {
   // truncation (the server ignores `limit` in that case), so an older
   // long-running training can never be pushed out by newer or finished
   // jobs. The recency `limit` applies only when `active` is not set.
-  listJobs: (opts?: {
-    projectId?: string;
-    action?: string;
-    active?: boolean;
-    limit?: number;
-  }) => {
+  listJobs: (opts?: { projectId?: string; action?: string; active?: boolean; limit?: number }) => {
     const params = new URLSearchParams();
     if (opts?.projectId) params.set("project_id", opts.projectId);
     if (opts?.action) params.set("action", opts.action);

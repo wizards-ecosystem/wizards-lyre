@@ -1,14 +1,15 @@
 """FastAPI app: health, projects, plan, takes, jobs. No CUDA here.
 
 See SPEC.md sec 8 for the HTTP API and sec 14 for phase 1 definition of done.
-Binds 127.0.0.1 only; port defaults to 8421, overridable via BARD_PORT.
+Binds 127.0.0.1 only; port defaults to 8421, overridable via LYRE_PORT.
 """
 
 from __future__ import annotations
 
 import os
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import Any, AsyncIterator, Optional
+from typing import Any
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response
@@ -25,7 +26,7 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     yield
 
 
-app = FastAPI(title="Wizard's Lyre", version="0.1.0", lifespan=_lifespan)
+app = FastAPI(title="The Wizard's Lyre", version="0.1.0", lifespan=_lifespan)
 
 
 class _MaxRequestBodyMiddleware:
@@ -81,14 +82,14 @@ app.add_middleware(_MaxRequestBodyMiddleware)
 
 
 class CreateProjectBody(BaseModel):
-    title: Optional[str] = None
-    query: Optional[str] = None
+    title: str | None = None
+    query: str | None = None
 
 
 class PatchProjectBody(BaseModel):
-    title: Optional[str] = None
-    dit_profile: Optional[str] = None
-    favorite: Optional[bool] = None
+    title: str | None = None
+    dit_profile: str | None = None
+    favorite: bool | None = None
 
 
 class ActiveTakeBody(BaseModel):
@@ -96,24 +97,24 @@ class ActiveTakeBody(BaseModel):
 
 
 class TakeAnnotationBody(BaseModel):
-    favorite: Optional[bool] = None
-    notes: Optional[str] = None
+    favorite: bool | None = None
+    notes: str | None = None
 
 
 class JobBody(BaseModel):
     action: str
-    dit_profile: Optional[str] = None
-    source_take_id: Optional[str] = None
-    source_take_ids: Optional[list[str]] = None
-    upload_path: Optional[str] = None
+    dit_profile: str | None = None
+    source_take_id: str | None = None
+    source_take_ids: list[str] | None = None
+    upload_path: str | None = None
     repainting_start: float = 0
     repainting_end: float = -1
-    track_name: Optional[str] = None
-    name: Optional[str] = None
+    track_name: str | None = None
+    name: str | None = None
     # SPEC.md sec 4.4 "LoRA train / load": a trained style-pack lora to
     # apply to this generate/cover/repaint (server.jobs.enqueue_job
     # resolves and validates it -- see _resolve_lora / _resolve_dit_profile).
-    lora_id: Optional[str] = None
+    lora_id: str | None = None
     # SPEC.md sec 8.1: audio_cover_strength is a 0-1 mix ratio ACE-Step
     # expects; ge/le also reject NaN/+-inf (any comparison with NaN is
     # False, so it fails both bounds) instead of forwarding them to the
@@ -124,43 +125,43 @@ class JobBody(BaseModel):
 
 
 @app.exception_handler(storage.PathJailError)
-def _path_jail_handler(request, exc: storage.PathJailError):  # noqa: ANN001, ARG001
+def _path_jail_handler(request, exc: storage.PathJailError):
     return JSONResponse(status_code=400, content={"detail": str(exc)})
 
 
 @app.exception_handler(storage.ProjectNotFound)
-def _project_not_found_handler(request, exc: storage.ProjectNotFound):  # noqa: ANN001, ARG001
+def _project_not_found_handler(request, exc: storage.ProjectNotFound):
     return JSONResponse(status_code=404, content={"detail": f"project not found: {exc}"})
 
 
 @app.exception_handler(storage.TakeNotFound)
-def _take_not_found_handler(request, exc: storage.TakeNotFound):  # noqa: ANN001, ARG001
+def _take_not_found_handler(request, exc: storage.TakeNotFound):
     return JSONResponse(status_code=404, content={"detail": f"take not found: {exc}"})
 
 
 @app.exception_handler(storage.LoraNotFound)
-def _lora_not_found_handler(request, exc: storage.LoraNotFound):  # noqa: ANN001, ARG001
+def _lora_not_found_handler(request, exc: storage.LoraNotFound):
     return JSONResponse(status_code=404, content={"detail": f"lora not found: {exc}"})
 
 
 @app.exception_handler(jobs.JobNotFound)
-def _job_not_found_handler(request, exc: jobs.JobNotFound):  # noqa: ANN001, ARG001
+def _job_not_found_handler(request, exc: jobs.JobNotFound):
     return JSONResponse(status_code=404, content={"detail": f"job not found: {exc}"})
 
 
 @app.exception_handler(jobs.JobError)
-def _job_error_handler(request, exc: jobs.JobError):  # noqa: ANN001, ARG001
+def _job_error_handler(request, exc: jobs.JobError):
     return JSONResponse(status_code=400, content={"detail": str(exc)})
 
 
 @app.exception_handler(ValueError)
-def _value_error_handler(request, exc: ValueError):  # noqa: ANN001, ARG001
+def _value_error_handler(request, exc: ValueError):
     return JSONResponse(status_code=400, content={"detail": str(exc)})
 
 
 @app.get("/api/health")
 def health() -> dict[str, Any]:
-    backend = os.environ.get("BARD_WORKER", "acestep")
+    backend = os.environ.get("LYRE_WORKER", "acestep")
     status = jobs.get_worker_status()
     if status is None:
         return {
@@ -343,8 +344,8 @@ def get_job(job_id: str) -> dict:
 @app.get("/api/jobs")
 def list_jobs(
     limit: int = 20,
-    project_id: Optional[str] = None,
-    action: Optional[str] = None,
+    project_id: str | None = None,
+    action: str | None = None,
     active: bool = False,
 ) -> list[dict]:
     # SPEC.md sec 8 "GET /api/jobs | recent jobs". project_id/action are
@@ -356,9 +357,7 @@ def list_jobs(
     # running) worklist with no recency truncation, so recovery finds an
     # old running training no matter how many newer or finished rows exist
     # behind it (see jobs.list_recent_jobs for why `limit` doesn't apply).
-    return jobs.list_recent_jobs(
-        limit=limit, project_id=project_id, action=action, active=active
-    )
+    return jobs.list_recent_jobs(limit=limit, project_id=project_id, action=action, active=active)
 
 
 # Prod: FastAPI serves the built SPA from web/dist (SPEC.md sec 5). Registered
@@ -381,7 +380,7 @@ else:
 def main() -> None:
     import uvicorn
 
-    uvicorn.run(app, host=config.HOST, port=config.bard_port())
+    uvicorn.run(app, host=config.HOST, port=config.lyre_port())
 
 
 if __name__ == "__main__":

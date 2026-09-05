@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
-# Wizard's Lyre local launcher. Run this instead of invoking Python, npm, or
+# The Wizard's Lyre local launcher. Run this instead of invoking Python, npm, or
 # ACE-Step directly so all writable state stays under this checkout.
 set -euo pipefail
 
 ROOT="$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 VENV="$ROOT/.venv"
 ACE_DIR="$ROOT/vendor/ACE-Step-1.5"
+ACE_SECURITY_OVERRIDES="$ROOT/requirements/ace-step-security.txt"
 ACE_REPOSITORY="https://github.com/ACE-Step/ACE-Step-1.5.git"
 ACE_REVISION="$(tr -d '\n' < "$ROOT/ACE_STEP_REVISION")"
+RELEASE_MANIFEST="$ROOT/LYRE_RELEASE.json"
 
 if [[ ! "$ACE_REVISION" =~ ^[0-9a-f]{40}$ ]]; then
   echo "ACE_STEP_REVISION must contain one 40-character Git commit ID." >&2
@@ -49,10 +51,10 @@ prepare_environment() {
 
   # Lyre and ACE-Step model/runtime state. The two checkpoint variables serve
   # Lyre's worker and ACE-Step's downloader/handlers, respectively.
-  export BARD_PROJECTS_DIR="$ROOT/projects"
-  export BARD_OUTPUT_DIR="$ROOT/output"
-  export BARD_DB_PATH="$ROOT/projects/bard.db"
-  export BARD_CHECKPOINTS_DIR="$ROOT/checkpoints"
+  export LYRE_PROJECTS_DIR="$ROOT/projects"
+  export LYRE_OUTPUT_DIR="$ROOT/output"
+  export LYRE_DB_PATH="$ROOT/projects/lyre.db"
+  export LYRE_CHECKPOINTS_DIR="$ROOT/checkpoints"
   export ACESTEP_PROJECT_ROOT="$ROOT"
   export ACESTEP_CHECKPOINTS_DIR="$ROOT/checkpoints"
 
@@ -63,6 +65,34 @@ prepare_environment() {
 need_command() {
   if ! command -v "$1" >/dev/null 2>&1; then
     echo "Missing required system tool: $1" >&2
+    exit 1
+  fi
+}
+
+need_node() {
+  need_command node
+  need_command npm
+
+  local version major minor
+  version="$(node --version)"
+  version="${version#v}"
+  IFS=. read -r major minor _ <<<"$version"
+  if ((major == 20 && minor >= 19)) || ((major == 22 && minor >= 12)) || ((major > 22)); then
+    return
+  fi
+
+  echo "Node.js 20.19+ or 22.12+ is required; found $version." >&2
+  exit 1
+}
+
+is_release_bundle() {
+  [[ -f "$RELEASE_MANIFEST" ]]
+}
+
+require_source_checkout() {
+  if is_release_bundle; then
+    echo "This command requires the full source checkout; it is not included in a release bundle." >&2
+    echo "Source: https://github.com/wizards-ecosystem/wizards-lyre" >&2
     exit 1
   fi
 }
@@ -106,30 +136,136 @@ install_dependencies() {
     # shellcheck disable=SC1091
     # This path is created by ensure_venv above.
     source "$VENV/bin/activate"
-    uv sync --active --extra dev --no-install-project --locked
-    # Keep Lyre's test dependencies while adding ACE-Step to this same local
-    # environment. ACE-Step's own checked-in lock controls its dependencies.
+    # Preserve the pinned ACE-Step environment on repeat installs. Without
+    # --inexact, this first sync removes the GPU stack as "extraneous" only
+    # for the second sync below to install it again. Source checkouts include
+    # contributor tools; slim release bundles install runtime dependencies only.
+    local sync_args=(--active --no-install-project --locked --inexact)
+    if ! is_release_bundle; then
+      sync_args+=(--extra dev)
+    fi
+    uv sync "${sync_args[@]}"
+    # ACE-Step's own checked-in lock controls its dependencies.
     uv sync --project "$ACE_DIR" --active --inexact --locked
+    # Upstream pins a full demo application environment. Lyre does not use its
+    # Gradio UI, and several shared versions have published fixes. Remove the
+    # unused UI and apply Lyre's exact, tested security overlay last.
+    uv pip uninstall --python "$VENV/bin/python" gradio gradio-client
+    uv pip install --python "$VENV/bin/python" --requirement "$ACE_SECURITY_OVERRIDES"
   )
 }
 
 install_web() {
-  need_command npm
+  if is_release_bundle; then
+    if [[ -f "$ROOT/web/dist/index.html" ]]; then
+      echo "Using the prebuilt release UI (Node.js is not required)."
+      return
+    fi
+    echo "The release bundle is incomplete: web/dist/index.html is missing." >&2
+    exit 1
+  fi
+  need_node
   npm --prefix "$ROOT/web" ci
   npm --prefix "$ROOT/web" run build
 }
 
-download_models() {
+require_downloader() {
   if [[ ! -x "$VENV/bin/acestep-download" ]]; then
-    echo "ACE-Step is not installed. Run '$0 bootstrap' first." >&2
+    echo "ACE-Step is not installed. Run '$0 install' first." >&2
     exit 1
   fi
-  # Core includes Turbo, VAE, text encoder, and the 1.7B planner. The extra
-  # profiles make every Lyre action available: polish, studio ops, and XL.
+}
+
+download_core_models() {
+  require_downloader
+  # Core includes Turbo, VAE, text encoder, and the 1.7B planner. It is enough
+  # for the default iterate workflow: generate, cover, and repaint.
   "$VENV/bin/acestep-download" --dir "$ROOT/checkpoints"
+}
+
+download_standard_models() {
+  download_core_models
+  # SFT enables polish; base enables extract, lego, complete, and LoRA.
   "$VENV/bin/acestep-download" --dir "$ROOT/checkpoints" --model acestep-v15-sft --skip-main
   "$VENV/bin/acestep-download" --dir "$ROOT/checkpoints" --model acestep-v15-base --skip-main
+}
+
+download_models() {
+  download_standard_models
+  # XL is optional at runtime but included by the full bootstrap so every
+  # profile exposed by Lyre is available after one command.
   "$VENV/bin/acestep-download" --dir "$ROOT/checkpoints" --model acestep-v15-xl-turbo --skip-main
+}
+
+doctor() {
+  local failures=0
+
+  doctor_ok() { printf '  [ok]   %s\n' "$1"; }
+  doctor_warn() { printf '  [warn] %s\n' "$1"; }
+  doctor_fail() {
+    printf '  [fail] %s\n' "$1"
+    failures=$((failures + 1))
+  }
+
+  echo "The Wizard's Lyre readiness check"
+  if command -v git >/dev/null 2>&1; then doctor_ok "git $(git --version | awk '{print $3}')"; else doctor_fail "git is missing"; fi
+  if command -v uv >/dev/null 2>&1; then doctor_ok "$(uv --version)"; else doctor_fail "uv is missing"; fi
+
+  if is_release_bundle; then
+    doctor_ok "prebuilt release UI (Node.js is not required)"
+  elif command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then
+    local node_version node_major node_minor
+    node_version="$(node --version)"
+    IFS=. read -r node_major node_minor _ <<<"${node_version#v}"
+    if ((node_major == 20 && node_minor >= 19)) || ((node_major == 22 && node_minor >= 12)) || ((node_major > 22)); then
+      doctor_ok "Node.js ${node_version#v}"
+    else
+      doctor_fail "Node.js ${node_version#v} is too old (need 20.19+ or 22.12+)"
+    fi
+  else
+    doctor_fail "Node.js and npm are required"
+  fi
+
+  if [[ -x "$VENV/bin/python" ]]; then doctor_ok "Python $("$VENV/bin/python" --version 2>&1 | awk '{print $2}') environment"; else doctor_fail ".venv is missing; run '$0 install'"; fi
+  if [[ -d "$ACE_DIR/.git" ]] && [[ "$(git -C "$ACE_DIR" rev-parse HEAD 2>/dev/null || true)" == "$ACE_REVISION" ]]; then
+    doctor_ok "ACE-Step source is at the pinned revision"
+  else
+    doctor_fail "ACE-Step source is missing or not at the pinned revision"
+  fi
+  if [[ -f "$ROOT/web/dist/index.html" ]]; then doctor_ok "production web bundle"; else doctor_fail "web bundle is missing; run '$0 build-web'"; fi
+
+  local model label
+  while IFS='|' read -r model label; do
+    if [[ -f "$ROOT/checkpoints/$model/model.safetensors" ]] || \
+      [[ -f "$ROOT/checkpoints/$model/model.safetensors.index.json" ]]; then
+      doctor_ok "$label model"
+    else
+      doctor_warn "$label model is not downloaded"
+    fi
+  done <<'EOF'
+acestep-v15-turbo|iterate
+acestep-v15-sft|polish
+acestep-v15-base|studio_ops
+acestep-v15-xl-turbo|quality
+EOF
+
+  if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi >/dev/null 2>&1; then
+    doctor_ok "$(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader | head -n 1)"
+  else
+    doctor_warn "NVIDIA GPU is unavailable (the mock worker still works)"
+  fi
+  if command -v ffmpeg >/dev/null 2>&1; then doctor_ok "FFmpeg (style-pack training)"; else doctor_warn "FFmpeg is missing; style-pack training will not work"; fi
+
+  if ((failures)); then
+    if is_release_bundle; then
+      printf '\n%d required check(s) failed. See README.md.\n' "$failures" >&2
+    else
+      printf '\n%d required check(s) failed. See docs/INSTALLATION.md.\n' "$failures" >&2
+    fi
+    return 1
+  fi
+  echo
+  echo "Required checks passed. Warnings only affect the named optional capabilities."
 }
 
 usage() {
@@ -137,19 +273,35 @@ usage() {
 Usage: ./scripts/lyre <command>
 
 Commands:
-  bootstrap  Install dependencies, build the web app, and download every
+  bootstrap  Install dependencies, prepare the web app, and download every
              ACE-Step model profile Lyre exposes into this checkout.
-  install    Install dependencies and build the web app, without model files.
+  install    Install dependencies and prepare the web app, without model files.
   models     Download or resume ACE-Step model downloads only.
+  models-core
+             Download the default iterate profile only (~10 GB).
+  models-standard
+             Download every profile except optional XL quality (~20 GB).
   server     Start Lyre's HTTP server on 127.0.0.1:8421.
   worker     Start Lyre's local GPU worker.
+  smoke-gpu  Run the manual ACE-Step GPU smoke test.
+  live-check Run the end-to-end check against a running server and worker.
+  doctor     Check tools, local install, models, GPU, and optional FFmpeg.
+  paths      Print the project-local writable paths.
+EOF
+  if ! is_release_bundle; then
+    cat <<EOF
+
+Source checkout commands:
   web        Start the frontend development server.
   build-web  Build the frontend bundle served by the HTTP server.
   test       Run the Python test suite.
   test-web   Run the frontend test suite.
-  smoke-gpu  Run the manual ACE-Step GPU smoke test.
-  paths      Print the project-local writable paths.
+  lint       Check formatting and lint both stacks (and the launcher).
+  audit      Check installed Python and locked frontend dependencies.
+  format     Reformat both stacks in place.
+  release    Build reproducible runtime archives (source checkout only).
 EOF
+  fi
 }
 
 prepare_environment
@@ -170,6 +322,12 @@ case "${1:-}" in
   models)
     download_models
     ;;
+  models-core)
+    download_core_models
+    ;;
+  models-standard)
+    download_standard_models
+    ;;
   server)
     ensure_venv
     exec "$VENV/bin/python" -m server.app
@@ -179,23 +337,85 @@ case "${1:-}" in
     exec "$VENV/bin/python" -m worker.run_worker
     ;;
   web)
-    need_command npm
+    require_source_checkout
+    need_node
     exec npm --prefix "$ROOT/web" run dev
     ;;
   build-web)
+    require_source_checkout
     install_web
     ;;
   test)
+    require_source_checkout
     ensure_venv
     exec "$VENV/bin/python" -m pytest
     ;;
   test-web)
+    require_source_checkout
     need_command npm
     exec npm --prefix "$ROOT/web" test
+    ;;
+  lint)
+    require_source_checkout
+    ensure_venv
+    need_command npm
+    "$VENV/bin/ruff" check .
+    "$VENV/bin/ruff" format --check .
+    "$VENV/bin/mypy"
+    "$VENV/bin/reuse" lint
+    npm --prefix "$ROOT/web" run lint
+    # Optional system tool: skip the launcher lint rather than fail without it.
+    if command -v shellcheck >/dev/null 2>&1; then
+      shellcheck "$ROOT/scripts/lyre"
+    else
+      echo "shellcheck not installed; skipping the launcher lint." >&2
+    fi
+    ;;
+  audit)
+    require_source_checkout
+    ensure_venv
+    need_node
+    # These advisories require attacker-controlled model/checkpoint/cache files
+    # or build paths that Lyre never accepts. See docs/SECURITY_AUDIT.md for the
+    # reachability analysis and review rule. Any new advisory still fails.
+    "$VENV/bin/pip-audit" --progress-spinner=off \
+      --ignore-vuln PYSEC-2026-2447 \
+      --ignore-vuln PYSEC-2026-3624 \
+      --ignore-vuln PYSEC-2025-217 \
+      --ignore-vuln PYSEC-2026-2288 \
+      --ignore-vuln PYSEC-2026-2289 \
+      --ignore-vuln PYSEC-2026-2290 \
+      --ignore-vuln CVE-2026-9856 \
+      --ignore-vuln PYSEC-2025-49 \
+      --ignore-vuln PYSEC-2026-3447
+    npm audit --audit-level=moderate --prefix "$ROOT/web"
+    ;;
+  format)
+    require_source_checkout
+    ensure_venv
+    need_command npm
+    "$VENV/bin/ruff" format .
+    "$VENV/bin/ruff" check --fix .
+    npm --prefix "$ROOT/web" run format
+    ;;
+  release)
+    require_source_checkout
+    ensure_venv
+    install_web
+    shift
+    exec "$VENV/bin/python" scripts/build_release.py "$@"
     ;;
   smoke-gpu)
     ensure_venv
     exec "$VENV/bin/python" scripts/smoke-gpu.py
+    ;;
+  live-check)
+    ensure_venv
+    shift
+    exec "$VENV/bin/python" scripts/live_stack_check.py "$@"
+    ;;
+  doctor)
+    doctor
     ;;
   paths)
     cat <<EOF
