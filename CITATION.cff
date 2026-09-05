@@ -1,0 +1,15 @@
+cff-version: 1.2.0
+message: "If The Wizard's Lyre supports your work, please cite the software using this metadata."
+title: "The Wizard's Lyre"
+type: software
+authors:
+  - name: "The Wizard's Conclave"
+version: 0.1.0
+license: MIT
+repository-code: "https://github.com/wizards-ecosystem/wizards-lyre"
+url: "https://github.com/wizards-ecosystem/wizards-lyre"
+keywords:
+  - generative music
+  - ACE-Step
+  - local-first
+  - music production

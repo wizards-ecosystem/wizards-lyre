@@ -151,6 +151,7 @@ it through port forwarding, a reverse proxy, or a public bind. Read the
 | [Troubleshooting](docs/TROUBLESHOOTING.md) | Worker startup, missing weights, VRAM, FFmpeg, and stuck jobs |
 | [Live stack test](docs/LIVE_STACK_TEST.md) | End-to-end verification against real weights and a real GPU |
 | [Contributing](CONTRIBUTING.md) | GPU-free setup, project scope, test loop, and pull requests |
+| [Governance](GOVERNANCE.md) | Maintainer responsibilities, decisions, and repository authority |
 | [Support](SUPPORT.md) | Where to ask for help and what diagnostics to include |
 | [Release guide](docs/RELEASING.md) | Reproducible, security, browser, and GPU release gates |
 | [Repository settings](docs/REPOSITORY_SETTINGS.md) | GitHub contribution, branch, workflow, and release controls |

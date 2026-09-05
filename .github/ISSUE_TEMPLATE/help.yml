@@ -32,3 +32,13 @@ body:
       label: Relevant output
       description: Paste the smallest server or worker log excerpt that shows the problem.
       render: shell
+
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy check
+      options:
+        - label: >-
+            I removed credentials, personal paths, private audio, model weights,
+            and generated projects
+          required: true

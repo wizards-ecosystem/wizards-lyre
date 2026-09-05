@@ -150,4 +150,5 @@ attribution, and [third-party notices](THIRD_PARTY_NOTICES.md).
 
 By participating you agree to the [Code of Conduct](CODE_OF_CONDUCT.md).
 Questions that are not code changes belong in the paths described by
-[SUPPORT.md](SUPPORT.md).
+[SUPPORT.md](SUPPORT.md). The project's roles and decision process are recorded
+in [GOVERNANCE.md](GOVERNANCE.md).

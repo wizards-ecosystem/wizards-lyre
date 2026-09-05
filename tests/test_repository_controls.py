@@ -49,6 +49,8 @@ def test_repository_has_review_and_security_entry_points() -> None:
     for relative in (
         "CODE_OF_CONDUCT.md",
         "CONTRIBUTING.md",
+        "CITATION.cff",
+        "GOVERNANCE.md",
         "LICENSE",
         "SECURITY.md",
         "SUPPORT.md",
