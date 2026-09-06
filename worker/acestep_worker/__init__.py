@@ -111,9 +111,10 @@ save_every_n_epochs=..., output_dir=...)`); and `acestep.training.trainer.
 LoRATrainer(dit_handler=..., lora_config=..., training_config=...)`, whose
 `train_from_preprocessed(tensor_dir)` is a *generator* yielding `(step, loss,
 status)` -- the training loop only actually runs while this generator is
-being iterated, and it writes the final adapter weights to
-`<training_config.output_dir>/final/` itself once exhausted (no separate
-export call needed for a first cut). `dit_handler` is the same `AceStepHandler`
+being iterated, and ACE-Step writes the final PEFT adapter to
+`<training_config.output_dir>/final/adapter/` itself once exhausted. Lyre's
+adapter flattens that upstream implementation detail back to its stable
+`<training_config.output_dir>/final/` inference path. `dit_handler` is the same `AceStepHandler`
 instance `_ensure_loaded` already produces for generation -- LoRA training
 reuses whichever DiT is currently loaded rather than a second handler.
 Reusing it has a consequence `_STATE`'s own lora bookkeeping (`lora_id`/
@@ -136,8 +137,8 @@ specifically `LoraManagerMixin`
 (`acestep/core/generation/handler/lora_manager.py`), which `AceStepHandler`
 mixes in, and its `acestep/core/generation/handler/lora/lifecycle.py` +
 `.../lora/controls.py` implementations. `add_lora(lora_path, adapter_name)`
-injects a PEFT adapter directory (the same `<...>/adapter/final/` layout
-`train_lora` above writes, containing `adapter_config.json`) into the
+injects a PEFT adapter directory (Lyre's normalized `<...>/adapter/final/`
+layout, containing `adapter_config.json`) into the
 decoder, wrapping it in a PEFT `PeftModel` the first time it's called
 without disturbing the base weights; `set_active_lora_adapter(adapter_name)`
 selects which loaded adapter subsequent inference calls actually use, and
@@ -168,7 +169,7 @@ Two things worth flagging about what `train_lora` deliberately does *not*
 replicate from the real pipeline: (1) `DatasetBuilder.scan_directory` only
 marks a sample `AudioSample.labeled = True` -- and therefore eligible for
 `preprocess_to_tensors`, which silently skips unlabeled samples -- when it
-finds a `.caption.txt` sidecar (or `.json`/CSV) caption next to the audio
+finds a `<basename>.caption.txt` sidecar (or `.json`/CSV) caption next to the audio
 file; this adapter's `train_lora` signature carries no per-song captions,
 only one `name` on the job for the whole style pack, so
 every staged source file is given an identical `.caption.txt` sidecar

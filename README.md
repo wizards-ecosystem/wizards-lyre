@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/lyre-hero.svg" alt="The Wizard's Lyre: local generative music studio" width="100%">
+  <img src="docs/assets/lyre-header.png" alt="The Wizard's Lyre: local generative music studio" width="100%">
 </p>
 
 <h1 align="center">The Wizard's Lyre</h1>
@@ -11,10 +11,10 @@
 <p align="center">
   <a href="https://github.com/wizards-ecosystem/wizards-lyre/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/wizards-ecosystem/wizards-lyre/actions/workflows/ci.yml/badge.svg"></a>
   <a href="https://github.com/wizards-ecosystem/wizards-lyre/actions/workflows/codeql.yml"><img alt="CodeQL" src="https://github.com/wizards-ecosystem/wizards-lyre/actions/workflows/codeql.yml/badge.svg"></a>
-  <a href="CHANGELOG.md"><img alt="Public preview" src="https://img.shields.io/badge/status-public%20preview-5d32a8"></a>
-  <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-241345"></a>
-  <a href="pyproject.toml"><img alt="Python 3.11 and 3.12" src="https://img.shields.io/badge/python-3.11%20%7C%203.12-bd94ef"></a>
-  <img alt="Local only" src="https://img.shields.io/badge/inference-local%20only-75c8ba">
+  <a href="https://github.com/wizards-ecosystem/wizards-lyre/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/wizards-ecosystem/wizards-lyre?display_name=tag&amp;sort=semver&amp;color=456348"></a>
+  <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-272522"></a>
+  <a href="pyproject.toml"><img alt="Python 3.11 and 3.12" src="https://img.shields.io/badge/python-3.11%20%7C%203.12-6f816d"></a>
+  <img alt="Local only" src="https://img.shields.io/badge/inference-local%20only-35633b">
 </p>
 
 <p align="center">
@@ -36,11 +36,11 @@ what works, and push it somewhere new.
 |---|---|---|
 | Start from a simple idea or write the caption, lyrics, BPM, key, meter, sections, and duration yourself. | Cover a take, repaint a selected region, isolate a track, add or replace an instrument, or complete an arrangement. | Compare takes A/B, score and annotate them, restore any earlier take, train a style pack, and export a DAW-ready archive. |
 
-> **Status: Public preview.** All six implementation phases in
-> [SPEC.md](SPEC.md) are built. Source setup is available now. Version 0.1.0 is
-> the first release candidate; downloadable runtime bundles will appear after
-> the documented real-GPU release gates are complete. Missing FFmpeg stops
-> style-pack LoRA training; generation remains available.
+> **Status: Released.** Version 0.1.0 is the first public release. All six
+> implementation phases in [SPEC.md](SPEC.md) are built, and the release is
+> verified through GPU-free CI, a real-browser production-bundle check, and
+> the documented NVIDIA GPU gates. Missing FFmpeg stops style-pack LoRA
+> training; generation remains available.
 
 ## Quick start
 
@@ -48,23 +48,23 @@ The supported path is Linux x86-64 or Windows 11 with WSL2, an NVIDIA GPU,
 `git`, and [`uv`][uv]. The defaults are tuned for 16 GB VRAM. A full setup
 needs at least 55 GB free before space for your music.
 
-Install from the public source repository:
+Download the `.tar.gz` or `.zip` archive and `SHA256SUMS` from the
+[latest release](https://github.com/wizards-ecosystem/wizards-lyre/releases/latest),
+then verify and unpack it. The archive includes the compiled studio UI, so
+Node.js is not required.
 
 ```bash
-git clone https://github.com/wizards-ecosystem/wizards-lyre.git
-cd wizards-lyre
+sha256sum --ignore-missing --check SHA256SUMS
+tar -xzf wizards-lyre-*-linux-x86_64.tar.gz
+cd wizards-lyre-*-linux-x86_64
 ./scripts/lyre bootstrap
 ./scripts/lyre doctor
 ```
 
-Source setup requires Node.js 20.19+ or 22.12+. After 0.1.0 passes the
-[hardware release gates](docs/RELEASING.md#3-run-the-hardware-gates), the
-[Releases page](https://github.com/wizards-ecosystem/wizards-lyre/releases)
-will also provide smaller `.tar.gz` and `.zip` runtime bundles. Those bundles
-include the compiled studio UI, so they do not need Node.js, npm, the test
-suite, or contributor documentation. Both setup paths fetch the pinned
-ACE-Step source and model weights; those large upstream artifacts are not
-redistributed by Lyre.
+To install from source instead, clone the repository and run the same two
+commands from its root. Source setup additionally requires Node.js 20.19+ or
+22.12+. Both setup paths fetch the pinned ACE-Step source and model weights;
+those large upstream artifacts are not redistributed by Lyre.
 
 `bootstrap` creates a local Python environment, installs the pinned ACE-Step
 source, prepares the web app, and downloads every model profile. It is
@@ -150,6 +150,7 @@ it through port forwarding, a reverse proxy, or a public bind. Read the
 | [Governance](GOVERNANCE.md) | Maintainer responsibilities, decisions, and repository authority |
 | [Support](SUPPORT.md) | Where to ask for help and what diagnostics to include |
 | [Release guide](docs/RELEASING.md) | Reproducible, security, browser, and GPU release gates |
+| [0.1.0 release notes](docs/releases/0.1.0.md) | Highlights, verified hardware, test evidence, and supported boundaries |
 | [Repository settings](docs/REPOSITORY_SETTINGS.md) | GitHub contribution, branch, workflow, and release controls |
 | [Dependency audit](docs/SECURITY_AUDIT.md) | ACE-Step overlay and reachability-reviewed advisory exceptions |
 

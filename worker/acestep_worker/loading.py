@@ -7,6 +7,7 @@ onto the loaded handler (SPEC.md sec 4.4).
 
 from __future__ import annotations
 
+import gc
 import inspect
 from pathlib import Path
 from typing import Any
@@ -87,6 +88,30 @@ def _log_cuda_status() -> str:
         return f"CUDA detect: error while querying CUDA/VRAM: {exc}"
 
 
+def _release_accelerator_memory() -> None:
+    """Collect abandoned model/trainer cycles before constructing a DiT.
+
+    ACE-Step's LoRA trainer wraps the decoder in PEFT and Fabric objects that
+    can form reference cycles. Clearing `_STATE["handler"]` makes the old
+    handler unreachable, but reference counting alone does not necessarily
+    free its CUDA allocations before the next job builds another handler. A
+    full collection followed by the allocator cache release keeps the
+    one-DiT invariant true in physical VRAM as well as in `_STATE`.
+
+    Torch stays a lazy optional import: ordinary tests and the server process
+    must remain GPU-free, and cleanup must never turn an otherwise valid load
+    into a failure merely because an accelerator runtime cannot be queried.
+    """
+    gc.collect()
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except (ImportError, AttributeError, RuntimeError):
+        pass
+
+
 def get_loaded_dit_profile() -> str | None:
     """Which DiT profile (if any) is currently loaded in this process's
     memory, or None if nothing has loaded successfully yet. Read-only --
@@ -161,6 +186,7 @@ def _ensure_loaded(dit_profile: str) -> tuple[Any, Any, Any]:
         # Unload the previous DiT before loading the next; never hold two
         # DiTs at once on a 16 GB card (SPEC.md sec 4.3).
         _STATE["handler"] = None
+        _release_accelerator_memory()
         # A freshly constructed handler starts with no LoRA adapters loaded
         # -- forget whatever _ensure_lora_adapter previously recorded onto
         # the *old* handler object, or a later job could wrongly believe the

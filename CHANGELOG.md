@@ -7,8 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Release candidate for the first public release. Everything below describes the
-combined public baseline.
+Nothing yet.
+
+## [0.1.0] - 2026-09-05
+
+First public release. Everything below describes the combined public baseline.
 
 ### Added
 
@@ -117,6 +120,11 @@ are recorded because they shaped the code a contributor will read.
   20 GB layout, and `doctor` recognizes both sharded and single-file weights.
 - Direct worker and GPU-smoke invocations now resolve the checkout-level model
   directory instead of incorrectly looking under `worker/checkpoints/`.
+- Style-pack training now writes the caption sidecar name ACE-Step actually
+  reads and normalizes ACE-Step's nested PEFT output to Lyre's stable adapter
+  path, so a trained pack can be loaded and applied to generation.
+- The live-stack verifier gives LoRA-applied generation the same extended
+  timeout as training, accommodating ACE-Step's low-VRAM CPU decode fallback.
 
 ### Security
 
@@ -129,4 +137,5 @@ are recorded because they shaped the code a contributor will read.
 - GitHub Actions dependencies are pinned to verified full commit SHAs and kept
   current by Dependabot.
 
-[Unreleased]: https://github.com/wizards-ecosystem/wizards-lyre/commits/main
+[Unreleased]: https://github.com/wizards-ecosystem/wizards-lyre/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/wizards-ecosystem/wizards-lyre/releases/tag/v0.1.0

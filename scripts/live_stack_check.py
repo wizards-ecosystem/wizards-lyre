@@ -63,6 +63,7 @@ DURATION_TOLERANCE_SEC = 6.0
 # Real generation is slow, and a studio_ops swap unloads and reloads a
 # checkpoint first.
 JOB_TIMEOUT_SEC = 15 * 60
+PROFILE_TIMEOUT_SEC = 45 * 60
 LORA_TRAIN_TIMEOUT_SEC = 3 * 60 * 60
 POLL_INTERVAL_SEC = 2.0
 
@@ -235,11 +236,11 @@ class Run:
             "waiting on a model download."
         )
 
-    def enqueue(self, body: dict) -> dict:
+    def enqueue(self, body: dict, *, timeout: float | None = None) -> dict:
         job = self.api.post(f"/api/projects/{self.project_id}/jobs", body)
-        finished = self.wait_for_job(
-            job["id"], LORA_TRAIN_TIMEOUT_SEC if body["action"] == "train_lora" else JOB_TIMEOUT_SEC
-        )
+        if timeout is None:
+            timeout = LORA_TRAIN_TIMEOUT_SEC if body["action"] == "train_lora" else JOB_TIMEOUT_SEC
+        finished = self.wait_for_job(job["id"], timeout)
         return finished
 
     def take(self, take_id: str) -> dict:
@@ -445,6 +446,46 @@ def stage_reproducible(run: Run, notes: list[str]) -> None:
             "reproducible (SPEC.md sec 7.3)."
         )
     notes.append(f"two runs at seed 99991 are byte-identical ({digests[0][:16]})")
+
+
+def stage_optional_profiles(run: Run, notes: list[str]) -> None:
+    """Exercise both user-selectable non-default generation profiles.
+
+    `iterate` is already proven by the preceding generation stages, while
+    `studio_ops` has its own structural-editing stage. This closes the release
+    guide's remaining hardware gap: 50-step `polish` and 4B `quality`, whose
+    successful load on the 16 GB target also proves ACE-Step's CPU-offload API
+    is available and wired through Lyre.
+    """
+    run.api.put(
+        f"/api/projects/{run.project_id}/plan",
+        {
+            "caption": "warm chamber strings, intimate room, no percussion",
+            "lyrics": "[Instrumental]",
+            "instrumental": True,
+            "bpm": 76,
+            "keyscale": "D Minor",
+            "timesignature": "4/4",
+            "vocal_language": "en",
+            "duration_sec": 15,
+            "caption_rewrite": False,
+            "sections": [],
+            "negative": [],
+            "query": "",
+        },
+    )
+    for profile in ("polish", "quality"):
+        job = run.enqueue(
+            {"action": "generate", "dit_profile": profile, "seed": 6160},
+            timeout=PROFILE_TIMEOUT_SEC,
+        )
+        take = run.take(job["take_id"])
+        if take.get("dit_profile") != profile:
+            raise CheckFailed(
+                f"requested profile {profile!r}, but the take records {take.get('dit_profile')!r}"
+            )
+        run.check_audio(take["id"], 15, notes)
+        notes.append(f"{profile} loaded and generated audible audio")
 
 
 def stage_cover(run: Run, notes: list[str]) -> None:
@@ -714,7 +755,7 @@ def stage_lora(run: Run, notes: list[str]) -> None:
             "keyscale": "C Major",
             "timesignature": "4/4",
             "vocal_language": "en",
-            "duration_sec": 15,
+            "duration_sec": 10,
             "caption_rewrite": False,
             "sections": [],
             "negative": [],
@@ -740,7 +781,16 @@ def stage_lora(run: Run, notes: list[str]) -> None:
     if pack.get("error"):
         raise CheckFailed(f"the trained pack records an error: {pack['error']}")
 
-    take = run.take(run.enqueue({"action": "generate", "lora_id": lora_id, "seed": -1})["take_id"])
+    # On a 16 GB card the base model plus adapter can leave too little VRAM
+    # for VAE decode, so ACE-Step correctly falls back to CPU. That final
+    # decode can exceed the ordinary generation timeout and is still part of
+    # this deliberately long-running LoRA gate.
+    take = run.take(
+        run.enqueue(
+            {"action": "generate", "lora_id": lora_id, "seed": -1},
+            timeout=LORA_TRAIN_TIMEOUT_SEC,
+        )["take_id"]
+    )
     if take.get("lora_id") != lora_id:
         raise CheckFailed("the generated take does not record the style pack that was applied")
     run.check_audio(take["id"], None, notes)
@@ -762,6 +812,11 @@ STAGES: list[tuple[str, str, object]] = [
         "reproducible",
         "the same seed and plan produce byte-identical audio",
         stage_reproducible,
+    ),
+    (
+        "profiles",
+        "polish and CPU-offloaded quality generate on target hardware",
+        stage_optional_profiles,
     ),
     ("cover", "cover creates a new take chained to its source", stage_cover),
     ("repaint", "repaint records the requested region", stage_repaint),

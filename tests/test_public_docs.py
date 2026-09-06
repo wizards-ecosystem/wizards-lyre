@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import struct
 from pathlib import Path
 from urllib.parse import unquote
 
@@ -70,11 +71,12 @@ def test_every_local_documentation_link_resolves() -> None:
 
 def test_readme_uses_the_checked_in_accessible_hero() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    hero = (ROOT / "docs" / "assets" / "lyre-hero.svg").read_text(encoding="utf-8")
+    hero = (ROOT / "docs" / "assets" / "lyre-header.png").read_bytes()
 
-    assert 'src="docs/assets/lyre-hero.svg"' in readme
-    assert "<title" in hero
-    assert "<desc" in hero
+    assert 'src="docs/assets/lyre-header.png"' in readme
+    assert 'alt="The Wizard\'s Lyre: local generative music studio"' in readme
+    assert hero.startswith(b"\x89PNG\r\n\x1a\n")
+    assert struct.unpack(">II", hero[16:24]) == (1200, 480)
 
 
 def test_public_copy_uses_ecosystem_name_and_punctuation() -> None:
@@ -105,20 +107,21 @@ def test_public_art_uses_the_ecosystem_palette() -> None:
     stylesheet = (ROOT / "web" / "src" / "styles" / "08-lyre-instrument.css").read_text(
         encoding="utf-8"
     )
-    hero = (ROOT / "docs" / "assets" / "lyre-hero.svg").read_text(encoding="utf-8")
+    mark = (ROOT / "web" / "public" / "brand" / "lyre-icon.svg").read_text(encoding="utf-8")
     palette = {
-        "--wz-ink": "#100d15",
-        "--wz-violet": "#241345",
-        "--wz-arcane": "#bd94ef",
-        "--wz-arcane-deep": "#5d32a8",
-        "--wz-gold": "#f2b85e",
-        "--wz-teal": "#75c8ba",
-        "--wz-parchment": "#fffaf0",
-        "--wz-vellum": "#fffdf8",
+        "--wz-ink": "#272522",
+        "--wz-violet": "#2d302c",
+        "--wz-arcane": "#afc9ae",
+        "--wz-arcane-deep": "#456348",
+        "--wz-gold": "#d1a84a",
+        "--wz-teal": "#35633b",
+        "--wz-parchment": "#f7f6f2",
+        "--wz-vellum": "#ffffff",
     }
     for token, color in palette.items():
         assert f"{token}: {color};" in stylesheet
-        assert color in hero
+    for mark_color in ("#272522", "#456348", "#F7F6F2"):
+        assert mark_color in mark
 
 
 def test_every_compiled_web_dependency_has_a_versioned_license_notice() -> None:

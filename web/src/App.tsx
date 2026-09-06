@@ -1112,7 +1112,7 @@ export default function App() {
             <Icon name="library" />
           </button>
           <span className="brand-mark">
-            <Icon name="wave" />
+            <img src="/brand/lyre-icon.svg" alt="" />
           </span>
           <div>
             <h1>The Wizard's Lyre</h1>
