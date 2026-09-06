@@ -102,7 +102,11 @@ def train_lora(
     for i, src in enumerate(source_paths):
         dest = dataset_dir / f"{i:03d}_{src.stem}{src.suffix}"
         shutil.copyfile(src, dest)
-        dest.with_name(dest.name + ".caption.txt").write_text(name, encoding="utf-8")
+        # ACE-Step removes the audio extension before appending the sidecar
+        # suffix: `song.wav` -> `song.caption.txt` (not
+        # `song.wav.caption.txt`). Keep this exact convention in sync with
+        # `acestep.training.dataset_builder_modules.audio_io.load_caption_file`.
+        dest.with_suffix(".caption.txt").write_text(name, encoding="utf-8")
 
     with _LOCK:
         handler, _lm, dit_profile = _ensure_loaded(LORA_BASE_DIT_PROFILE)
@@ -198,8 +202,10 @@ def train_lora(
                 str(tensor_dir),
             )
             # train_from_preprocessed is a generator -- the training loop itself
-            # only runs while this is iterated; it writes the final adapter to
-            # <adapter_dir>/final/ once exhausted (see the module docstring).
+            # only runs while this is iterated. ACE-Step's trainer writes a
+            # PEFT adapter one level below its advertised final directory:
+            # <adapter_dir>/final/adapter/. We normalize that upstream layout
+            # to Lyre's stable <adapter_dir>/final/ contract below.
             last_step, last_loss, last_status = 0, None, "not started"
             for step, loss, status in train_iter:
                 last_step, last_loss, last_status = step, loss, status
@@ -222,10 +228,26 @@ def train_lora(
             _STATE["lora_adapter_path"] = None
 
     final_dir = adapter_dir / "final"
-    if not final_dir.exists() or not any(final_dir.iterdir()):
+    upstream_adapter_dir = final_dir / "adapter"
+    if not (final_dir / "adapter_config.json").is_file() and upstream_adapter_dir.is_dir():
+        # `save_lora_weights()` calls PEFT's save_pretrained() under an
+        # additional `adapter/` directory. Keep that ACE-Step implementation
+        # detail inside this adapter: every other Lyre layer continues to use
+        # <lora_dir>/adapter/final as the stable inference path.
+        for artifact in upstream_adapter_dir.iterdir():
+            destination = final_dir / artifact.name
+            if destination.exists():
+                raise RuntimeError(
+                    "ACE-Step wrote conflicting final LoRA artifacts at "
+                    f"{artifact} and {destination}"
+                )
+            artifact.replace(destination)
+        upstream_adapter_dir.rmdir()
+
+    if not (final_dir / "adapter_config.json").is_file():
         raise RuntimeError(
-            f"ACE-Step training finished (status: {last_status!r}) but wrote no adapter weights "
-            f"to {final_dir}"
+            f"ACE-Step training finished (status: {last_status!r}) but wrote no loadable PEFT "
+            f"adapter_config.json to {final_dir}"
         )
 
     return {

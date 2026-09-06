@@ -46,6 +46,7 @@ information.
 | `preflight` | The server is up but no worker has reported in, or the worker failed to load models. |
 | `generate` | Simple mode is broken: either the 5 Hz LM did not fill a caption, or the server did not persist the filled plan that makes simple mode reusable. Also checks that the worker replaces the `-1` seed with the value it used. |
 | `custom` | An explicit plan was not honored: a fixed seed was not recorded, or the LM rewrote a caption the user locked with `caption_rewrite: false`. |
+| `profiles` | The 50-step `polish` profile or the 4B `quality` profile failed to load and generate. On the 16 GB target, a successful `quality` run also proves the required CPU-offload API is available. |
 | `cover` | A cover overwrote its source instead of creating a new take, or did not set `parent_take_id`. Takes are immutable (SPEC.md section 7.3); the history depends on this. |
 | `repaint` | The requested region was not recorded, which is what the waveform drag-selection feeds. |
 | `upload` | Drag-drop ingest is broken, or the file did not land under `uploads/` inside the project. |
@@ -54,7 +55,7 @@ information.
 | `annotations` | Favorite, notes, or the active take did not reach `meta.json` on disk. The API and disk layout disagree. |
 | `export` | The zip a user drops into a DAW is missing `project.json`, `plan.json`, or the active mix; is corrupt; contains a member escaping the archive root; or the mix is silent. |
 | `jail` | A traversing `upload_path` was accepted by the *running server*. This verifies the unit-tested guard in the live process. |
-| `lora` | Opt-in. Style-pack training failed, produced no `lora_id`, or the pack did not attach to a later generation. This stage requires FFmpeg; generation does not. See [TROUBLESHOOTING.md](TROUBLESHOOTING.md). The stage generates its own source takes, so it can run on its own. |
+| `lora` | Opt-in. Style-pack training failed, produced no `lora_id`, or the pack did not attach to a later generation. This stage requires FFmpeg; generation does not. See [TROUBLESHOOTING.md](TROUBLESHOOTING.md). The stage generates its own source takes, so it can run on its own. On a 16 GB card, applying the pack can trigger ACE-Step's much slower CPU VAE fallback; the verifier gives that generation the same extended timeout as training. |
 
 ## Audio checks
 

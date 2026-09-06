@@ -1023,6 +1023,44 @@ def test_quality_profile_requests_cpu_offload(
     assert params.guidance_scale == 1.0
 
 
+def test_new_handler_releases_accelerator_memory_before_model_load(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every fresh handler construction collects stale CUDA allocations.
+
+    This includes the post-training path, where `train_lora` deliberately
+    invalidates `_STATE["handler"]` but ACE-Step's PEFT/Fabric objects can
+    keep the old decoder alive in a reference cycle until a full collection.
+    """
+    from worker.acestep_worker import loading as loading_module
+
+    log: list[tuple] = []
+    releases: list[None] = []
+    _install_fake_acestep(monkeypatch, log)
+    monkeypatch.setattr(
+        loading_module, "_release_accelerator_memory", lambda: releases.append(None)
+    )
+    plan = {
+        "query": "",
+        "caption": "orchestral",
+        "lyrics": "[Instrumental]",
+        "instrumental": True,
+        "bpm": 90,
+        "keyscale": "D Minor",
+        "duration_sec": 20,
+    }
+
+    for profile in ("iterate", "polish"):
+        acestep_worker.run_job(
+            job={"action": "generate", "dit_profile": profile, "seed": -1, "src_audio": None},
+            plan=plan,
+            take_id=f"t-{profile}",
+            take_dir=tmp_path / f"take-{profile}",
+        )
+
+    assert len(releases) == 2
+
+
 def test_track_name_maps_to_instruction_for_studio_ops(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1677,14 +1715,15 @@ def _install_fake_lora_training(
     `ScanMixin.scan_directory`/`PreprocessMixin.preprocess_to_tensors`
     contract closely enough to exercise the caption-sidecar labeling logic
     `train_lora` actually depends on: a sample is only "labeled" (and only
-    then preprocessed) if a `<file>.caption.txt` sidecar exists next to it.
+    then preprocessed) if a `<basename>.caption.txt` sidecar exists next to it.
     `label_count_override`, if given, replaces the real computed count --
     used to simulate ACE-Step labeling fewer than `MIN_LORA_SOURCES` sources.
     `train_steps` are the `(step, loss, status)` tuples the fake
     `LoRATrainer.train_from_preprocessed` yields; `write_final`, if True
-    (the default), writes a fake adapter file under
-    `<training_config.output_dir>/final/` once the generator is exhausted --
-    pass False to simulate ACE-Step finishing without ever producing one."""
+    (the default), mirrors ACE-Step's `save_lora_weights` layout under
+    `<training_config.output_dir>/final/adapter/` once the generator is
+    exhausted -- pass False to simulate ACE-Step finishing without ever
+    producing one."""
 
     class DefaultFakeDatasetBuilder:
         def __init__(self) -> None:
@@ -1697,7 +1736,7 @@ def _install_fake_lora_training(
             for p in sorted(Path(directory).iterdir()):
                 if p.name.endswith(".caption.txt"):
                     continue
-                caption_path = p.with_name(p.name + ".caption.txt")
+                caption_path = p.with_suffix(".caption.txt")
                 found.append({"path": str(p), "labeled": caption_path.exists()})
             self.samples = found
             if not found:
@@ -1778,9 +1817,12 @@ def _install_fake_lora_training(
             log.append(("trainer.train_from_preprocessed", tensor_dir))
             yield from train_steps or [(1, 0.5, "epoch 1/10"), (2, 0.3, "epoch 2/10")]
             if write_final:
-                final_dir = Path(self._training_config.output_dir) / "final"
+                final_dir = Path(self._training_config.output_dir) / "final" / "adapter"
                 final_dir.mkdir(parents=True, exist_ok=True)
-                (final_dir / "adapter_model.bin").write_bytes(b"fake-lora-adapter-weights")
+                (final_dir / "adapter_config.json").write_text(
+                    '{"peft_type":"LORA"}', encoding="utf-8"
+                )
+                (final_dir / "adapter_model.safetensors").write_bytes(b"fake-lora-adapter-weights")
 
     training_pkg = types.ModuleType("acestep.training")
     configs_mod = types.ModuleType("acestep.training.configs")
@@ -1837,9 +1879,10 @@ def test_train_lora_matches_installed_training_api_contract(
     staged = sorted((lora_dir / "dataset").glob("*.wav"))
     assert len(staged) == acestep_worker.MIN_LORA_SOURCES
     for staged_file in staged:
-        caption_path = staged_file.with_name(staged_file.name + ".caption.txt")
+        caption_path = staged_file.with_suffix(".caption.txt")
         assert caption_path.exists()
         assert caption_path.read_text(encoding="utf-8") == "dreamy synthwave"
+        assert not staged_file.with_name(staged_file.name + ".caption.txt").exists()
 
     scan_call = next(e for e in log if e[0] == "builder.scan_directory")
     assert scan_call[1] == str(lora_dir / "dataset")
@@ -1879,8 +1922,9 @@ def test_train_lora_matches_installed_training_api_contract(
     assert meta["status"] == "epoch 2/10"
 
     final_dir = lora_dir / "adapter" / "final"
-    assert final_dir.exists()
-    assert any(final_dir.iterdir())
+    assert (final_dir / "adapter_config.json").exists()
+    assert (final_dir / "adapter_model.safetensors").exists()
+    assert not (final_dir / "adapter").exists()
 
 
 def test_train_lora_requires_minimum_source_count(tmp_path: Path) -> None:
@@ -1925,7 +1969,7 @@ def test_train_lora_fails_when_no_final_adapter_written(
 
     source_paths = _make_source_files(tmp_path, acestep_worker.MIN_LORA_SOURCES)
 
-    with pytest.raises(RuntimeError, match="wrote no adapter weights"):
+    with pytest.raises(RuntimeError, match="wrote no loadable PEFT adapter"):
         _call_train_lora(source_paths, "x", tmp_path / "loras" / "lora4")
 
 
