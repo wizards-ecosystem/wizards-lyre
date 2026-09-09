@@ -1,3 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" role="img" aria-labelledby="title"><title id="title">The Wizard's Lyre mark</title>
-    <path d="M20 14c-5 10-5 28 3 37M44 14c5 10 5 28-3 37M22 50h20M20 14c7 4 17 4 24 0" fill="none" stroke="#272522" stroke-width="3" stroke-linecap="round"/>
-    <path d="M25 18v29M32 18v29M39 18v29" fill="none" stroke="#456348" stroke-width="2" stroke-linecap="round"/></svg>
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" role="img" aria-labelledby="title"><title id="title">The Wizard's Lyre mark</title><style>:root{--ink:#2D3433;--paper:#F1E9D5;--gold:#BAA477;--wood:#89715A;--metal:#A1AEAD;--wax:#AA5134;--clear:none;--accent:#627B55}</style>
+    <path d="M46 18C34 7 27 15 32 24L38 28 20 87C17 100 37 115 57 109 84 100 99 64 111 34 116 27 112 19 105 22L99 28C79 28 62 17 51 17Z M46 30 32 86C29 95 41 101 53 97 76 87 90 55 99 36 77 34 63 25 49 25Z" fill="var(--gold)" fill-rule="evenodd" stroke="var(--ink)" stroke-width="3" stroke-linejoin="round"/>
+    <path d="M46 30 32 86C29 95 41 101 53 97 76 87 90 55 99 36 77 34 63 25 49 25Z" fill="var(--clear)" stroke="var(--ink)" stroke-width="3"/>
+    <path d="m52 29-17 62m28-57-21 62m31-58-24 56m34-52-26 47m35-43-25 36" fill="none" stroke="var(--ink)" stroke-width="2.2"/>
+    <path d="M30 100c20 13 46 4 61-8-5 17-31 27-53 20L20 119 16 113Z" fill="var(--accent)"/>
+    <path d="M33 17c4-3 9 0 9 5m63 1 5 5M31 95c6 7 18 9 27 5" fill="none" stroke="var(--paper)" stroke-width="3" stroke-linecap="round"/></svg>

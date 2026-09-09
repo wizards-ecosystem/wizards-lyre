@@ -1114,7 +1114,7 @@ export default function App() {
           <h1>
             <img
               className="brand-logo"
-              src="/brand/lyre-logo.svg"
+              src="/brand/lyre-header.svg"
               alt="The Wizard's Lyre"
               width="210"
             />

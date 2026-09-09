@@ -1,7 +1,7 @@
 <h1 align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/lyre-logo-dark.svg">
-    <img src="docs/assets/lyre-logo.svg" alt="The Wizard's Lyre" width="420">
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/lyre-logo-dark.png">
+    <img src="docs/assets/lyre-logo.png" alt="The Wizard's Lyre" width="420">
   </picture>
 </h1>
 
