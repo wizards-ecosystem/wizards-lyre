@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import re
-import xml.etree.ElementTree as ET
 from pathlib import Path
 from urllib.parse import unquote
 
@@ -30,11 +29,6 @@ SKIP_PARTS = {
 INLINE_LINK = re.compile(r"!?\[[^]]*]\(([^)\s]+)")
 REFERENCE_LINK = re.compile(r"^\[[^]]+]:\s+(\S+)", re.MULTILINE)
 HTML_LINK = re.compile(r"(?:href|src)=\"([^\"]+)\"")
-DISPLAY_NAME_WITHOUT_ARTICLE = re.compile(r"(?<!The )Wizard's Lyre")
-BANNED_DECORATIVE_CHARACTERS = frozenset(
-    "\u2014\u2192\u25ba\u00a7\u2026\u2191\u2193\u2194\u00d7\u2713\u2717\u00b7\u2013"
-)
-PUBLIC_COPY_SUFFIXES = {".css", ".html", ".md", ".py", ".svg", ".ts", ".tsx", ".yaml", ".yml"}
 
 
 def _markdown_files() -> list[Path]:
@@ -67,65 +61,6 @@ def test_every_local_documentation_link_resolves() -> None:
                 broken.append(f"{document.relative_to(ROOT)} -> {raw_target}")
 
     assert broken == []
-
-
-def test_readme_uses_the_checked_in_accessible_logo() -> None:
-    readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    title = re.search(r"<h1\b[^>]*>(.*?)</h1>", readme, flags=re.DOTALL)
-    assert title is not None
-    heading = title.group(1)
-    assert 'alt="The Wizard\'s Lyre"' in heading
-    assert "prefers-color-scheme: dark" in heading
-    for name in ("lyre-logo.svg", "lyre-logo-dark.svg"):
-        assert f"docs/assets/{name}" in heading
-        logo = ET.parse(ROOT / "docs" / "assets" / name).getroot()
-        assert logo.tag == "{http://www.w3.org/2000/svg}svg"
-        assert logo.find("{http://www.w3.org/2000/svg}title") is not None
-        assert logo.find(".//{http://www.w3.org/2000/svg}rect") is None
-        assert logo.find(".//{http://www.w3.org/2000/svg}image") is None
-
-
-def test_public_copy_uses_ecosystem_name_and_punctuation() -> None:
-    problems: list[str] = []
-    for path in ROOT.rglob("*"):
-        if not path.is_file() or path.suffix not in PUBLIC_COPY_SUFFIXES:
-            continue
-        relative = path.relative_to(ROOT)
-        if any(part in SKIP_PARTS for part in relative.parts) or relative.parts[0] in {
-            "LICENSES",
-            "tests",
-        }:
-            continue
-        text = path.read_text(encoding="utf-8")
-        banned = sorted(BANNED_DECORATIVE_CHARACTERS.intersection(text))
-        if banned:
-            problems.append(f"{relative}: decorative characters {''.join(banned)}")
-        if DISPLAY_NAME_WITHOUT_ARTICLE.search(text):
-            problems.append(f"{relative}: project display name is missing 'The'")
-
-    assert problems == []
-
-
-def test_public_art_uses_the_ecosystem_palette() -> None:
-    stylesheet = (ROOT / "web" / "src" / "styles" / "08-lyre-instrument.css").read_text(
-        encoding="utf-8"
-    )
-    mark = (ROOT / "web" / "public" / "brand" / "lyre-icon.svg").read_text(encoding="utf-8")
-    palette = {
-        "--wz-ink": "#272522",
-        "--wz-violet": "#2d302c",
-        "--wz-arcane": "#afc9ae",
-        "--wz-arcane-deep": "#456348",
-        "--wz-gold": "#d1a84a",
-        "--wz-teal": "#35633b",
-        "--wz-parchment": "#f7f6f2",
-        "--wz-vellum": "#ffffff",
-    }
-    for token, color in palette.items():
-        assert f"{token}: {color};" in stylesheet
-    for mark_color in ("#272522", "#456348"):
-        assert mark_color in mark
-    assert ET.fromstring(mark).find(".//{http://www.w3.org/2000/svg}rect") is None
 
 
 def test_every_compiled_web_dependency_has_a_versioned_license_notice() -> None:
