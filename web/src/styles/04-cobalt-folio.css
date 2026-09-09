@@ -1,18 +1,7 @@
-/* --------------------------------------------------------------------------
-   Cobalt Folio
-
-   The studio is an instrument, not a SaaS dashboard. This refinement trades
-   the soft-card treatment above for a lighter score-sheet vocabulary: flat
-   paper, decisive blue rules, editorial titles, and a structured listening
-   surface. It intentionally avoids gradients, glass, pills, and decorative
-   shadows.
-   -------------------------------------------------------------------------- */
+/* Shared chrome layout. */
 
 .topbar {
   backdrop-filter: none;
-}
-.brand-mark {
-  box-shadow: none;
 }
 .health {
   gap: 7px;

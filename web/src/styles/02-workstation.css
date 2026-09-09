@@ -26,18 +26,9 @@
 .brand-cluster {
   min-width: 0;
 }
-.brand-mark {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
 .topbar h1 {
   margin: 0;
   line-height: 1.15;
-}
-.brand-subtitle {
-  display: block;
-  margin-top: 2px;
 }
 .health {
   color: var(--muted);
@@ -1363,7 +1354,6 @@ button.take-lora-badge:hover {
   .topbar {
     padding-right: 9px;
   }
-  .brand-subtitle,
   .shortcut-help,
   .health-copy small {
     display: none;
@@ -1497,9 +1487,6 @@ button.take-lora-badge:hover {
 }
 
 @media (max-width: 560px) {
-  .brand-mark {
-    display: none;
-  }
   .topbar h1 {
     font-size: 13px;
   }

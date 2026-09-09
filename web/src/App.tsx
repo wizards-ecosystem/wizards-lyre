@@ -1111,13 +1111,14 @@ export default function App() {
           >
             <Icon name="library" />
           </button>
-          <span className="brand-mark">
-            <img src="/brand/lyre-icon.svg" alt="" />
-          </span>
-          <div>
-            <h1>The Wizard's Lyre</h1>
-            <span className="brand-subtitle">A local music sketchbook</span>
-          </div>
+          <h1>
+            <img
+              className="brand-logo"
+              src="/brand/lyre-logo.svg"
+              alt="The Wizard's Lyre"
+              width="210"
+            />
+          </h1>
         </div>
         <div className="topbar-tools">
           <details className="shortcut-help">

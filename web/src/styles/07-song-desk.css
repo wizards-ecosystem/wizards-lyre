@@ -10,9 +10,6 @@
   border-bottom: 1px solid var(--rule);
   padding: 0 18px;
 }
-.brand-mark {
-  border-color: #293e7d;
-}
 .workspace-header {
   border-bottom: 1px solid var(--rule);
 }

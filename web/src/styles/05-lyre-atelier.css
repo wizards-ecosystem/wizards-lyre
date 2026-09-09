@@ -1,11 +1,4 @@
-/* --------------------------------------------------------------------------
-   Lyre Atelier
-
-   Light blue is the air around the studio, not the whole studio. The working
-   areas use warm stock-paper tones, while indigo keeps the architecture clear
-   and vermilion marks the moments that make sound. This keeps the density of
-   a real tool while giving each part of the workspace a distinct material.
-   -------------------------------------------------------------------------- */
+/* Workspace controls and editor layout. */
 
 :root {
   color-scheme: light;
@@ -84,20 +77,9 @@ select:focus {
 .brand-cluster {
   gap: 10px;
 }
-.brand-mark .icon {
-  width: 20px;
-  height: 20px;
-  stroke-width: 1.75;
-}
 .topbar h1 {
   font-weight: 700;
   letter-spacing: -0.04em;
-}
-.brand-subtitle {
-  font-family: var(--mono);
-  font-size: 8px;
-  letter-spacing: 0.11em;
-  text-transform: uppercase;
 }
 .topbar-tools {
   gap: 11px;
@@ -403,9 +385,6 @@ select:focus {
 @media (max-width: 560px) {
   .topbar {
     padding: 0 11px;
-  }
-  .brand-subtitle {
-    display: none;
   }
   .project-heading h2 {
     font-size: 22px;

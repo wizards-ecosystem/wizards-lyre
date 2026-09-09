@@ -1,8 +1,9 @@
-<p align="center">
-  <img src="docs/assets/lyre-header.png" alt="The Wizard's Lyre: local generative music studio" width="100%">
-</p>
-
-<h1 align="center">The Wizard's Lyre</h1>
+<h1>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/lyre-logo-dark.svg">
+    <img src="docs/assets/lyre-logo.svg" alt="The Wizard's Lyre" width="420">
+  </picture>
+</h1>
 
 <p align="center">
   Shape music on your own GPU. Keep every take. Send nothing to the cloud.
