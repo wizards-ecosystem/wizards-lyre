@@ -117,6 +117,10 @@ Wall clock, not GPU time:
 | Cover of that take, `iterate` | **23 s** end to end |
 | Whole session, Start to Stop | 7 min, **about $0.09** |
 
+A second run on the released image (build `9b0ba2b1eb42`) was ready in 3 min
+49 s and rendered 30 s tracks in 15 s (generate) and 10 s (cover), about $0.05
+in all.
+
 Both takes were 48 kHz stereo with audible signal and a quality score. So a
 first render arrives about six minutes after Start, most of it the image pull,
 and every render after that takes seconds.
