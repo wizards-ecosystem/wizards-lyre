@@ -35,7 +35,7 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
         await asyncio.to_thread(remote_gpu.on_shutdown)
 
 
-app = FastAPI(title="The Wizard's Lyre", version="0.1.0", lifespan=_lifespan)
+app = FastAPI(title="The Wizard's Lyre", version="0.2.0", lifespan=_lifespan)
 
 
 class _MaxRequestBodyMiddleware:

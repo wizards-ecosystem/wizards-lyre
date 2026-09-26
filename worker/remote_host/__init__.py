@@ -16,11 +16,20 @@ import hashlib
 from pathlib import Path
 
 _WORKER_DIR = Path(__file__).resolve().parent.parent
+_ROOT = _WORKER_DIR.parent
 
 # Everything that decides how a remote take is rendered. The host's own
 # protocol code and the ACE-Step adapter it wraps both count; the local-only
 # modules (run_worker, mock_worker, remote_backend) do not.
 _BUILD_SOURCES = ("remote_host", "acestep_worker")
+# And everything else that decides what the image contains. Published tags are
+# immutable, so an image whose dependencies changed must get a new id. The
+# image keeps copies of these at the same paths so it reports the same id.
+_BUILD_FILES = (
+    "ACE_STEP_REVISION",
+    "requirements/ace-step-security.txt",
+    "docker/remote-gpu/Dockerfile",
+)
 
 
 def build_id() -> str:
@@ -36,4 +45,8 @@ def build_id() -> str:
         for path in sorted((_WORKER_DIR / package).glob("*.py")):
             digest.update(f"{package}/{path.name}".encode())
             digest.update(path.read_bytes())
+    for relative in _BUILD_FILES:
+        path = _ROOT / relative
+        digest.update(relative.encode())
+        digest.update(path.read_bytes() if path.is_file() else b"<missing>")
     return digest.hexdigest()[:12]

@@ -103,7 +103,23 @@ set `LYRE_RUNPOD_GPU_TYPE` to another type id, or
 `LYRE_RUNPOD_CLOUD=COMMUNITY` for cheaper, less isolated hosts. Pods are always
 placed on hosts that support CUDA 12.8, which the pinned PyTorch needs.
 
-Render times on these cards have not been measured yet.
+### Measured, 2026-09-26
+
+One RTX 4090 (Secure Cloud, $0.74/hr), a fresh pod with no volume, driven
+entirely through Lyre's own API: Start, one generate, one cover of it, Stop.
+Wall clock, not GPU time:
+
+| Step | Time |
+|---|---|
+| Start -> host answering (13.5 GB image pull) | 5 min 10 s |
+| Core weights + ACE-Step load | 35 s |
+| Generate, 120 s track, `iterate` | **47 s** end to end |
+| Cover of that take, `iterate` | **23 s** end to end |
+| Whole session, Start to Stop | 7 min, **about $0.09** |
+
+Both takes were 48 kHz stereo with audible signal and a quality score. So a
+first render arrives about six minutes after Start, most of it the image pull,
+and every render after that takes seconds.
 
 ## Keeping the weights
 

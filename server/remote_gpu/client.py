@@ -24,7 +24,7 @@ SECRET_HEADER = "X-Lyre-Secret"
 # Runpod's API and pod proxy sit behind Cloudflare, which refuses Python's
 # default "Python-urllib/x.y" agent outright (error 1010, a 403 that looks
 # like a permissions problem). Every request names itself instead.
-USER_AGENT = "wizards-lyre/0.1 (+https://github.com/wizards-ecosystem/wizards-lyre)"
+USER_AGENT = "wizards-lyre/0.2 (+https://github.com/wizards-ecosystem/wizards-lyre)"
 
 # (method, url, headers, body, timeout, max_bytes) -> (status, body)
 Transport = Callable[[str, str, dict[str, str], bytes | None, float, int], tuple[int, bytes]]

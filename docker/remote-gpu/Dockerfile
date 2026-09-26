@@ -66,6 +66,11 @@ RUN revision="$(tr -d '\n' < /tmp/lyre/ACE_STEP_REVISION)" \
 # Only the modules the host runs: its own package, the ACE-Step adapter it
 # wraps, and the mock backend for GPU-free smoke tests. Nothing from server/.
 WORKDIR /app
+# The build id (worker/remote_host/__init__.py) also hashes these, so the image
+# keeps them where it can find them and reports the same id as its source.
+COPY ACE_STEP_REVISION /app/
+COPY requirements/ace-step-security.txt /app/requirements/
+COPY docker/remote-gpu/Dockerfile /app/docker/remote-gpu/
 COPY worker/__init__.py worker/mock_worker.py /app/worker/
 COPY worker/acestep_worker /app/worker/acestep_worker
 COPY worker/remote_host /app/worker/remote_host

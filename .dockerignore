@@ -4,6 +4,7 @@
 *
 !ACE_STEP_REVISION
 !requirements/ace-step-security.txt
+!docker/remote-gpu/Dockerfile
 !worker/__init__.py
 !worker/mock_worker.py
 !worker/acestep_worker/*.py

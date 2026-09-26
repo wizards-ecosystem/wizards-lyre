@@ -1,6 +1,6 @@
 [project]
 name = "wizards-lyre"
-version = "0.1.0"
+version = "0.2.0"
 description = "Local ACE-Step 1.5 generative music studio. Runs entirely on your own GPU."
 readme = "README.md"
 requires-python = ">=3.11,<3.13"

@@ -1,6 +1,6 @@
 # Dependency security audit
 
-Last reviewed: 2026-09-05 against ACE-Step revision
+Last reviewed: 2026-09-26 against ACE-Step revision
 `14c0211d5a0653b0f63e27686f4c3f151b4d8629`.
 
 The Wizard's Lyre installs ACE-Step into the same local Python environment as
@@ -37,6 +37,7 @@ misleading zero without context.
 | `diskcache`: `PYSEC-2026-2447` | Exploitation requires another actor to write a malicious pickle into the local cache. Lyre is single-user, keeps caches inside the checkout, accepts no cache uploads, and grants no remote filesystem access. An actor able to alter that directory already has code execution as the Lyre user. |
 | `lightning`: `PYSEC-2026-3624` | The issue loads attacker-selected Python modules from a malicious training checkpoint. Lyre accepts audio for a new style pack; it has no checkpoint upload or arbitrary resume path. Style-pack records and paths are created inside the project jail. |
 | `transformers`: `PYSEC-2025-217`, `PYSEC-2026-2288`, `PYSEC-2026-2289`, `PYSEC-2026-2290`, `CVE-2026-9856` | The affected paths load attacker-controlled X-CLIP, LightGlue, Trainer, model/config, or chat-template data. Lyre loads only its fixed ACE-Step model set, accepts no model repository or model configuration from HTTP, and performs no runtime Hub lookup after setup. ACE-Step currently requires Transformers `<4.58`; this exception must be removed when upstream supports a fixed major version. |
+| `accelerate`: `PYSEC-2026-3804` | The path traversal needs an attacker-supplied sharded-checkpoint index (`weight_map`) reaching `load_checkpoint_in_model` / `load_checkpoint_and_dispatch`. Lyre loads only its fixed ACE-Step model set, downloaded at install (or, on a Remote GPU host, by the same pinned downloader on first use), and accepts no model, checkpoint, or index from HTTP. Style packs are trained from audio, not loaded from uploaded checkpoints. No fixed release exists yet (affected through 1.14.0); remove this exception when one does. |
 | `setuptools`: `PYSEC-2025-49`, `PYSEC-2026-3447` | These issues affect deprecated package-index download behavior and macOS source-distribution manifest exclusion. Lyre does not invoke either path at runtime, does not support macOS, and builds its own artifacts in an isolated environment. ACE-Step currently pins Setuptools `<72`; review when that upstream constraint changes. |
 
 The audit still reports unauditable local ACE-Step/nano-vLLM packages and CUDA

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.2.0] - 2026-09-26
+
 ### Added
 
 - **Remote GPU lane (opt-in).** `LYRE_WORKER=remote` sends render jobs to an
@@ -24,6 +28,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `./scripts/lyre remote-host` and `./scripts/lyre remote-image`, and a
   workflow that builds, boots, and (on release) publishes the host image to
   GHCR tagged by build id.
+- `scripts/lyre` loads plain `NAME=value` lines from a gitignored `.env`
+  (parsed, never executed; the environment wins), for keeping
+  `LYRE_RUNPOD_API_KEY` out of shell history.
+
+### Security
+
+- The ACE-Step overlay now pins `anyio==4.14.2` (CVE-2026-63374,
+  CVE-2026-64847) and aligns `idna` with Lyre's own lock (3.19) instead of
+  downgrading it.
+- `accelerate` `PYSEC-2026-3804` has no fixed release; it is a reviewed
+  exception in `docs/SECURITY_AUDIT.md` because Lyre never loads a checkpoint
+  index it did not download itself.
 
 ### Changed
 
@@ -159,5 +175,6 @@ are recorded because they shaped the code a contributor will read.
 - GitHub Actions dependencies are pinned to verified full commit SHAs and kept
   current by Dependabot.
 
-[Unreleased]: https://github.com/wizards-ecosystem/wizards-lyre/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/wizards-ecosystem/wizards-lyre/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/wizards-ecosystem/wizards-lyre/releases/tag/v0.2.0
 [0.1.0]: https://github.com/wizards-ecosystem/wizards-lyre/releases/tag/v0.1.0

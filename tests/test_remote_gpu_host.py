@@ -181,3 +181,24 @@ def test_the_host_refuses_a_weak_secret(monkeypatch: pytest.MonkeyPatch, secret:
 def test_build_id_is_a_stable_fingerprint() -> None:
     assert re.fullmatch(r"[0-9a-f]{12}", build_id())
     assert build_id() == build_id()
+
+
+@pytest.mark.parametrize(
+    "relative",
+    ["ACE_STEP_REVISION", "requirements/ace-step-security.txt", "docker/remote-gpu/Dockerfile"],
+)
+def test_build_id_changes_with_what_goes_into_the_image(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, relative: str
+) -> None:
+    # Published tags are immutable, so a changed image must get a new id even
+    # when no Python source changed.
+    import worker.remote_host as remote_host
+
+    for name in remote_host._BUILD_FILES:
+        target = tmp_path / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("original\n")
+    monkeypatch.setattr(remote_host, "_ROOT", tmp_path)
+    before = build_id()
+    (tmp_path / relative).write_text("changed\n")
+    assert build_id() != before

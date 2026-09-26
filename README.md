@@ -37,11 +37,12 @@ what works, and push it somewhere new.
 |---|---|---|
 | Start from a simple idea or write the caption, lyrics, BPM, key, meter, sections, and duration yourself. | Cover a take, repaint a selected region, isolate a track, add or replace an instrument, or complete an arrangement. | Compare takes A/B, score and annotate them, restore any earlier take, train a style pack, and export a DAW-ready archive. |
 
-> **Status: Released.** Version 0.1.0 is the first public release. All six
-> implementation phases in [SPEC.md](SPEC.md) are built, and the release is
-> verified through GPU-free CI, a real-browser production-bundle check, and
-> the documented NVIDIA GPU gates. Missing FFmpeg stops style-pack LoRA
-> training; generation remains available.
+> **Status: Released.** Version 0.2.0 adds an opt-in Remote GPU lane: the same
+> ACE-Step 1.5 on a GPU you rent or own, including Runpod pods Lyre can start
+> and stop for you. All six implementation phases in [SPEC.md](SPEC.md) are
+> built and verified through GPU-free CI, a real-browser production-bundle
+> check, and the documented NVIDIA GPU gates. Missing FFmpeg stops style-pack
+> LoRA training; generation remains available.
 
 ## Quick start
 
@@ -160,6 +161,7 @@ only ever rents one when you press Start. It is off unless you turn it on.
 | [Governance](GOVERNANCE.md) | Maintainer responsibilities, decisions, and repository authority |
 | [Support](SUPPORT.md) | Where to ask for help and what diagnostics to include |
 | [Release guide](docs/RELEASING.md) | Reproducible, security, browser, and GPU release gates |
+| [0.2.0 release notes](docs/releases/0.2.0.md) | The Remote GPU lane, its live Runpod verification, and what changed |
 | [0.1.0 release notes](docs/releases/0.1.0.md) | Highlights, verified hardware, test evidence, and supported boundaries |
 | [Repository settings](docs/REPOSITORY_SETTINGS.md) | GitHub contribution, branch, workflow, and release controls |
 | [Dependency audit](docs/SECURITY_AUDIT.md) | ACE-Step overlay and reachability-reviewed advisory exceptions |
