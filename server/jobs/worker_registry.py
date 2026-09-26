@@ -43,7 +43,8 @@ WorkerFn = Callable[..., tuple[dict, dict | None, str | None]]
 
 def resolve_worker_module():
     """Pick the worker backend module. `mock` is for tests/local dev only;
-    production defaults to the real ACE-Step worker (SPEC.md sec 10 / 14).
+    production defaults to the real ACE-Step worker (SPEC.md sec 10 / 14), and
+    `remote` runs that same worker on an opt-in Remote GPU (SPEC.md sec 3.1).
 
     This is the only place that reaches for `worker.acestep_worker` (which
     lazily imports acestep/CUDA) -- callers must be the dedicated worker
@@ -56,6 +57,11 @@ def resolve_worker_module():
         from worker import acestep_worker
 
         return acestep_worker
+    if backend == "remote":
+        # ACE-Step on a Remote GPU (docs/remote-gpu.md). Imports no GPU stack.
+        from worker import remote_backend
+
+        return remote_backend
     raise JobError(f"unknown LYRE_WORKER backend: {backend}")
 
 

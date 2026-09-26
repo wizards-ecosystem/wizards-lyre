@@ -1,0 +1,10 @@
+# The only image built from this repository is the Remote GPU host
+# (docker/remote-gpu/Dockerfile). Send it only what it copies: the build
+# context would otherwise include checkpoints/, .venv/ and projects/.
+*
+!ACE_STEP_REVISION
+!requirements/ace-step-security.txt
+!worker/__init__.py
+!worker/mock_worker.py
+!worker/acestep_worker/*.py
+!worker/remote_host/*.py

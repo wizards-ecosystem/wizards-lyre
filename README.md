@@ -137,6 +137,13 @@ Lyre binds to `127.0.0.1` and intentionally has no authentication. Never expose
 it through port forwarding, a reverse proxy, or a public bind. Read the
 [security policy](SECURITY.md) before changing that boundary.
 
+### No suitable GPU?
+
+The optional [Remote GPU lane](docs/remote-gpu.md) runs the same ACE-Step 1.5
+on a GPU you rent or own elsewhere, while your projects and takes stay on your
+machine. Lyre can start and stop a [Runpod](docs/runpod.md) pod for you, and it
+only ever rents one when you press Start. It is off unless you turn it on.
+
 ## Documentation
 
 | Guide | What it answers |
@@ -145,6 +152,8 @@ it through port forwarding, a reverse proxy, or a public bind. Read the
 | [Architecture](docs/ARCHITECTURE.md) | Process boundaries, queue leases, storage, and failure recovery |
 | [Configuration](docs/CONFIGURATION.md) | Every `LYRE_*` setting and all DiT profiles |
 | [HTTP API](docs/API.md) | Stable routes and request/response shapes; live OpenAPI is at `/docs` |
+| [Remote GPU](docs/remote-gpu.md) | The opt-in lane for rendering on a GPU you rent or own, and its host protocol |
+| [Runpod](docs/runpod.md) | Starting, stopping, and paying for a Runpod pod from Lyre |
 | [Troubleshooting](docs/TROUBLESHOOTING.md) | Worker startup, missing weights, VRAM, FFmpeg, and stuck jobs |
 | [Live stack test](docs/LIVE_STACK_TEST.md) | End-to-end verification against real weights and a real GPU |
 | [Contributing](CONTRIBUTING.md) | GPU-free setup, project scope, test loop, and pull requests |

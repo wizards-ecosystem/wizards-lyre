@@ -3,7 +3,7 @@
 This file is the sole product spec. Implement it in phase order. Do not invent extra engines, unofficial APIs, or a one-click generate page.
 
 **Target hardware:** a 16 GB-class NVIDIA GPU (developed against an RTX 4070 Ti SUPER) on Linux/WSL2 or Windows.
-**User:** single local user. No auth. No cloud deploy.
+**User:** single local user. No auth. No cloud deploy of Lyre itself (an opt-in Remote GPU for rendering is section 3.1).
 **Bind:** `127.0.0.1` only.
 
 ---
@@ -28,14 +28,27 @@ The product this spec locks: a library of song **projects**, each with a **plan*
 - Full DAW: mixer, MIDI piano roll, VST/AU plugins, automation lanes
 - Second lyric LLM besides ACE-Step's 5Hz LM (Simple mode uses that LM; Custom mode is the human)
 - RoFormer / Demucs as a second GPU model in v1 (ACE-Step `extract` is the stem path)
-- Auth, multi-user, reverse proxy, Docker, cloud GPU
+- Auth, multi-user, reverse proxy, or containerizing / cloud-deploying Lyre itself. The one exception is the opt-in Remote GPU host image (section 3.1).
 - Shipping ACE-Step's Gradio UI as Lyre. Gradio is upstream's demo. Lyre owns the product UI.
 
 ---
 
-## 3. Fully local (locked)
+## 3. Local by default (locked)
 
-Every generate / cover / repaint / extract / lego / complete / LoRA job runs **ACE-Step 1.5 on the local GPU**. No network is required after weights are on disk. Hugging Face download happens once at install (`uv run acestep-download` or equivalent). Runtime inference must not call Google, ElevenLabs, or any music API.
+By default, every generate / cover / repaint / extract / lego / complete / LoRA job runs **ACE-Step 1.5 on the local GPU**. No network is required after weights are on disk. Hugging Face download happens once at install (`uv run acestep-download` or equivalent). Runtime inference must not call Google, ElevenLabs, or any music API.
+
+### 3.1 Remote GPU (opt-in, amended 2026-09-26)
+
+The same ACE-Step 1.5 may render on a GPU the user rents or runs elsewhere, for users without a suitable card. It mirrors The Wizard's Brush's Remote GPU lane. Rules:
+
+- **Off by default.** With no Remote GPU configured, Lyre makes no network calls and section 3 holds as written.
+- **Same engine, same adapter.** The host (`worker/remote_host`) wraps `worker/acestep_worker`. Section 2 is unchanged: no other engine, music API, or model, locally or remotely.
+- **Selected by the worker backend** (`LYRE_WORKER=remote`). The SQLite queue, the GPU lease, and take writing are unchanged. Projects and takes live only on the local machine; the host keeps a result only until the local worker has downloaded it.
+- **The local server is unchanged:** `127.0.0.1`, no auth. The remote host authenticates every request with a shared secret, reached over HTTPS only (plain HTTP only to loopback).
+- **Provisioners:** `manual` (the default; cannot spend money) and `runpod`. Hardware is rented only from an explicit user action: never on a timer, on launch, or because a job is queued. Stop terminates. A running rental is recorded before it is reported, and reported again on the next start if a crash left it up.
+- **Docker is used only for the host image** (`docker/remote-gpu/Dockerfile`). Lyre itself is never containerized.
+- **Style packs (LoRA train/apply) stay local-only** until adapter weights can move to and from a host.
+- **Tests stay GPU- and network-free.** HTTP goes through `server.remote_gpu.client.TRANSPORT`, which tests replace.
 
 ---
 
@@ -302,7 +315,7 @@ Python module that:
 1. On start: detect CUDA, log VRAM, load default `iterate` DiT + 1.7B LM with `pt` backend.
 2. Expose `run_job(job) -> take_meta` mapping job -> `GenerationParams` -> `generate_music(..., save_dir=take_dir)`.
 3. Hold a process-wide lock. If a swap is needed, unload then load, then run.
-4. Never import FastAPI. Never bind a public port (localhost queue to server is OK).
+4. Never import FastAPI. Never bind a public port (localhost queue to server is OK). The Remote GPU host (section 3.1) is a separate process that wraps this module; it is the only Lyre code that serves HTTP from a GPU machine.
 5. On failure: write `meta.json` with `error`, mark job `error`, keep GPU lock released.
 
 Mock for tests: a `worker` that writes a tiny silent WAV and valid `meta.json` without importing `acestep`.

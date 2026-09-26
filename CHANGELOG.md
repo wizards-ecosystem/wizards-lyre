@@ -7,7 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- **Remote GPU lane (opt-in).** `LYRE_WORKER=remote` sends render jobs to an
+  ACE-Step 1.5 host on a GPU you rent or own, while the queue, the GPU lease,
+  and every take stay local. The host (`worker/remote_host`) wraps the same
+  `worker/acestep_worker` adapter, speaks an authenticated submit/poll/ack
+  protocol, fetches weights on first use, and reports a build id so a stale
+  host is flagged. Generate, cover, repaint, extract, lego, and complete work
+  remotely; style packs stay local for now. Mirrors The Wizard's Brush's
+  Remote GPU lane. See `docs/remote-gpu.md`.
+- **Runpod provisioner.** With `LYRE_REMOTE_GPU_PROVISIONER=runpod`, a Remote
+  GPU panel shows the rate before you start, starts one pod on your click,
+  shows elapsed time and estimated spend, and terminates it on Stop or a clean
+  shutdown. Nothing rents hardware on its own. See `docs/runpod.md`.
+- `./scripts/lyre remote-host` and `./scripts/lyre remote-image`, and a
+  workflow that builds, boots, and (on release) publishes the host image to
+  GHCR tagged by build id.
+
+### Changed
+
+- SPEC.md section 3.1 amends "fully local" to "local by default" to admit the
+  opt-in Remote GPU. ACE-Step 1.5 remains the only engine, and the Lyre server
+  still binds `127.0.0.1` with no auth.
 
 ## [0.1.0] - 2026-09-05
 

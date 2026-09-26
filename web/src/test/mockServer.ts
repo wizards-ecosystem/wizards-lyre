@@ -266,6 +266,20 @@ export function createMockLyreServer() {
         jsonResponse({ ok: true, gpu: "RTX 4070 Ti SUPER", dit_loaded: "iterate" }),
       );
     }
+    if (method === "GET" && url === "/api/remote-gpu") {
+      return Promise.resolve(
+        jsonResponse({
+          provisioner: "manual",
+          label: "Self-hosted",
+          can_provision: false,
+          stop_on_exit: true,
+          quote: null,
+          connection: null,
+          session: null,
+          host: null,
+        }),
+      );
+    }
     if (method === "GET" && url === "/api/projects") {
       return Promise.resolve(jsonResponse(state.projects));
     }

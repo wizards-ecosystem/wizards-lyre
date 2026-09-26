@@ -1,4 +1,4 @@
-"""FastAPI app: health, projects, plan, takes, jobs. No CUDA here.
+"""FastAPI app: health, projects, plan, takes, jobs, Remote GPU. No CUDA here.
 
 See SPEC.md sec 8 for the HTTP API and sec 14 for phase 1 definition of done.
 Binds 127.0.0.1 only; port defaults to 8421, overridable via LYRE_PORT.
@@ -6,6 +6,7 @@ Binds 127.0.0.1 only; port defaults to 8421, overridable via LYRE_PORT.
 
 from __future__ import annotations
 
+import asyncio
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -18,12 +19,20 @@ from pydantic import BaseModel, Field
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from server import config, jobs, storage
+from server.remote_gpu import service as remote_gpu
+from server.remote_gpu.provisioners.base import AlreadyRunning, ProvisionerError
 
 
 @asynccontextmanager
 async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     jobs.init_db()
-    yield
+    # Report (never start) a Remote GPU an earlier run left up, and terminate
+    # ours on a clean exit. Both are no-ops for the default manual provisioner.
+    await asyncio.to_thread(remote_gpu.on_startup)
+    try:
+        yield
+    finally:
+        await asyncio.to_thread(remote_gpu.on_shutdown)
 
 
 app = FastAPI(title="The Wizard's Lyre", version="0.1.0", lifespan=_lifespan)
@@ -101,6 +110,11 @@ class TakeAnnotationBody(BaseModel):
     notes: str | None = None
 
 
+class RemoteGpuConnectionBody(BaseModel):
+    base_url: str = Field(max_length=300)
+    secret: str = Field(max_length=300)
+
+
 class JobBody(BaseModel):
     action: str
     dit_profile: str | None = None
@@ -152,6 +166,14 @@ def _job_not_found_handler(request, exc: jobs.JobNotFound):
 @app.exception_handler(jobs.JobError)
 def _job_error_handler(request, exc: jobs.JobError):
     return JSONResponse(status_code=400, content={"detail": str(exc)})
+
+
+@app.exception_handler(ProvisionerError)
+def _provisioner_error_handler(request, exc: ProvisionerError):
+    # 409 for a state the user can fix (already running, stop it first);
+    # anything else is the provider or its configuration refusing.
+    code = 409 if isinstance(exc, AlreadyRunning | remote_gpu.Conflict) else 400
+    return JSONResponse(status_code=code, content={"detail": str(exc)})
 
 
 @app.exception_handler(ValueError)
@@ -358,6 +380,33 @@ def list_jobs(
     # old running training no matter how many newer or finished rows exist
     # behind it (see jobs.list_recent_jobs for why `limit` doesn't apply).
     return jobs.list_recent_jobs(limit=limit, project_id=project_id, action=action, active=active)
+
+
+# Remote GPU (SPEC.md sec 3.1): opt-in. Nothing here rents hardware except
+# POST /api/remote-gpu/session, which only the user's own click sends.
+@app.get("/api/remote-gpu")
+def get_remote_gpu() -> dict[str, Any]:
+    return remote_gpu.status()
+
+
+@app.put("/api/remote-gpu/connection")
+def put_remote_gpu_connection(body: RemoteGpuConnectionBody) -> dict[str, Any]:
+    return remote_gpu.connect(body.base_url, body.secret)
+
+
+@app.delete("/api/remote-gpu/connection")
+def delete_remote_gpu_connection() -> dict[str, Any]:
+    return remote_gpu.disconnect()
+
+
+@app.post("/api/remote-gpu/session")
+def start_remote_gpu_session() -> dict[str, Any]:
+    return remote_gpu.start()
+
+
+@app.delete("/api/remote-gpu/session")
+def stop_remote_gpu_session() -> dict[str, Any]:
+    return remote_gpu.stop()
 
 
 # Prod: FastAPI serves the built SPA from web/dist (SPEC.md sec 5). Registered

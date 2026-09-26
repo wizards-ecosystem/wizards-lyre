@@ -59,12 +59,30 @@ without the server ever asking CUDA anything.
 | `worker/run_worker.py` | The process entry point. Owns the lease and the poll loop. |
 | `worker/acestep_worker/` | The real ACE-Step adapter. |
 | `worker/mock_worker.py` | GPU-free stand-in. Writes silent WAVs. |
+| `worker/remote_backend.py` | `LYRE_WORKER=remote`: renders on a Remote GPU host. |
+| `worker/remote_host/` | The Remote GPU host itself; runs on the GPU machine, not here. |
+| `server/remote_gpu/` | Remote GPU connection, HTTP client, and provisioners. |
 | `web/src/` | The SPA. |
 
 `server/storage`, `server/jobs`, and `worker/acestep_worker` are packages whose
 `__init__.py` re-exports the module surface, so callers use `storage.<name>` as
 if each were still one module. See the note in
 [CONTRIBUTING.md](../CONTRIBUTING.md) about patching these in tests.
+
+## The optional Remote GPU
+
+With `LYRE_WORKER=remote`, the worker process stays exactly where it is: it
+still claims jobs, holds the lease, heartbeats, and writes takes. Only the
+render moves. `worker/remote_backend.py` sends the job to a host
+(`worker/remote_host`, which wraps the same `acestep_worker`), polls until it is
+done, downloads the audio, and acknowledges it. The connection is read fresh
+before every job, and readiness on every heartbeat, so a GPU can be started or
+replaced while both processes keep running.
+
+The server's only part is status and control: it joins the provisioner's view
+(does the pod exist?) with the host's `/health` (can ACE-Step take work?), and
+starts or stops a rental when the user asks. It still never imports ACE-Step.
+See [remote-gpu.md](remote-gpu.md).
 
 ## Data on disk
 

@@ -6,6 +6,47 @@ export interface Health {
   dit_loaded: string | null;
 }
 
+// Opt-in Remote GPU (docs/remote-gpu.md). Mirrors server/remote_gpu/service.py.
+export interface RemoteGpuQuote {
+  gpu: string;
+  cloud: string;
+  disk_gb: number;
+  hourly_usd: number | null;
+  memory_gb: number | null;
+  availability: string | null;
+}
+
+export interface RemoteGpuSession {
+  id: string;
+  state: "starting" | "ready" | "stopping" | "error";
+  detail: string;
+  gpu: string;
+  elapsed_sec: number;
+  hourly_usd: number | null;
+  cost_estimate_usd: number | null;
+}
+
+export interface RemoteGpuHost {
+  connected: boolean;
+  ready: boolean;
+  message?: string | null;
+  gpu?: string | null;
+  stale_build?: boolean;
+  loaded_dit_profile?: string | null;
+  error: string | null;
+}
+
+export interface RemoteGpuStatus {
+  provisioner: string;
+  label: string;
+  can_provision: boolean;
+  stop_on_exit: boolean;
+  quote: RemoteGpuQuote | null;
+  connection: { base_url: string } | null;
+  session: RemoteGpuSession | null;
+  host: RemoteGpuHost | null;
+}
+
 export interface ProjectSummary {
   id: string;
   title: string;
@@ -161,6 +202,16 @@ async function uploadAudio(projectId: string, file: File): Promise<{ upload_path
 
 export const api = {
   health: () => request<Health>("/api/health"),
+  remoteGpu: () => request<RemoteGpuStatus>("/api/remote-gpu"),
+  connectRemoteGpu: (base_url: string, secret: string) =>
+    request<RemoteGpuStatus>("/api/remote-gpu/connection", {
+      method: "PUT",
+      body: JSON.stringify({ base_url, secret }),
+    }),
+  disconnectRemoteGpu: () =>
+    request<RemoteGpuStatus>("/api/remote-gpu/connection", { method: "DELETE" }),
+  startRemoteGpu: () => request<RemoteGpuStatus>("/api/remote-gpu/session", { method: "POST" }),
+  stopRemoteGpu: () => request<RemoteGpuStatus>("/api/remote-gpu/session", { method: "DELETE" }),
   uploadAudio,
   listProjects: () => request<ProjectSummary[]>("/api/projects"),
   createProject: (title: string, query: string) =>

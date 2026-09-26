@@ -62,6 +62,21 @@ prepare_environment() {
   touch "$NPM_CONFIG_USERCONFIG"
 }
 
+# Optional local secrets, such as LYRE_RUNPOD_API_KEY (docs/runpod.md). The file
+# is gitignored and parsed as plain NAME=value lines, never sourced, so nothing
+# in it runs. A variable already set in the environment wins.
+load_env_file() {
+  local file="$ROOT/.env" line name
+  [[ -f "$file" ]] || return 0
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ "$line" =~ ^[[:space:]]*(#|$) ]] && continue
+    [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]] || continue
+    name="${BASH_REMATCH[1]}"
+    [[ -n "${!name+x}" ]] && continue
+    export "$name=${BASH_REMATCH[2]}"
+  done < "$file"
+}
+
 need_command() {
   if ! command -v "$1" >/dev/null 2>&1; then
     echo "Missing required system tool: $1" >&2
@@ -282,7 +297,11 @@ Commands:
   models-standard
              Download every profile except optional XL quality (~20 GB).
   server     Start Lyre's HTTP server on 127.0.0.1:8421.
-  worker     Start Lyre's local GPU worker.
+  worker     Start Lyre's worker (local GPU by default; LYRE_WORKER=remote
+             sends jobs to a Remote GPU, see docs/remote-gpu.md).
+  remote-host
+             Run the Remote GPU host on this machine's GPU for another Lyre
+             to use. Needs LYRE_REMOTE_SECRET. See docs/remote-gpu.md.
   smoke-gpu  Run the manual ACE-Step GPU smoke test.
   live-check Run the end-to-end check against a running server and worker.
   doctor     Check tools, local install, models, GPU, and optional FFmpeg.
@@ -300,11 +319,15 @@ Source checkout commands:
   audit      Check installed Python and locked frontend dependencies.
   format     Reformat both stacks in place.
   release    Build reproducible runtime archives (source checkout only).
+  remote-image
+             Build the Remote GPU host container image, tagged with its
+             build id (needs Docker). See docs/runpod.md.
 EOF
   fi
 }
 
 prepare_environment
+load_env_file
 cd "$ROOT"
 
 case "${1:-}" in
@@ -335,6 +358,25 @@ case "${1:-}" in
   worker)
     ensure_venv
     exec "$VENV/bin/python" -m worker.run_worker
+    ;;
+  remote-host)
+    ensure_venv
+    exec "$VENV/bin/python" -m worker.remote_host
+    ;;
+  remote-image)
+    require_source_checkout
+    ensure_venv
+    need_command docker
+    build="$("$VENV/bin/python" -c 'from worker.remote_host import build_id; print(build_id())')"
+    docker build --platform=linux/amd64 \
+      -f "$ROOT/docker/remote-gpu/Dockerfile" \
+      -t "wizards-lyre-remote-gpu:$build" "$ROOT"
+    cat <<EOF
+Built wizards-lyre-remote-gpu:$build
+Push it somewhere your GPU host can pull from, then set LYRE_RUNPOD_IMAGE:
+  docker tag wizards-lyre-remote-gpu:$build <registry>/wizards-lyre-remote-gpu:$build
+  docker push <registry>/wizards-lyre-remote-gpu:$build
+EOF
     ;;
   web)
     require_source_checkout

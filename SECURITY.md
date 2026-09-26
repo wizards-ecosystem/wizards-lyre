@@ -25,6 +25,25 @@ boundary covers only that deployment (SPEC.md section 2):
 If you need multi-user or remote access, Lyre is the wrong tool. Building that
 is explicitly out of scope.
 
+## The optional Remote GPU
+
+The opt-in [Remote GPU lane](docs/remote-gpu.md) sends render jobs to an
+ACE-Step host on another machine. It opens nothing on yours. The host is the
+one Lyre component that serves on a network, so it is built for that:
+
+- It authenticates every request with a shared secret before reading the body,
+  caps request size, and refuses to start with a missing, short, or placeholder
+  secret.
+- Lyre sends the secret only over HTTPS (plain HTTP only to loopback), never
+  follows a redirect, stores it in an owner-only file, and never returns it
+  from its API.
+- A provisioner's API key stays in the server's environment. A Runpod pod gets
+  only a secret generated for that session.
+
+Anyone who has the host's address and secret can use that GPU, and read the
+lyrics, captions, and source audio of jobs sent to it. Treat both as
+credentials, and terminate a rented host when you are done.
+
 ## What is defended anyway
 
 Even for a local tool, some inputs are worth constraining, and these are
