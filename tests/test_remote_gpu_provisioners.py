@@ -240,7 +240,7 @@ def test_an_unpublished_image_is_refused_before_any_spend(fake_runpod: FakeRunpo
     assert fake_runpod.requests("POST", f"{runpod.API}/pods") == []
 
 
-def test_a_private_image_is_named_as_private(
+def test_an_unpullable_image_names_both_causes(
     fake_runpod: FakeRunpod, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     def private(method, url, headers, body, timeout, max_bytes):
@@ -250,7 +250,7 @@ def test_a_private_image_is_named_as_private(
         return fake_runpod(method, url, headers, body, timeout, max_bytes)
 
     monkeypatch.setattr(remote_client, "TRANSPORT", private)
-    with pytest.raises(ProvisionerError, match="is private"):
+    with pytest.raises(ProvisionerError, match="either it is private"):
         runpod.RunpodProvisioner().start()
     assert fake_runpod.requests("POST", f"{runpod.API}/pods") == []
 

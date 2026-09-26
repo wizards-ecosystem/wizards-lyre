@@ -168,11 +168,12 @@ class RunpodProvisioner:
                 "Nothing was created; try again."
             ) from None
         if status in (401, 403):
-            # GHCR answers an anonymous pull of a private package this way.
+            # GHCR refuses an anonymous pull the same way whether the package
+            # is private or was never published, so name both.
             raise ProvisionerError(
-                f"The host image {image} exists but is private, so Runpod cannot pull it. "
-                "Set the package to Public once in its GitHub settings (docs/RELEASING.md). "
-                "Nothing was created."
+                f"Runpod could not pull the host image {image} anonymously: either it is "
+                "private (set the package to Public once; see docs/RELEASING.md), or no "
+                "image was published for this build. Nothing was created."
             )
         if status != 200:
             raise ProvisionerError(
