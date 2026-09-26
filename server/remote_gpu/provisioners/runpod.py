@@ -167,6 +167,13 @@ class RunpodProvisioner:
                 f"Could not confirm the host image {image} is published ({exc}). "
                 "Nothing was created; try again."
             ) from None
+        if status in (401, 403):
+            # GHCR answers an anonymous pull of a private package this way.
+            raise ProvisionerError(
+                f"The host image {image} exists but is private, so Runpod cannot pull it. "
+                "Set the package to Public once in its GitHub settings (docs/RELEASING.md). "
+                "Nothing was created."
+            )
         if status != 200:
             raise ProvisionerError(
                 f"No published host image matches this checkout (build {tag}), which usually "
