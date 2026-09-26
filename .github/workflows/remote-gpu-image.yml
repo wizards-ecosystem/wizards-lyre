@@ -1,0 +1,130 @@
+name: Remote GPU image
+
+# Builds the Remote GPU host image (docker/remote-gpu/Dockerfile) and, when a
+# release is published, pushes it to GHCR tagged with
+# `worker.remote_host.build_id()`. With LYRE_RUNPOD_IMAGE unset, the Runpod
+# provisioner runs exactly that tag, so a user needs a Runpod key, not Docker
+# and a registry.
+#
+# The image holds no weights and no secrets. Tags are build ids, never
+# `latest`, and a build id that is already published is left alone: a pod
+# pinned to it must keep pulling the same bytes.
+
+on:
+  release:
+    types: [published]
+  # Prove the image still builds and boots whenever what goes into it changes.
+  pull_request:
+    paths:
+      - "worker/remote_host/**"
+      - "worker/acestep_worker/**"
+      - "docker/remote-gpu/**"
+      - "ACE_STEP_REVISION"
+      - "requirements/ace-step-security.txt"
+      - ".github/workflows/remote-gpu-image.yml"
+  workflow_dispatch:
+    inputs:
+      push:
+        description: "Push to GHCR (leave off to prove the build only)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: remote-gpu-image-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  image:
+    name: Build, boot, and publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    env:
+      IMAGE: ghcr.io/wizards-ecosystem/wizards-lyre-remote-gpu
+      PUSH: ${{ github.event_name == 'release' || inputs.push == true }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Log in to GHCR
+        if: env.PUSH == 'true'
+        # Before the existence check too: a package that is still private would
+        # otherwise look absent and be rebuilt over its own tag.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ACTOR: ${{ github.actor }}
+        run: echo "$GH_TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
+
+      - name: Resolve the tag
+        id: tag
+        run: |
+          build="$(python3 -c 'from worker.remote_host import build_id; print(build_id())')"
+          test -n "$build"
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+          if [ "$PUSH" = "true" ] && docker manifest inspect "$IMAGE:$build" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "$IMAGE:$build is already published; leaving it alone"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build
+        if: steps.tag.outputs.exists != 'true'
+        env:
+          BUILD: ${{ steps.tag.outputs.build }}
+          SOURCE: https://github.com/${{ github.repository }}
+          REVISION: ${{ github.sha }}
+        run: >-
+          docker build --platform=linux/amd64
+          -f docker/remote-gpu/Dockerfile
+          --label "org.opencontainers.image.source=$SOURCE"
+          --label "org.opencontainers.image.revision=$REVISION"
+          --label org.opencontainers.image.licenses=MIT
+          -t "$IMAGE:$BUILD" .
+
+      - name: Boot the image and check it reports its own build id
+        if: steps.tag.outputs.exists != 'true'
+        env:
+          BUILD: ${{ steps.tag.outputs.build }}
+        run: |
+          secret="$(openssl rand -hex 32)"
+          docker run -d --name host -p 127.0.0.1:8000:8000 \
+            -e LYRE_REMOTE_SECRET="$secret" -e LYRE_REMOTE_BACKEND=mock "$IMAGE:$BUILD"
+          for _ in $(seq 60); do
+            if health="$(curl -fsS -H "X-Lyre-Secret: $secret" http://127.0.0.1:8000/health)"; then
+              break
+            fi
+            sleep 2
+          done
+          docker logs host
+          echo "$health"
+          test "$(echo "$health" | python3 -c 'import json,sys; print(json.load(sys.stdin)["build"])')" = "$BUILD"
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/health)" = 401
+          docker run --rm --entrypoint python "$IMAGE:$BUILD" -c "import acestep, torch"
+          docker rm -f host
+
+      - name: Push
+        id: push
+        if: env.PUSH == 'true' && steps.tag.outputs.exists != 'true'
+        env:
+          BUILD: ${{ steps.tag.outputs.build }}
+        run: |
+          docker push "$IMAGE:$BUILD"
+          digest="$(docker inspect --format '{{index .RepoDigests 0}}' "$IMAGE:$BUILD")"
+          echo "digest=${digest#*@}" >> "$GITHUB_OUTPUT"
+
+      - name: Attest the published image
+        if: steps.push.outcome == 'success'
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6  # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true

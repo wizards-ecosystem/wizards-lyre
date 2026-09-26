@@ -83,6 +83,13 @@ release candidate must not silently present it as tested.
    draft. Download an archive, verify `SHA256SUMS` and `gh attestation verify`,
    then follow only its bundled README on a fresh machine or directory.
 5. Publish the reviewed draft. Verify its links and installation commands.
+   Publishing triggers the **Remote GPU image** workflow, which pushes the host
+   image to `ghcr.io/wizards-ecosystem/wizards-lyre-remote-gpu:<build id>`
+   (skipped when that build id is already published).
+   **First release only:** a new organization package starts private, and the
+   API cannot change that. Set it to Public once under the package's settings
+   on GitHub, or Runpod pods cannot pull it and `gh attestation verify
+   oci://...` fails.
 6. Restore an empty `Unreleased` section and begin the next development cycle.
 
 Do not publish model weights or generated user data as release assets.

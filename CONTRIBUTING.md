@@ -72,18 +72,25 @@ Run it before a release.
 `SPEC.md` is the product spec and takes precedence over any other document
 here, including this one. The constraints that matter most:
 
-- **ACE-Step 1.5 on the local GPU is the only engine.** Suno/Udio wrappers,
+- **ACE-Step 1.5 is the only engine**, on the local GPU by default or on an
+  opt-in Remote GPU running the same adapter (SPEC.md section 3.1). Suno/Udio wrappers,
   Lyria, ElevenLabs, Stability, Magenta, LeVo, YuE, and optional adapters or
   stubs are outside scope. `tests/test_spec_lock.py` enforces this by
   scanning the source, and it will fail your build.
 - **No Gradio.** ACE-Step's own demo UI is upstream's; Lyre owns its product UI.
-- **Localhost only, no auth.** See [SECURITY.md](SECURITY.md).
+- **Localhost only, no auth** for the Lyre server. See [SECURITY.md](SECURITY.md).
+  The Remote GPU host is the one authenticated service; see
+  [docs/remote-gpu.md](docs/remote-gpu.md).
 - **`pytest` must never need a GPU** and must never import `acestep` or `torch`.
   If you are testing worker behavior, follow the pattern in
   `tests/test_acestep_worker_adapter.py`, which installs fake `acestep.*`
   modules matching upstream's real signatures.
-- **No mixer, MIDI, plugins, Docker, or cloud deploy.** Lyre focuses on
-  generating and iterating on takes; DAW features are outside scope.
+- **No mixer, MIDI, plugins, or cloud deploy of Lyre.** Lyre focuses on
+  generating and iterating on takes; DAW features are outside scope. Docker is
+  used only for the Remote GPU host image.
+- **Remote GPU code never rents hardware on its own.** Only the user's Start
+  click may create a pod, and tests never touch the network (patch
+  `server.remote_gpu.client.TRANSPORT`).
 
 Forks may pursue features outside these boundaries under the MIT license.
 

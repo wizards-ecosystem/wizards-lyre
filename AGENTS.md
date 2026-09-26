@@ -6,13 +6,22 @@ alongside setup and the test loop.
 
 - **SPEC.md is the sole product spec.** Implement it in the phase order written
   there. Do not re-open product-scope research.
-- Generation is **ACE-Step 1.5 on the local GPU only**. No Lyria, Gemini music,
-  ElevenLabs Music, Stability Audio, Magenta RealTime, LeVo, YuE, or unofficial
-  Suno/Udio clients. Do not add stubs or optional adapters for those.
-  `tests/test_spec_lock.py` enforces this by scanning the source.
+- Generation is **ACE-Step 1.5 only**: on the local GPU by default, or through
+  the opt-in Remote GPU lane (SPEC.md section 3.1), which runs the same
+  `worker/acestep_worker` adapter on a GPU the user rents or owns. No Lyria,
+  Gemini music, ElevenLabs Music, Stability Audio, Magenta RealTime, LeVo, YuE,
+  or unofficial Suno/Udio clients. Do not add stubs or optional adapters for
+  those. `tests/test_spec_lock.py` enforces this by scanning the source.
 - Do not ship ACE-Step's Gradio UI. Call the ACE-Step Python API from
   `worker/acestep_worker/`.
-- Bind **127.0.0.1** only. No auth. No cloud deploy. No Docker.
+- The Lyre server binds **127.0.0.1** only. No auth. No cloud deploy of Lyre
+  itself. Docker only for the Remote GPU host image
+  (`docker/remote-gpu/Dockerfile`).
+- Remote GPU code must never rent hardware except from an explicit user request
+  (`POST /api/remote-gpu/session`): no timers, no start-on-launch, no
+  provisioning because a job is queued. Stop terminates, never merely stops.
+- Tests never make real network calls. Remote GPU and provisioner tests patch
+  `server.remote_gpu.client.TRANSPORT`.
 - Default tests mock the worker. **`pytest` must never require a GPU** and must
   never import `acestep` or `torch` at module scope.
 - If upstream ACE-Step parameter names change, adapt inside the worker adapter

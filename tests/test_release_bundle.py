@@ -36,6 +36,7 @@ def _release_source(tmp_path: Path) -> Path:
     _write(root / "LICENSE", "MIT fixture\n")
     _write(root / "uv.lock")
     _write(root / "requirements/ace-step-security.txt")
+    _write(root / "docker/remote-gpu/Dockerfile")
     _write(root / "scripts/lyre", "#!/usr/bin/env bash\n")
     _write(root / "scripts/smoke-gpu.py")
     _write(root / "scripts/live_stack_check.py")
@@ -110,6 +111,7 @@ def test_release_archives_are_reproducible_and_contain_only_runtime_files(
         "ACE_STEP_REVISION",
         "LICENSE",
         "LYRE_RELEASE.json",
+        "docker/remote-gpu/Dockerfile",
         "README.md",
         "THIRD_PARTY_LICENSES.md",
         "THIRD_PARTY_NOTICES.md",

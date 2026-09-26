@@ -31,6 +31,7 @@ import {
 import { formatClock, parseSeed } from "./lib/format";
 import { pollJob } from "./lib/jobs";
 import { useHealth } from "./hooks/useHealth";
+import { RemoteGpuControl } from "./components/RemoteGpuControl";
 import { usePlanAutosave } from "./hooks/usePlanAutosave";
 import { useTakeNotes } from "./hooks/useTakeNotes";
 import { useWaveform } from "./hooks/useWaveform";
@@ -1140,6 +1141,7 @@ export default function App() {
               </span>
             </div>
           </details>
+          <RemoteGpuControl />
           <div
             className={`health ${health?.ok ? "ok" : "down"}`}
             title={healthError ?? undefined}

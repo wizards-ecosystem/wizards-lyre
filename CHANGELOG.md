@@ -9,6 +9,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Nothing yet.
 
+## [0.2.0] - 2026-09-26
+
+### Added
+
+- **Remote GPU lane (opt-in).** `LYRE_WORKER=remote` sends render jobs to an
+  ACE-Step 1.5 host on a GPU you rent or own, while the queue, the GPU lease,
+  and every take stay local. The host (`worker/remote_host`) wraps the same
+  `worker/acestep_worker` adapter, speaks an authenticated submit/poll/ack
+  protocol, fetches weights on first use, and reports a build id so a stale
+  host is flagged. Generate, cover, repaint, extract, lego, and complete work
+  remotely; style packs stay local for now. Mirrors The Wizard's Brush's
+  Remote GPU lane. See `docs/remote-gpu.md`.
+- **Runpod provisioner.** With `LYRE_REMOTE_GPU_PROVISIONER=runpod`, a Remote
+  GPU panel shows the rate before you start, starts one pod on your click,
+  shows elapsed time and estimated spend, and terminates it on Stop or a clean
+  shutdown. Nothing rents hardware on its own. See `docs/runpod.md`.
+- `./scripts/lyre remote-host` and `./scripts/lyre remote-image`, and a
+  workflow that builds, boots, and (on release) publishes the host image to
+  GHCR tagged by build id.
+- `scripts/lyre` loads plain `NAME=value` lines from a gitignored `.env`
+  (parsed, never executed; the environment wins), for keeping
+  `LYRE_RUNPOD_API_KEY` out of shell history.
+
+### Security
+
+- The ACE-Step overlay now pins `anyio==4.14.2` (CVE-2026-63374,
+  CVE-2026-64847) and aligns `idna` with Lyre's own lock (3.19) instead of
+  downgrading it.
+- `accelerate` `PYSEC-2026-3804` has no fixed release; it is a reviewed
+  exception in `docs/SECURITY_AUDIT.md` because Lyre never loads a checkpoint
+  index it did not download itself.
+
+### Changed
+
+- SPEC.md section 3.1 amends "fully local" to "local by default" to admit the
+  opt-in Remote GPU. ACE-Step 1.5 remains the only engine, and the Lyre server
+  still binds `127.0.0.1` with no auth.
+
 ## [0.1.0] - 2026-09-05
 
 First public release. Everything below describes the combined public baseline.
@@ -137,5 +175,6 @@ are recorded because they shaped the code a contributor will read.
 - GitHub Actions dependencies are pinned to verified full commit SHAs and kept
   current by Dependabot.
 
-[Unreleased]: https://github.com/wizards-ecosystem/wizards-lyre/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/wizards-ecosystem/wizards-lyre/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/wizards-ecosystem/wizards-lyre/releases/tag/v0.2.0
 [0.1.0]: https://github.com/wizards-ecosystem/wizards-lyre/releases/tag/v0.1.0

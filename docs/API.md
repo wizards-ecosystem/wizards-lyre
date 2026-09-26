@@ -1,7 +1,8 @@
 # HTTP API
 
 All JSON, all under `http://127.0.0.1:8421` by default. No authentication;
-see [SECURITY.md](../SECURITY.md).
+see [SECURITY.md](../SECURITY.md). The optional Remote GPU host has its own,
+authenticated protocol; see [remote-gpu.md](remote-gpu.md#the-host-protocol).
 
 The server is FastAPI, so the authoritative, always-current reference is the
 generated schema while it is running:
@@ -33,6 +34,11 @@ This page is the orientation; the schema is the specification.
 | `POST` | `/api/projects/{id}/jobs` | Enqueue a job. Returns the `queued` row. |
 | `GET` | `/api/jobs/{job_id}` | One job's status. |
 | `GET` | `/api/jobs` | Recent jobs. Filters: `project_id`, `action`, `active`, `limit`. |
+| `GET` | `/api/remote-gpu` | Remote GPU state: provisioner, price quote, connection, rental, host health. |
+| `PUT` | `/api/remote-gpu/connection` | Connect a host you run: `{ base_url, secret }`. |
+| `DELETE` | `/api/remote-gpu/connection` | Forget the connected host. |
+| `POST` | `/api/remote-gpu/session` | Rent a GPU with the configured provisioner. **Billable.** |
+| `DELETE` | `/api/remote-gpu/session` | Terminate the rental. Safe when nothing is running. |
 
 `/` serves the built SPA from `web/dist` when it exists, and otherwise returns
 a hint telling you to build it.
@@ -93,12 +99,46 @@ complete still-active worklist with no recency truncation. That is what lets
 the UI rediscover an hour-long training run after a page refresh, even when
 newer jobs have piled up behind it.
 
+## Remote GPU
+
+Opt-in, and off unless you configure it. See [remote-gpu.md](remote-gpu.md).
+The shared secret is write-only: no response ever contains it.
+
+`GET /api/remote-gpu` returns:
+
+```json
+{
+  "provisioner": "runpod",
+  "label": "Runpod",
+  "can_provision": true,
+  "stop_on_exit": true,
+  "quote": { "gpu": "NVIDIA GeForce RTX 4090", "cloud": "SECURE", "hourly_usd": 0.74 },
+  "connection": { "base_url": "https://abc123-8000.proxy.runpod.net" },
+  "session": {
+    "id": "abc123",
+    "state": "starting",
+    "detail": "pulling the host image (the slow part)",
+    "elapsed_sec": 95.0,
+    "hourly_usd": 0.27,
+    "cost_estimate_usd": 0.0071
+  },
+  "host": { "connected": false, "ready": false, "error": "..." }
+}
+```
+
+`session.state` is `starting`, `ready`, `stopping`, or `error`. It reads
+`ready` only when the pod is up **and** its host answers `/health` ready.
+`quote` is present only when a start is possible and nothing is running.
+`host.stale_build` is true when the host runs different code than this
+checkout.
+
 ## Errors
 
 | Status | Meaning |
 |---|---|
-| `400` | Invalid plan field, invalid job body, or a path escaping the jail. |
+| `400` | Invalid plan field, invalid job body, a path escaping the jail, or a provider refusal. |
 | `404` | Unknown project, take, LoRA, or job. |
+| `409` | A Remote GPU is already running; stop it first. |
 | `413` | Request body over the upload cap. |
 
 Error responses are `{"detail": "..."}`, and the message names the offending

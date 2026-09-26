@@ -179,6 +179,8 @@ def _payload(root: Path, version: str, state: SourceState) -> dict[str, PayloadF
         "pyproject.toml",
         "uv.lock",
         "requirements/ace-step-security.txt",
+        # Part of the Remote GPU host's build id; see worker/remote_host.
+        "docker/remote-gpu/Dockerfile",
     ):
         payload[relative] = PayloadFile(_read_file(root / relative))
     for relative in (

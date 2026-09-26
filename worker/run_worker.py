@@ -126,6 +126,11 @@ def _current_readiness(startup_ready: bool, startup_message: str) -> tuple[bool,
     only when nothing has ever loaded successfully, so a genuine startup
     failure still reads as one instead of a generic "nothing loaded"."""
     module = jobs.resolve_worker_module()
+    # A backend whose readiness can change under it (the Remote GPU comes and
+    # goes while this process runs) reports it live instead.
+    live = getattr(module, "current_readiness", None)
+    if live is not None:
+        return live()
     get_loaded = getattr(module, "get_loaded_dit_profile", None)
     loaded_dit_profile = get_loaded() if get_loaded is not None else None
     if loaded_dit_profile is not None:

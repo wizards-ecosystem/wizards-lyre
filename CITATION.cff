@@ -4,7 +4,7 @@ title: "The Wizard's Lyre"
 type: software
 authors:
   - name: "The Wizard's Conclave"
-version: 0.1.0
+version: 0.2.0
 license: MIT
 repository-code: "https://github.com/wizards-ecosystem/wizards-lyre"
 url: "https://github.com/wizards-ecosystem/wizards-lyre"
