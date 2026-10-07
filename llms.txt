@@ -1,0 +1,9 @@
+# The Wizard's Lyre
+
+> A local-first music studio using ACE-Step 1.5, with an opt-in Remote GPU lane.
+
+## Documentation
+
+- [README](https://github.com/wizards-ecosystem/wizards-lyre/blob/main/README.md)
+- [Product specification](https://github.com/wizards-ecosystem/wizards-lyre/blob/main/SPEC.md)
+- [Contributing](https://github.com/wizards-ecosystem/wizards-lyre/blob/main/CONTRIBUTING.md)
