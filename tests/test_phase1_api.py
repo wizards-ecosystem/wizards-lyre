@@ -950,7 +950,7 @@ def test_quality_profile_rejected_without_cpu_offload_support(client: TestClient
 
 
 def test_ordinary_profiles_queue_despite_total_worker_startup_failure(
-    client: TestClient,
+    api_client: TestClient,
 ) -> None:
     """When the *whole worker* fails to start (missing ACE-Step/CUDA/
     weights), worker/run_worker.py's _publish_capabilities marks every DiT
@@ -964,9 +964,9 @@ def test_ordinary_profiles_queue_despite_total_worker_startup_failure(
     _ensure_loaded to retry it (reviewer-flagged)."""
     from server import jobs as jobs_module
 
-    project = client.post("/api/projects", json={"title": "Startup Failure"}).json()
+    project = api_client.post("/api/projects", json={"title": "Startup Failure"}).json()
     project_id = project["id"]
-    client.put(
+    api_client.put(
         f"/api/projects/{project_id}/plan",
         json={**storage.default_plan(), "caption": "x"},
     )
@@ -980,22 +980,16 @@ def test_ordinary_profiles_queue_despite_total_worker_startup_failure(
         )
     jobs_module.publish_worker_status(False, "boom: no GPU found", None)
 
-    # Check quality's rejection *before* enqueueing anything else: the
-    # `client` fixture's background run_loop thread claims and finishes
-    # queued jobs almost immediately (0.01s poll) and republishes
-    # capabilities from live state after every one it runs, which would
-    # overwrite this test's forced "every profile unsupported" state back to
-    # "supported" -- flaky if the iterate job below were posted first and
-    # got claimed/finished before this assertion runs.
-    # quality remains gated even in this scenario -- it's the one profile
-    # SPEC.md actually calls for early rejection of.
-    resp = client.post(
+    # This tests admission, so use the API-only fixture: no background worker
+    # may claim the iterate job or overwrite the forced capability state.
+    # Quality alone remains subject to the early capability rejection.
+    resp = api_client.post(
         f"/api/projects/{project_id}/jobs",
         json={"action": "generate", "dit_profile": "quality"},
     )
     assert resp.status_code == 400
 
-    resp = client.post(
+    resp = api_client.post(
         f"/api/projects/{project_id}/jobs",
         json={"action": "generate", "dit_profile": "iterate"},
     )
