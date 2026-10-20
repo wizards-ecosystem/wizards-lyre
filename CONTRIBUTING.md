@@ -78,8 +78,10 @@ here, including this one. The constraints that matter most:
   stubs are outside scope. `tests/test_spec_lock.py` enforces this by
   scanning the source, and it will fail your build.
 - **No Gradio.** ACE-Step's own demo UI is upstream's; Lyre owns its product UI.
-- **Localhost only, no auth** for the Lyre server. See [SECURITY.md](SECURITY.md).
-  The Remote GPU host is the one authenticated service; see
+- **Loopback and no auth are the default** for the Lyre server. See
+  [SECURITY.md](SECURITY.md). An opt-in API key and network bind are specified
+  in SPEC.md section 15 and are not implemented until that phase; do not build
+  them early. The Remote GPU host is the authenticated render service; see
   [docs/remote-gpu.md](docs/remote-gpu.md).
 - **`pytest` must never need a GPU** and must never import `acestep` or `torch`.
   If you are testing worker behavior, follow the pattern in

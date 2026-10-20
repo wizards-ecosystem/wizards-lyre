@@ -8,22 +8,31 @@ before reporting a version-specific issue.
 
 ## Threat model, stated plainly
 
-The Wizard's Lyre is a **single-user tool for one machine**. Its security
-boundary covers only that deployment (SPEC.md section 2):
+The Wizard's Lyre is a **single-operator tool**. The running release's
+security boundary is the loopback interface:
 
-- **There is no authentication, and there never will be.** Anyone who can reach
-  the HTTP port has full control of every project, take, and file operation the
-  server can perform.
-- **The server binds `127.0.0.1` only.** This is enforced in `server/config.py`
-  and asserted by `tests/test_spec_lock.py`, which fails the build if a public
-  bind host appears anywhere in Lyre's own source.
-- **Do not expose it to a network.** Do not put it behind a reverse proxy, do
-  not port-forward it, do not bind it to `0.0.0.0`, and do not run it on a
-  shared machine you do not trust. Treat the port as equivalent to a shell on
-  that machine.
+- **The default has no authentication.** Anyone who can reach the HTTP port
+  has full control of every project, take, and file operation the server can
+  perform. On the default bind that person is a local user of the machine.
+- **The server binds `127.0.0.1` unless a future setting says otherwise.**
+  Today that host is fixed in `server/config.py`. `tests/test_spec_lock.py`
+  fails the build if a public bind host appears as a literal in Lyre's own
+  source. The default constant stays `127.0.0.1` even after the opt-in below
+  is built.
+- **Do not expose this release to a network.** Do not put it behind a reverse
+  proxy, do not port-forward it, and do not run it on a shared machine you do
+  not trust. Treat the port as equivalent to a shell on that machine.
 
-If you need multi-user or remote access, Lyre is the wrong tool. Building that
-is explicitly out of scope.
+SPEC.md section 15 specifies an opt-in after this release: the operator may
+set a non-loopback bind, and the process must then refuse to start unless an
+API key exists. A tunnel or reverse proxy onto loopback must set
+`LYRE_REQUIRE_AUTH=1`, because the server cannot see the client in front of
+the proxy. That opt-in is not implemented. Until the phase 11 PR lands, the
+paragraphs above are the whole story, and exposing the port is still unsafe.
+
+Lyre does not grow accounts or a hosted multi-tenant service. Keys, when they
+exist, name one operator's agents. Remote GPU session start stays a human
+action on the loopback studio; an agent job must not rent a machine.
 
 ## The optional Remote GPU
 
@@ -73,9 +82,11 @@ report private while it is assessed, and coordinate disclosure after a fix is
 available. This volunteer project cannot promise a response or remediation
 deadline.
 
-Because of the threat model above, "the API has no authentication" and
-"anyone on localhost can call it" describe expected behavior rather than
-vulnerabilities.
+Because of the threat model above, "the default API has no authentication"
+and "anyone on localhost can call it" describe expected behavior rather than
+vulnerabilities. Once section 15 is implemented, a network bind that starts
+without a key, a leaked key file, a webhook that can reach a metadata
+address, and an agent path that rents a GPU are in scope.
 Reports about the path jail, the upload limits, the archive builder, or
 anything that lets Lyre read or write outside its own directories are very
 much wanted.

@@ -26,8 +26,10 @@
 </p>
 
 Lyre is a local, human-guided generative music studio powered by
-[ACE-Step 1.5][acestep]. There are no accounts, API keys, subscriptions, or
-cloud music services. After setup, generation stays on your machine.
+[ACE-Step 1.5][acestep]. There are no accounts, subscriptions, or cloud music
+services. After setup, generation stays on your machine. The server you run
+today has no API keys; [SPEC.md](SPEC.md) section 15 specifies an opt-in agent
+API that is not built yet.
 
 Each song is a project with an editable composition plan, an immutable lineage
 of takes, and a waveform you can select and reshape. Throw a seed, listen, keep
@@ -134,9 +136,11 @@ Only installation downloads packages, the pinned upstream source, and model
 weights. Runtime inference does not call an external music API. Writable state
 is kept under the checkout; `./scripts/lyre paths` shows every location.
 
-Lyre binds to `127.0.0.1` and intentionally has no authentication. Never expose
-it through port forwarding, a reverse proxy, or a public bind. Read the
-[security policy](SECURITY.md) before changing that boundary.
+This release binds to `127.0.0.1` and has no authentication. Do not expose it
+through port forwarding, a reverse proxy, or a public bind. Read the
+[security policy](SECURITY.md) before changing that boundary. A later opt-in
+(API keys and a network bind, SPEC.md section 15) is specified and not part
+of this build.
 
 ### No suitable GPU?
 
@@ -152,7 +156,8 @@ only ever rents one when you press Start. It is off unless you turn it on.
 | [Installation](docs/INSTALLATION.md) | Prerequisites, model sizes, WSL2, first run, updates, and backups |
 | [Architecture](docs/ARCHITECTURE.md) | Process boundaries, queue leases, storage, and failure recovery |
 | [Configuration](docs/CONFIGURATION.md) | Every `LYRE_*` setting and all DiT profiles |
-| [HTTP API](docs/API.md) | Stable routes and request/response shapes; live OpenAPI is at `/docs` |
+| [HTTP API](docs/API.md) | Routes the server serves today; live OpenAPI is at `/docs` |
+| [Agent API amendment](docs/adr/0001-agent-api.md) | Why SPEC.md section 15 adds an opt-in API for AI agents, and the open questions |
 | [Remote GPU](docs/remote-gpu.md) | The opt-in lane for rendering on a GPU you rent or own, and its host protocol |
 | [Runpod](docs/runpod.md) | Starting, stopping, and paying for a Runpod pod from Lyre |
 | [Troubleshooting](docs/TROUBLESHOOTING.md) | Worker startup, missing weights, VRAM, FFmpeg, and stuck jobs |
