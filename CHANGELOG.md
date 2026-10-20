@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Bump the web devDependency `vite` to 7.3.7 so `npm audit` clears
   GHSA-698v-4r3x-3vcv (`launch-editor` percent-escaping on Windows). The
   studio bundle does not ship Vite.
+- The ACE-Step overlay now pins `werkzeug==3.1.9` (CVE-2026-102598) and
+  `urllib3==2.8.0` (GHSA-8988-9cw3-xx77, GHSA-vxq7-64xx-v4gw,
+  GHSA-gh4c-6fx4-qh6g). `click` 8.5.0, `idna` 3.20, and `starlette` 1.7.0
+  stay aligned with Lyre's lock. FastAPI 0.141.1 accepts Starlette >=0.46.0,
+  and the overlay's `anyio==4.14.2` satisfies Starlette 1.7.
 
 ### Changed
 
