@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- Bump the web devDependency `vite` to 7.3.7 so `npm audit` clears
+  GHSA-698v-4r3x-3vcv (`launch-editor` percent-escaping on Windows). The
+  studio bundle does not ship Vite.
+
 ### Changed
 
 - SPEC.md section 15 specifies an opt-in agent API: API-key auth, a
