@@ -33,12 +33,30 @@ from worker.acestep_worker.settings import (
 )
 
 
+def _abort_if_cancelled(cancel_check: Callable[[], bool] | None) -> None:
+    """SPEC.md sec 15.5. Checked before the DiT swap, before
+    `generate_music`, and after it returns. Raising skips the rest of this
+    call; the runner drops any audio and marks the job cancelled."""
+    if cancel_check is None or not cancel_check():
+        return
+    from server.jobs.errors import JobCancelled
+
+    raise JobCancelled()
+
+
+def _note_stage(on_stage: Callable[[str], None] | None, stage: str) -> None:
+    if on_stage is not None:
+        on_stage(stage)
+
+
 def run_job(
     job: dict[str, Any],
     plan: dict[str, Any],
     take_id: str,
     take_dir: Path,
     on_dit_loaded: Callable[[str], None] | None = None,
+    on_stage: Callable[[str], None] | None = None,
+    cancel_check: Callable[[], bool] | None = None,
 ) -> tuple[dict, dict | None, str | None]:
     """Run one real ACE-Step job. Returns `(take_meta, plan_patch, lrc_text)`;
     `plan_patch` is a delta of the LM-filled fields to persist when this was
@@ -75,7 +93,16 @@ def run_job(
     Raises `WorkerUnavailable` if acestep/CUDA isn't usable or its API no
     longer matches this adapter; `server.jobs` catches that and marks the
     job `error` without crashing the HTTP process.
+
+    `on_stage` records `loading_model`, `planning` (simple-mode generate
+    only), `rendering`, and `writing_take`. `cancel_check` is consulted
+    before the swap, before `generate_music`, and after it returns
+    (SPEC.md sec 15.7). The `generate_music` arguments themselves are
+    unchanged.
     """
+    _abort_if_cancelled(cancel_check)
+    _note_stage(on_stage, "loading_model")
+    _abort_if_cancelled(cancel_check)
     _, GenerationParams, GenerationConfig, _, generate_music, create_sample = _import_acestep()
     take_dir.mkdir(parents=True, exist_ok=True)
 
@@ -85,6 +112,7 @@ def run_job(
         handler, lm, dit_profile = _ensure_loaded(job["dit_profile"])
         if on_dit_loaded is not None:
             on_dit_loaded(dit_profile)
+        _abort_if_cancelled(cancel_check)
 
         lora_id = job.get("lora_id")
         lora_adapter_path = job.get("lora_adapter_path")
@@ -102,7 +130,12 @@ def run_job(
             )
         _ensure_lora_adapter(handler, lora_id, lora_adapter_path)
 
-        effective_plan = _plan_from_query(create_sample, lm, plan) if simple_mode else plan
+        if simple_mode:
+            _note_stage(on_stage, "planning")
+            _abort_if_cancelled(cancel_check)
+            effective_plan = _plan_from_query(create_sample, lm, plan)
+        else:
+            effective_plan = plan
         # Null/omitted bpm, key, or duration: let ACE-Step's CoT fill them in
         # (SPEC.md sec 7.2, use_cot_metas).
         use_cot_metas = simple_mode or any(
@@ -206,6 +239,8 @@ def run_job(
             # when the user actually pinned a seed.
             seeds=None if use_random_seed else [seed],
         )
+        _note_stage(on_stage, "rendering")
+        _abort_if_cancelled(cancel_check)
         result = _api_call(
             "generate_music",
             generate_music,
@@ -215,6 +250,7 @@ def run_job(
             config=config,
             save_dir=str(take_dir),
         )
+        _abort_if_cancelled(cancel_check)
 
     success = getattr(result, "success", True)
     audios = getattr(result, "audios", None) or []
@@ -259,9 +295,11 @@ def run_job(
             f"at '{src_path}'. Update worker/acestep_worker.py's GenerationConfig audio_format "
             "handling to match the installed acestep version."
         )
+    _note_stage(on_stage, "writing_take")
     dest_path = take_dir / ("mix.mp3" if suffix == ".mp3" else "mix.wav")
     if src_path != dest_path:
         shutil.move(str(src_path), str(dest_path))
+    _abort_if_cancelled(cancel_check)
 
     extra = getattr(result, "extra_outputs", None) or {}
 

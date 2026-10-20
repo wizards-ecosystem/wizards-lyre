@@ -12,17 +12,21 @@ of them to keep all writable state inside the checkout. Run
 
 | Variable | Default | What it does |
 |---|---|---|
-| `LYRE_PORT` | `8421` | Port for the HTTP server. The host is fixed at `127.0.0.1` in this build; see [SECURITY.md](../SECURITY.md). |
+| `LYRE_PORT` | `8421` | Port for the HTTP server. |
 | `LYRE_PROJECTS_DIR` | `<repo>/projects` | Where project directories and their takes live. |
 | `LYRE_OUTPUT_DIR` | `<repo>/output` | Scratch output root (the GPU smoke test writes here). |
 | `LYRE_DB_PATH` | `<projects dir>/lyre.db` | The SQLite job queue. |
 | `LYRE_CHECKPOINTS_DIR` | `<repo>/checkpoints` | ACE-Step model weights. Must be a directory named `checkpoints`. Upstream resolves weights as `<parent>/checkpoints/<name>`, and the worker reports a mismatched path. |
 | `LYRE_WORKER` | `acestep` | Job backend. Set to `mock` for a GPU-free worker that writes silent WAVs; the whole UI and API work against it. Set to `remote` to render on a [Remote GPU](remote-gpu.md). |
 | `LYRE_DEVICE` | `cuda` | Torch device string for the worker. |
+| `LYRE_BIND` | `127.0.0.1` | Address the HTTP server listens on. Unset means loopback. `127.0.0.1`, `localhost`, and `::1` are loopback. Any other address is a network bind: the process refuses to start until an API key is stored, and it serves `/v1` only (no studio, no `/api`). |
+| `LYRE_REQUIRE_AUTH` | off | Set to `1` to require a bearer API key even on loopback, and to hide the studio and `/api`. Use this when a tunnel or reverse proxy forwards traffic onto loopback. `0` on a network bind is a startup error. Unset on loopback leaves auth off. |
 
-SPEC.md section 15 names `LYRE_BIND`, `LYRE_REQUIRE_AUTH`, and `LYRE_API_KEY`
-for the opt-in agent API. Nothing in this checkout reads them, so they are
-not in the table. They join this page in the phase that implements them.
+Mint a key with `./scripts/lyre api-key create --name <name>` (default scopes
+`read,generate,write`). The secret is printed once. The server stores its
+sha256 in `api-keys.json` beside the jobs database, mode `0600`. Revoke with
+`./scripts/lyre api-key revoke <id>`. `LYRE_API_KEY` is the stdio MCP
+credential in SPEC.md section 15.6 and is not read until that phase.
 
 ## Remote GPU variables
 

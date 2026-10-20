@@ -28,8 +28,9 @@
 Lyre is a local, human-guided generative music studio powered by
 [ACE-Step 1.5][acestep]. There are no accounts, subscriptions, or cloud music
 services. After setup, generation stays on your machine. The server you run
-today has no API keys; [SPEC.md](SPEC.md) section 15 specifies an opt-in agent
-API that is not built yet.
+today has no API keys. An opt-in key and a typed `/v1` surface are
+available when you want an agent on this machine; [SPEC.md](SPEC.md) section
+15 is the contract, and the default install does not turn them on.
 
 Each song is a project with an editable composition plan, an immutable lineage
 of takes, and a waveform you can select and reshape. Throw a seed, listen, keep
@@ -136,11 +137,10 @@ Only installation downloads packages, the pinned upstream source, and model
 weights. Runtime inference does not call an external music API. Writable state
 is kept under the checkout; `./scripts/lyre paths` shows every location.
 
-This release binds to `127.0.0.1` and has no authentication. Do not expose it
-through port forwarding, a reverse proxy, or a public bind. Read the
-[security policy](SECURITY.md) before changing that boundary. A later opt-in
-(API keys and a network bind, SPEC.md section 15) is specified and not part
-of this build.
+The default server binds to `127.0.0.1` and has no authentication. Do not
+expose that default through port forwarding or a reverse proxy. An opt-in
+API key and bind are documented in the [security policy](SECURITY.md) and
+[SPEC.md](SPEC.md) section 15. Read those before changing the boundary.
 
 ### No suitable GPU?
 

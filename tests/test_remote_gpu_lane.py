@@ -178,6 +178,56 @@ def test_a_host_that_forgot_the_job_fails_it_cleanly(
         )
 
 
+def test_a_cancel_before_submit_does_not_call_the_host(lyre_env: Path, tmp_path: Path) -> None:
+    from server.jobs.errors import JobCancelled
+
+    connection.set_connection(BASE_URL, SECRET)
+    with pytest.raises(JobCancelled):
+        remote_backend.run_job(
+            job={"action": "generate", "dit_profile": "iterate"},
+            plan={"caption": "x"},
+            take_id="t-cancel",
+            take_dir=tmp_path / "take",
+            cancel_check=lambda: True,
+        )
+
+
+def test_a_cancel_during_the_remote_render_asks_the_host_to_drop_it(
+    lyre_env: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from server.jobs.errors import JobCancelled
+
+    connection.set_connection(BASE_URL, SECRET)
+    monkeypatch.setattr(remote_backend, "POLL_INTERVAL_SEC", 0)
+    cancelled: list[str] = []
+    polls = {"n": 0}
+
+    def submit(self, body):
+        return "tok"
+
+    def job(self, token):
+        polls["n"] += 1
+        if polls["n"] == 1:
+            return {"status": "running", "error": None, "dit_loaded": "iterate"}
+        return {"status": "error", "error": "canceled", "dit_loaded": "iterate"}
+
+    def cancel(self, token):
+        cancelled.append(token)
+
+    monkeypatch.setattr(remote_client.RemoteClient, "submit", submit)
+    monkeypatch.setattr(remote_client.RemoteClient, "job", job)
+    monkeypatch.setattr(remote_client.RemoteClient, "cancel", cancel)
+    with pytest.raises(JobCancelled):
+        remote_backend.run_job(
+            job={"action": "generate", "dit_profile": "iterate", "seed": -1},
+            plan={"caption": "x", "lyrics": ""},
+            take_id="t-drop",
+            take_dir=tmp_path / "take",
+            cancel_check=lambda: polls["n"] >= 1,
+        )
+    assert cancelled == ["tok"]
+
+
 def test_a_lora_job_fails_before_any_network_call(lyre_env: Path, tmp_path: Path) -> None:
     connection.set_connection(BASE_URL, SECRET)
     with pytest.raises(remote_backend.RemoteJobError, match="style packs"):

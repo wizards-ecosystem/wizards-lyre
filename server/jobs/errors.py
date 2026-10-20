@@ -15,5 +15,10 @@ class JobNotFound(LookupError):
     pass
 
 
+class JobCancelled(Exception):
+    """Cooperative cancel (SPEC.md sec 15.5). Not a failure: the runner
+    discards any audio and marks the job `cancelled`."""
+
+
 class ProjectDeletionConflict(JobError):
     """Raised when a project already has a deletion in progress/completed."""

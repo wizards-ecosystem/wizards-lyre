@@ -2022,3 +2022,51 @@ def test_importing_worker_module_never_touches_acestep_or_cuda() -> None:
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert "OK" in result.stdout
+
+
+def test_cancel_before_the_swap_does_not_call_generate_music(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from server.jobs.errors import JobCancelled
+
+    log: list[tuple] = []
+    _install_fake_acestep(monkeypatch, log)
+    plan = {"caption": "held", "lyrics": "", "query": ""}
+    job = {"action": "generate", "dit_profile": "iterate", "seed": 3, "src_audio": None}
+    with pytest.raises(JobCancelled):
+        acestep_worker.run_job(
+            job=job,
+            plan=plan,
+            take_id="cancel-before",
+            take_dir=tmp_path / "take",
+            cancel_check=lambda: True,
+        )
+    assert [entry[0] for entry in log if entry[0] == "generate_music"] == []
+
+
+def test_cancel_after_generate_music_drops_the_audio(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from server.jobs.errors import JobCancelled
+
+    log: list[tuple] = []
+    _install_fake_acestep(monkeypatch, log)
+    stages: list[str] = []
+    plan = {"caption": "held", "lyrics": "", "query": ""}
+    job = {"action": "generate", "dit_profile": "iterate", "seed": 3, "src_audio": None}
+
+    def cancel_once_rendering() -> bool:
+        return any(entry[0] == "generate_music" for entry in log)
+
+    with pytest.raises(JobCancelled):
+        acestep_worker.run_job(
+            job=job,
+            plan=plan,
+            take_id="cancel-after",
+            take_dir=tmp_path / "take",
+            on_stage=stages.append,
+            cancel_check=cancel_once_rendering,
+        )
+    assert any(entry[0] == "generate_music" for entry in log)
+    assert "rendering" in stages
+    assert "writing_take" not in stages

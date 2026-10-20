@@ -104,9 +104,9 @@ with `{ "base_url": ..., "secret": ... }`. See [API.md](API.md#remote-gpu).
   environment and never sent to the pod. A Runpod pod gets a secret generated
   for that session alone.
 - **Your server's default is still local.** The Lyre server binds `127.0.0.1`
-  with no authentication. SPEC.md section 15's opt-in agent API, when it is
-  built, still must not start a pod because a job was queued. The Remote GPU
-  lane opens nothing on your machine.
+  with no authentication unless you opt into SPEC.md section 15. A `/v1`
+  job still must not start a pod because it was queued. The Remote GPU lane
+  opens nothing on your machine.
 
 ## Stale hosts
 

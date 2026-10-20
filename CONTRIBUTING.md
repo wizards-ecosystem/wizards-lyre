@@ -79,9 +79,11 @@ here, including this one. The constraints that matter most:
   scanning the source, and it will fail your build.
 - **No Gradio.** ACE-Step's own demo UI is upstream's; Lyre owns its product UI.
 - **Loopback and no auth are the default** for the Lyre server. See
-  [SECURITY.md](SECURITY.md). An opt-in API key and network bind are specified
-  in SPEC.md section 15 and are not implemented until that phase; do not build
-  them early. The Remote GPU host is the authenticated render service; see
+  [SECURITY.md](SECURITY.md). The opt-in API key, bind, typed `/v1` reads,
+  and cooperative cancel from SPEC.md section 15 are implemented. Later
+  phases in section 12 (writes, one-shot songs, SSE, webhooks, MCP, `/api`
+  deprecation headers) are not. Do not skip ahead of that order. The Remote
+  GPU host is the authenticated render service; see
   [docs/remote-gpu.md](docs/remote-gpu.md).
 - **`pytest` must never need a GPU** and must never import `acestep` or `torch`.
   If you are testing worker behavior, follow the pattern in

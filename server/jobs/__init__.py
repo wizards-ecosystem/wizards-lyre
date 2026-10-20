@@ -32,7 +32,7 @@ from __future__ import annotations
 
 from server.jobs.db import _connect, _ensure_column, _is_stale, _now, _row_to_dict, init_db
 from server.jobs.deletion import abort_project_deletion, begin_project_deletion
-from server.jobs.errors import JobError, JobNotFound, ProjectDeletionConflict
+from server.jobs.errors import JobCancelled, JobError, JobNotFound, ProjectDeletionConflict
 from server.jobs.queue import (
     HEARTBEAT_INTERVAL_SEC,
     MAX_ATTEMPTS,
@@ -40,11 +40,19 @@ from server.jobs.queue import (
     _heartbeat_loop,
     _set_status,
     _touch_heartbeat,
+    cancel_job,
+    cancel_requested,
     claim_next_queued_job,
     enqueue_job,
+    finish_done,
     get_job,
+    list_jobs_page,
     list_recent_jobs,
+    mark_cancelled,
+    queue_counts,
+    read_job,
     reclaim_stale_jobs,
+    set_stage,
 )
 from server.jobs.runner import (
     _error_lora_meta,
@@ -122,6 +130,7 @@ __all__ = [
     "WORKER_LEASE_STALE_AFTER_SEC",
     "WORKER_STATUS_HEARTBEAT_INTERVAL_SEC",
     "WORKER_STATUS_STALE_AFTER_SEC",
+    "JobCancelled",
     "JobError",
     "JobNotFound",
     "ProjectDeletionConflict",
@@ -129,13 +138,20 @@ __all__ = [
     "abort_project_deletion",
     "acquire_worker_lease",
     "begin_project_deletion",
+    "cancel_job",
+    "cancel_requested",
     "claim_next_queued_job",
     "enqueue_job",
+    "finish_done",
     "get_job",
     "get_worker_capability",
     "get_worker_status",
     "init_db",
+    "list_jobs_page",
     "list_recent_jobs",
+    "mark_cancelled",
+    "queue_counts",
+    "read_job",
     "process_one_queued_job",
     "publish_worker_capability",
     "publish_worker_status",
@@ -144,4 +160,5 @@ __all__ = [
     "renew_worker_lease",
     "resolve_worker_module",
     "run_claimed_job",
+    "set_stage",
 ]

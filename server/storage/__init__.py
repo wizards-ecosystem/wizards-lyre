@@ -67,6 +67,7 @@ from server.storage.projects import (
 from server.storage.takes import (
     allocate_lora_dir,
     allocate_take_dir,
+    discard_unfinished_take,
     get_lora,
     get_take,
     list_loras,
@@ -108,6 +109,7 @@ __all__ = [
     "create_project",
     "default_plan",
     "delete_project",
+    "discard_unfinished_take",
     "finalize_upload",
     "get_lora",
     "get_take",

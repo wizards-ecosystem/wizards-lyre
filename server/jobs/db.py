@@ -78,6 +78,10 @@ def init_db() -> None:
         _ensure_column(conn, "jobs", "heartbeat_at", "TEXT")
         _ensure_column(conn, "jobs", "attempts", "INTEGER NOT NULL DEFAULT 0")
         _ensure_column(conn, "jobs", "lora_id", "TEXT")
+        # SPEC.md sec 15.7: progress and cooperative cancel. Existing rows
+        # migrate with a null stage and cancel_requested 0.
+        _ensure_column(conn, "jobs", "stage", "TEXT")
+        _ensure_column(conn, "jobs", "cancel_requested", "INTEGER NOT NULL DEFAULT 0")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS worker_capabilities (
@@ -145,4 +149,9 @@ def _row_to_dict(row: sqlite3.Row) -> dict:
         "error": row["error"],
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
+        # sqlite3.Row's __contains__ tests values, not column names.
+        "stage": row["stage"] if "stage" in row.keys() else None,  # noqa: SIM118
+        "cancel_requested": (
+            int(row["cancel_requested"]) if "cancel_requested" in row.keys() else 0  # noqa: SIM118
+        ),
     }

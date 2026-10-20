@@ -467,7 +467,11 @@ If upstream parameter names drift, follow ACE-Step's current `GenerationParams` 
 
 ## 15. Agent API
 
-Specified 2026-10-20. Not implemented. Until a phase in section 12 lands, `docs/API.md` is the route list the server actually serves, and the running server still binds `127.0.0.1` with no auth.
+Specified 2026-10-20. Partially implemented.
+
+Served now: the section 15.3 reads, the job object (every status, including `cancelled`), `POST /v1/jobs/{id}/cancel`, the stable artifact GETs, worker `stage` / `cancel_requested`, and the section 15.2 API keys and bind rules. `docs/API.md` lists those routes. The default process still binds `127.0.0.1` with auth off and still serves the studio.
+
+Not served yet, still one phase each in the section 12 order: `/v1` writes and idempotency (phase 8), `POST /v1/songs` (phase 9), SSE, webhooks, and signed artifact tokens (phase 10), the MCP server (phase 12), and `/api` deprecation headers (phase 13).
 
 Design notes, rejected alternatives, and the defaults a maintainer may overturn: [docs/adr/0001-agent-api.md](docs/adr/0001-agent-api.md). This section wins when they disagree.
 

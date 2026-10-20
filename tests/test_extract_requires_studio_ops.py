@@ -205,7 +205,7 @@ def test_worker_status_reflects_studio_ops_swap_before_job_finishes(
     swapped = threading.Event()
     proceed = threading.Event()
 
-    def blocking_run_job(job, plan, take_id, take_dir, on_dit_loaded=None):
+    def blocking_run_job(job, plan, take_id, take_dir, on_dit_loaded=None, **kwargs):
         def _on_loaded(profile):
             if on_dit_loaded is not None:
                 on_dit_loaded(profile)
@@ -216,7 +216,7 @@ def test_worker_status_reflects_studio_ops_swap_before_job_finishes(
             swapped.set()
             proceed.wait(timeout=5)
 
-        return real_run_job(job, plan, take_id, take_dir, on_dit_loaded=_on_loaded)
+        return real_run_job(job, plan, take_id, take_dir, on_dit_loaded=_on_loaded, **kwargs)
 
     monkeypatch.setattr(mock_worker_module, "run_job", blocking_run_job)
 

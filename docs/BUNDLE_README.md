@@ -48,8 +48,9 @@ Start these in separate terminals from the extracted directory:
 
 Open <http://127.0.0.1:8421>. Stop each process with `Ctrl+C`.
 
-Lyre intentionally binds only to `127.0.0.1` and has no authentication. Do not
-expose it through a reverse proxy, public bind, or port forwarding.
+By default Lyre binds to `127.0.0.1` and has no authentication. Do not expose
+that default through a reverse proxy or port forwarding. An API key and
+`LYRE_BIND` are opt-in; see the project security policy.
 
 ## Your files and updates
 

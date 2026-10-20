@@ -1,6 +1,6 @@
 # ADR 0001: An agent API for Lyre
 
-**Status:** Accepted as a spec amendment on 2026-10-20. Not implemented.
+**Status:** Accepted as a spec amendment on 2026-10-20. Partially implemented (typed `/v1` reads, job object, cooperative cancel, opt-in API keys). The rest of section 15 is not built yet.
 The normative contract is [SPEC.md](../../SPEC.md) section 15. This note
 records why that section looks the way it does, which alternatives were
 rejected, and which defaults a maintainer might still overturn. When this

@@ -14,21 +14,23 @@ security boundary is the loopback interface:
 - **The default has no authentication.** Anyone who can reach the HTTP port
   has full control of every project, take, and file operation the server can
   perform. On the default bind that person is a local user of the machine.
-- **The server binds `127.0.0.1` unless a future setting says otherwise.**
-  Today that host is fixed in `server/config.py`. `tests/test_spec_lock.py`
+- **The server binds `127.0.0.1` unless you set `LYRE_BIND`.** The default
+  constant in `server/config.py` stays `127.0.0.1`. `tests/test_spec_lock.py`
   fails the build if a public bind host appears as a literal in Lyre's own
-  source. The default constant stays `127.0.0.1` even after the opt-in below
-  is built.
-- **Do not expose this release to a network.** Do not put it behind a reverse
-  proxy, do not port-forward it, and do not run it on a shared machine you do
-  not trust. Treat the port as equivalent to a shell on that machine.
+  source. Operators who want another interface set `LYRE_BIND` themselves.
+- **Do not expose the auth-off server to a network.** Do not put that
+  default behind a reverse proxy, do not port-forward it, and do not run it
+  on a shared machine you do not trust. Treat the port as equivalent to a
+  shell on that machine.
 
-SPEC.md section 15 specifies an opt-in after this release: the operator may
-set a non-loopback bind, and the process must then refuse to start unless an
-API key exists. A tunnel or reverse proxy onto loopback must set
+The opt-in in SPEC.md section 15.2 is implemented. A non-loopback `LYRE_BIND`
+refuses to start unless an API key exists (`./scripts/lyre api-key create`),
+and then serves `/v1` only. A tunnel or reverse proxy onto loopback must set
 `LYRE_REQUIRE_AUTH=1`, because the server cannot see the client in front of
-the proxy. That opt-in is not implemented. Until the phase 11 PR lands, the
-paragraphs above are the whole story, and exposing the port is still unsafe.
+the proxy. `LYRE_REQUIRE_AUTH=0` on a network bind is a startup error. Keys
+are sha256-hashed in an owner-only file. They are not accounts. The studio
+stays on the auth-off loopback server; reach it from another machine with an
+SSH tunnel, not by serving the SPA on the network bind.
 
 Lyre does not grow accounts or a hosted multi-tenant service. Keys, when they
 exist, name one operator's agents. Remote GPU session start stays a human
@@ -84,9 +86,9 @@ deadline.
 
 Because of the threat model above, "the default API has no authentication"
 and "anyone on localhost can call it" describe expected behavior rather than
-vulnerabilities. Once section 15 is implemented, a network bind that starts
-without a key, a leaked key file, a webhook that can reach a metadata
-address, and an agent path that rents a GPU are in scope.
+vulnerabilities. A network bind that starts without a key, a key file that
+is readable by other users, a webhook that can reach a metadata address
+(when webhooks exist), and an agent path that rents a GPU are in scope.
 Reports about the path jail, the upload limits, the archive builder, or
 anything that lets Lyre read or write outside its own directories are very
 much wanted.
