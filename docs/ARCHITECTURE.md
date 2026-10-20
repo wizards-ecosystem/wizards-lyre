@@ -115,8 +115,11 @@ temp-file-plus-`os.replace`. A reader never sees a partial file.
 
 - **Path jail:** `server/storage/paths.py`. Nothing outside `projects/` or
   `output/` is writable.
-- **Localhost bind:** `server/config.py`, asserted by
-  `tests/test_spec_lock.py`, which fails the build on a public bind host.
+- **Localhost bind:** `server/config.py` fixes the host at `127.0.0.1`.
+  `tests/test_spec_lock.py` fails the build on a public bind literal.
+  SPEC.md section 15 specifies an opt-in `LYRE_BIND` that is not implemented;
+  the default constant stays `127.0.0.1`, and agents remain clients of this
+  same queue.
 - **No other engines:** `tests/test_spec_lock.py` scans this project's source for
   forbidden imports and vendor names.
 - **No GPU in tests:** the default backend under `pytest` is

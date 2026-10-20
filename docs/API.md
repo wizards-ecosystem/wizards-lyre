@@ -1,8 +1,16 @@
 # HTTP API
 
-All JSON, all under `http://127.0.0.1:8421` by default. No authentication;
-see [SECURITY.md](../SECURITY.md). The optional Remote GPU host has its own,
-authenticated protocol; see [remote-gpu.md](remote-gpu.md#the-host-protocol).
+All JSON, all under `http://127.0.0.1:8421` by default. The server this file
+describes has no authentication; see [SECURITY.md](../SECURITY.md). The
+optional Remote GPU host has its own, authenticated protocol; see
+[remote-gpu.md](remote-gpu.md#the-host-protocol).
+
+[SPEC.md](../SPEC.md) section 15 specifies a later `/v1` surface for AI agents
+(API keys, an opt-in network bind, one-shot songs, job events, MCP). Those
+routes are not served yet, so they are not in the table below. The design
+notes are in [adr/0001-agent-api.md](adr/0001-agent-api.md). When a phase mounts
+a route, this table gains a row in the same change: the test that reads this
+file fails if the table and the app disagree.
 
 The server is FastAPI, so the authoritative, always-current reference is the
 generated schema while it is running:
@@ -142,4 +150,5 @@ checkout.
 | `413` | Request body over the upload cap. |
 
 Error responses are `{"detail": "..."}`, and the message names the offending
-field.
+field. The `/v1` error schema in SPEC.md section 15.3 applies once those
+routes exist; `/api` keeps this shape.

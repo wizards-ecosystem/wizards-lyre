@@ -7,7 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Nothing yet.
+### Changed
+
+- SPEC.md section 15 specifies an opt-in agent API: API-key auth, a
+  non-loopback bind, a typed `/v1` surface, one-shot songs, SSE and webhooks,
+  cooperative cancel, stable artifact URLs, and an MCP server (protocol
+  2026-07-28, stdio and Streamable HTTP). Nothing in this entry is
+  implemented. The studio, the loopback default, and ACE-Step 1.5-only
+  generation are unchanged. See `docs/adr/0001-agent-api.md`.
 
 ## [0.2.0] - 2026-09-26
 

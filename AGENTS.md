@@ -14,8 +14,10 @@ alongside setup and the test loop.
   those. `tests/test_spec_lock.py` enforces this by scanning the source.
 - Do not ship ACE-Step's Gradio UI. Call the ACE-Step Python API from
   `worker/acestep_worker/`.
-- The Lyre server binds **127.0.0.1** only. No auth. No cloud deploy of Lyre
-  itself. Docker only for the Remote GPU host image
+- The Lyre server binds **127.0.0.1** with no auth unless the operator opts in.
+  SPEC.md section 15 specifies API keys and a non-loopback bind; implement
+  them only in that phase order, and keep the source default at `127.0.0.1`.
+  No cloud deploy of Lyre itself. Docker only for the Remote GPU host image
   (`docker/remote-gpu/Dockerfile`).
 - Remote GPU code must never rent hardware except from an explicit user request
   (`POST /api/remote-gpu/session`): no timers, no start-on-launch, no
