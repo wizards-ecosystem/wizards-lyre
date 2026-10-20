@@ -1,7 +1,7 @@
 # ACE-Step pins a complete application environment, including packages that
 # Lyre shares with its API process. Install these audited versions after the
 # upstream lock. Keep every entry exact so a fresh checkout stays reproducible.
-aiohttp==3.14.3
+aiohttp==3.14.4
 anyio==4.14.2
 click==8.5.0
 diffusers==0.38.0
