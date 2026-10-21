@@ -11,8 +11,8 @@ annotations, active take, delete, style packs, export), the job object,
 `POST /v1/jobs/{job_id}/cancel`, stable artifact GETs, and `Idempotency-Key`
 on every `/v1` POST. API keys and a non-loopback bind are opt-in and off
 unless you set them ([Configuration](CONFIGURATION.md)). One-shot
-`POST /v1/songs`, SSE, webhooks, signed artifact tokens, and the MCP server
-are not served yet. The design notes are in
+`POST /v1/songs` is served. SSE, webhooks, signed artifact tokens, and the
+MCP server are not served yet. The design notes are in
 [adr/0001-agent-api.md](adr/0001-agent-api.md). When a phase mounts a route,
 this table gains a row in the same change: the test that reads this file
 fails if the table and the app disagree.
@@ -69,6 +69,7 @@ This page is the orientation; the schema is the specification.
 | `GET` | `/v1/projects/{id}/export` | Zip: `project.json`, `plan.json`, active mix, optional stems. |
 | `POST` | `/v1/projects/{id}/jobs` | Enqueue a job. `202`, `Location: /v1/jobs/{job_id}`, and the job object. |
 | `POST` | `/v1/jobs/{job_id}/cancel` | Cancel a queued job, or ask a running job to drop its audio. |
+| `POST` | `/v1/songs` | Create a project, write its plan, and queue `generate`. `202`, `Location`, and the job. |
 | `GET` | `/v1/artifacts/{id}/{take_id}/mix.wav` | Stable `mix.wav` for a take. |
 | `GET` | `/v1/artifacts/{id}/{take_id}/mix.mp3` | Stable `mix.mp3` for a take. |
 | `GET` | `/v1/artifacts/{id}/{take_id}/lyrics.lrc` | Stable timed lyrics. `404` when the take has none. |
@@ -212,19 +213,59 @@ unchanged.
 
 `401` carries `WWW-Authenticate: Bearer`. `403` means the key is known and
 lacks the scope. `read` covers health, projects, takes, jobs, artifacts, style packs, and
-export. `generate` covers enqueue and cancel, and may also read jobs and
-artifacts. `write` covers project create and update, plan edits, uploads,
-annotations, the active take, and project delete. `generate` does not include
-`write`.
+export. `generate` covers enqueue, cancel, and `POST /v1/songs` (which creates
+the project for that song), and may also read jobs and artifacts. `write`
+covers project create and update, plan edits, uploads, annotations, the active
+take, and project delete. `generate` does not include `write`.
 
 Every `/v1` POST accepts an optional `Idempotency-Key` (1–255 visible ASCII
 characters, no spaces). The server stores the key, a hash of the raw body,
 and the response in the jobs database for 24 hours. The same key and the same
 body return that response and do not run the handler again. A replay of
-`POST /v1/projects/{id}/jobs` is `200` with the same job; the first response
-is `202`. The same key and a different body, including a different query
-string, is `409` with `error.code` `idempotency_conflict`. Keys are scoped to
-the API key when auth is on. `/api` ignores the header.
+`POST /v1/songs` or `POST /v1/projects/{id}/jobs` is `200` with the same job;
+the first response is `202`. The same key and a different body, including a
+different query string, is `409` with `error.code` `idempotency_conflict`.
+Keys are scoped to the API key when auth is on. `/api` ignores the header.
+
+## One-shot songs
+
+`POST /v1/songs` is the agent entry. Scope `generate`. It creates a project,
+writes `plan.json`, and queues `action: generate`. It does not render inline.
+The response is `202`, `Location: /v1/jobs/{job_id}`, and the job object. Poll
+`GET /v1/jobs/{job_id}`, then fetch the paths in `artifacts`.
+
+```json
+{
+  "prompt": "a rainy night jazz ballad",
+  "title": null,
+  "caption": null,
+  "lyrics": null,
+  "instrumental": false,
+  "vocal_language": "en",
+  "bpm": null,
+  "keyscale": null,
+  "timesignature": null,
+  "duration_sec": null,
+  "dit_profile": "iterate",
+  "seed": -1,
+  "caption_rewrite": null,
+  "webhook_url": null
+}
+```
+
+`prompt` is required and is stored as `plan.query`. With no caption and no
+lyrics, the song is simple mode: the worker's LM fills caption, lyrics, and
+metas, and that filled plan is saved on the project. Caption or lyrics is
+custom mode. `caption_rewrite` then defaults to false, so the caller's text is
+kept; `true` lets the LM rewrite the caption. `instrumental: true` with no
+lyrics stores `[Instrumental]` in custom mode, and leaves the lyrics empty in
+simple mode so the LM can fill them. Null BPM, key, or duration are stored as
+null. A provided `duration_sec` is stored as given. `dit_profile` is
+`iterate` (the default), `polish`, or `quality`. An omitted `title` is
+`Untitled`.
+
+`webhook_url` may be null. A non-null URL is `400` until webhook delivery is
+served. An idempotent replay of this POST is `200` with the same job.
 
 With no API key configured, `/v1` and `/api` are both open on loopback. Set
 `LYRE_REQUIRE_AUTH=1`, or bind a non-loopback address, and the process

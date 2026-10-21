@@ -6,8 +6,8 @@ uploads, annotations, active take, delete, style packs, and export. `/api`
 keeps its own routes and its `{"detail": ...}` errors.
 
 `Idempotency-Key` on POSTs is enforced by `IdempotencyMiddleware`, which
-sees every `/v1` POST including ones added later (`POST /v1/songs`). The
-header parameter below only publishes it in OpenAPI.
+sees every `/v1` POST. The header parameter below only publishes it in
+OpenAPI.
 """
 
 from __future__ import annotations
@@ -36,12 +36,14 @@ from server.v1.models import (
     ProjectDetail,
     ProjectPage,
     ProjectPatch,
+    SongCreate,
     Take,
     TakePage,
     TakePatch,
     UploadCreated,
 )
 from server.v1.present import job_object
+from server.v1.songs import create_song as queue_song
 
 router = APIRouter(prefix="/v1")
 
@@ -326,6 +328,29 @@ _JOB_CREATED: dict[int | str, dict[str, Any]] = {
     },
     **_POST_ERRORS,
 }
+
+
+@router.post(
+    "/songs",
+    status_code=202,
+    response_model=Job,
+    responses=_JOB_CREATED,
+    dependencies=_IDEMPOTENT,
+)
+def create_song(
+    body: SongCreate,
+    response: Response,
+    _auth: Annotated[Any, Depends(require_scope("generate"))],
+) -> dict[str, Any]:
+    """Create a project, write its plan, and queue `generate`.
+
+    Scope `generate` (SPEC.md sec 15.4). The response is the job object.
+    Poll `GET /v1/jobs/{id}`, then fetch `artifacts`.
+    """
+    queued = queue_song(body)
+    job = job_object(jobs.read_job(queued["id"]))
+    response.headers["Location"] = f"/v1/jobs/{job['id']}"
+    return job
 
 
 @router.post(
