@@ -85,16 +85,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ACE-Step 1.5 (same family as upstream issue #248).
 - **Hung generates.** The job heartbeat kept a stuck decode `running`
   forever, because the lease is renewed while the process is alive. The
-  same loop now marks the job `error` and exits the worker when a
-  generate-shaped job exceeds `LYRE_JOB_TIMEOUT_SEC` (default 20 minutes)
-  or LoRA training exceeds `LYRE_LORA_TIMEOUT_SEC` (default 3 hours).
-  Restart the worker to continue the queue. The row is already `error`,
-  so stale-job reclaim does not requeue it.
+  same loop now marks the job `error` and exits the worker when generation
+  exceeds `LYRE_JOB_TIMEOUT_SEC` (default 20 minutes) or LoRA training
+  exceeds `LYRE_LORA_TIMEOUT_SEC` (default 3 hours). The deadline lifts at
+  `writing_take`, after `generate_music` returns, so the MP3 encode and the
+  take write are not killed mid-file. Restart the worker to continue the
+  queue. The row is already `error`, so stale-job reclaim does not requeue it.
 - **`mix.mp3`.** SPEC.md section 7's playback copy was never written, so
   `GET /v1/artifacts/{project}/{take}/mix.mp3` was 404 after a successful
-  song while `mix.wav` and `lyrics.lrc` were 200. The worker transcodes
-  the WAV with ffmpeg. The job's `artifacts` list still names only files
-  that exist, so a machine without ffmpeg does not advertise `mix.mp3`.
+  song while `mix.wav` and `lyrics.lrc` were 200. The worker transcodes the
+  WAV with ffmpeg. The output path is `mix.mp3.partial`, so the command
+  passes `-f mp3` (without it ffmpeg exits 234, "Unable to choose an output
+  format"). The binary is `ffmpeg` on `PATH`, then
+  `imageio_ffmpeg.get_ffmpeg_exe()` when that package is already importable.
+  Lyre does not declare imageio-ffmpeg. The job's `artifacts` list still
+  names only files that exist, so a machine with neither binary does not
+  advertise `mix.mp3`.
 
 - `POST /v1/songs` and `POST /v1/projects/{id}/jobs` return the accepted
   job as `queued`. A worker that claims the row before the response is

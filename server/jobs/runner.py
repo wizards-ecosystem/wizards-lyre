@@ -81,13 +81,22 @@ def run_claimed_job(job: dict[str, Any]) -> None:
     payload = job["payload"]
 
     stop_heartbeat = threading.Event()
+    # Set when generate_music has returned and the take is being written.
+    # The deadline must not cover the MP3 encode or the meta/LRC write: those
+    # can outlast a short remaining budget and a kill mid-write leaves a
+    # partial take. LoRA training never sets this, so its budget still covers
+    # the whole call.
+    generation_done = threading.Event()
     # The heartbeat lease stays fresh while this process is alive, which is
     # what hides a hung generate from reclaim_stale_jobs. deadline_sec is the
     # bound on that lease: past it the loop marks the job error and exits.
     heartbeat_thread = threading.Thread(
         target=_heartbeat_loop,
         args=(job_id, stop_heartbeat),
-        kwargs={"deadline_sec": job_queue.job_timeout_sec(action)},
+        kwargs={
+            "deadline_sec": job_queue.job_timeout_sec(action),
+            "generation_done": generation_done,
+        },
         daemon=True,
     )
     heartbeat_thread.start()
@@ -98,7 +107,14 @@ def run_claimed_job(job: dict[str, Any]) -> None:
                 # generation, no plan) -- it gets its own worker entry point.
                 _run_train_lora_job(job_id, project_id, payload)
             else:
-                _run_generate_shaped_job(job_id, project_id, action, dit_profile, payload)
+                _run_generate_shaped_job(
+                    job_id,
+                    project_id,
+                    action,
+                    dit_profile,
+                    payload,
+                    generation_done=generation_done,
+                )
     finally:
         stop_heartbeat.set()
         heartbeat_thread.join(timeout=HEARTBEAT_INTERVAL_SEC)
@@ -182,7 +198,12 @@ def _run_train_lora_job(job_id: str, project_id: str, payload: dict[str, Any]) -
 
 
 def _run_generate_shaped_job(
-    job_id: str, project_id: str, action: str, dit_profile: str, payload: dict[str, Any]
+    job_id: str,
+    project_id: str,
+    action: str,
+    dit_profile: str,
+    payload: dict[str, Any],
+    generation_done: threading.Event | None = None,
 ) -> None:
     def _publish_dit_loaded(loaded_profile: str) -> None:
         # Fires as soon as the worker backend confirms `loaded_profile` is
@@ -198,6 +219,10 @@ def _run_generate_shaped_job(
         )
 
     def _on_stage(stage: str) -> None:
+        # `writing_take` is the worker's signal that generate_music returned.
+        # Lift the watchdog before the MP3 encode and the file move.
+        if stage == "writing_take" and generation_done is not None:
+            generation_done.set()
         set_stage(job_id, stage)
 
     def _cancel_check() -> bool:
@@ -227,6 +252,11 @@ def _run_generate_shaped_job(
             on_stage=_on_stage,
             cancel_check=_cancel_check,
         )
+        # The worker should already have reported `writing_take`. Set it
+        # again so the meta/LRC/plan writes below are outside the deadline
+        # even if a backend forgot the stage.
+        if generation_done is not None:
+            generation_done.set()
         if _cancel_check():
             storage.discard_unfinished_take(project_id, take_id)
             mark_cancelled(job_id)

@@ -1,19 +1,53 @@
 """Write the playback MP3 next to a take's WAV archive (SPEC.md sec 7).
 
 `mix.wav` is the archive. `mix.mp3` is the convenience copy the stable
-artifact URL serves. The encoder is ffmpeg, which Lyre already requires
-for style-pack training. A missing or failed ffmpeg leaves no `mix.mp3`,
+artifact URL serves. The encoder is `ffmpeg` on PATH, or the binary from
+`imageio-ffmpeg` when that package is already importable. Lyre does not
+declare imageio-ffmpeg. A missing or failed ffmpeg leaves no `mix.mp3`,
 so a job's artifact list — which only names files that exist — does not
 advertise one.
 """
 
 from __future__ import annotations
 
+import importlib
 import shutil
 import subprocess
 from pathlib import Path
 
 _ENCODE_TIMEOUT_SEC = 180
+
+
+def _ffmpeg_from_imageio() -> str | None:
+    """Bundled ffmpeg from `imageio-ffmpeg`, when that package is already installed.
+
+    Lyre does not declare the dependency. ACE-Step's environment often has
+    it, which is what a WSL machine with no system ffmpeg can use. A missing
+    package or a broken binary is a skip, not an error.
+    """
+    try:
+        module = importlib.import_module("imageio_ffmpeg")
+    except ImportError:
+        return None
+    getter = getattr(module, "get_ffmpeg_exe", None)
+    if not callable(getter):
+        return None
+    try:
+        exe = getter()
+    except Exception as exc:
+        print(f"mix.mp3: imageio-ffmpeg could not provide ffmpeg ({exc})")
+        return None
+    if isinstance(exe, str) and exe and Path(exe).is_file():
+        return exe
+    return None
+
+
+def _resolve_ffmpeg() -> str | None:
+    """`ffmpeg` on PATH, then imageio-ffmpeg's binary. Neither means skip."""
+    found = shutil.which("ffmpeg")
+    if found:
+        return found
+    return _ffmpeg_from_imageio()
 
 
 def write_mix_mp3(wav_path: Path) -> bool:
@@ -27,16 +61,21 @@ def write_mix_mp3(wav_path: Path) -> bool:
     if not wav_path.is_file():
         print(f"mix.mp3 skipped: source WAV does not exist at '{wav_path}'")
         return False
-    ffmpeg = shutil.which("ffmpeg")
+    ffmpeg = _resolve_ffmpeg()
     if ffmpeg is None:
         print(
-            "mix.mp3 was not written: ffmpeg is not on PATH. "
+            "mix.mp3 was not written: ffmpeg is not on PATH and imageio-ffmpeg "
+            "is not importable. "
             f"'{wav_path.name}' is the archive. Install ffmpeg to produce the playback MP3."
         )
         return False
 
     partial = wav_path.with_name("mix.mp3.partial")
     partial.unlink(missing_ok=True)
+    # `-f mp3` is required. The partial path does not end in `.mp3`, and
+    # ffmpeg then exits 234 ("Unable to choose an output format") instead
+    # of guessing from the eventual `mix.mp3` name. The flag is an output
+    # option, so it stays after `-i`.
     command = [
         ffmpeg,
         "-y",
@@ -49,6 +88,8 @@ def write_mix_mp3(wav_path: Path) -> bool:
         "libmp3lame",
         "-qscale:a",
         "2",
+        "-f",
+        "mp3",
         str(partial),
     ]
     try:

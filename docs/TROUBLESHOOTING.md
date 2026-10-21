@@ -85,10 +85,13 @@ sudo apt install ffmpeg      # or your platform's equivalent
 ```
 
 Missing FFmpeg stops style-pack LoRA training. Generation still writes
-`mix.wav` (it falls back to soundfile) and skips `mix.mp3`, so the job's
-artifact list does not name a playback MP3 that was never written. A machine can therefore generate takes while the
-training dataset builder labels zero files. If the count is zero, install
-FFmpeg before investigating the takes.
+`mix.wav` (it falls back to soundfile). The playback `mix.mp3` uses
+`ffmpeg` on `PATH`, then `imageio_ffmpeg.get_ffmpeg_exe()` when that
+package is already importable (ACE-Step's environment often has it; Lyre
+does not declare it). If neither is available the take still succeeds and
+the job's artifact list omits `mix.mp3`. A machine can therefore generate
+takes while the training dataset builder labels zero files. If the count
+is zero, install FFmpeg before investigating the takes.
 
 ## Switching to Extract / Lego / Complete is slow
 

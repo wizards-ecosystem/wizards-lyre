@@ -187,11 +187,13 @@ def run_job(
 
     audio_path = take_dir / "mix.wav"
     duration = _write_silent_wav(audio_path)
+    # Same point as the real worker: generation is done, so the watchdog
+    # lifts before the playback encode (server.jobs.runner).
+    _note_stage(on_stage, "writing_take")
     # Same playback copy the real worker writes (SPEC.md sec 7). Missing
     # ffmpeg leaves the WAV only; the artifact list then omits mix.mp3.
     write_mix_mp3(audio_path)
     _abort_if_cancelled(cancel_check)
-    _note_stage(on_stage, "writing_take")
 
     meta = {
         "id": take_id,

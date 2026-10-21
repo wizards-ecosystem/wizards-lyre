@@ -164,3 +164,62 @@ def test_run_claimed_job_errors_a_stuck_generate(
     assert job["error"] is not None
     assert "watchdog" in job["error"]
     assert exited == [1]
+
+
+def test_generation_done_lifts_the_deadline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    job_id = _running_job(tmp_path, monkeypatch)
+    generation_done = threading.Event()
+    stop = threading.Event()
+    exited: list[int] = []
+    monkeypatch.setattr(queue_module, "_exit_process", lambda: exited.append(1))
+    thread = threading.Thread(
+        target=queue_module._heartbeat_loop,
+        args=(job_id, stop),
+        kwargs={"deadline_sec": 0.2, "generation_done": generation_done},
+        daemon=True,
+    )
+    thread.start()
+    time.sleep(0.05)
+    generation_done.set()
+    time.sleep(0.4)
+    assert jobs_module.get_job(job_id)["status"] == "running"
+    assert exited == []
+    stop.set()
+    thread.join(2)
+    assert not thread.is_alive()
+
+
+def test_watchdog_does_not_expire_while_the_playback_copy_is_written(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The deadline bounds generate_music, not the MP3 encode or the take write."""
+    monkeypatch.setenv("LYRE_PROJECTS_DIR", str(tmp_path / "projects"))
+    monkeypatch.setenv("LYRE_DB_PATH", str(tmp_path / "lyre.db"))
+    monkeypatch.setenv("LYRE_WORKER", "mock")
+    jobs_module.init_db()
+    project = storage.create_project(title="Encode")
+    queued = jobs_module.enqueue_job(project["id"], {"action": "generate"})
+    claimed = jobs_module.claim_next_queued_job()
+    assert claimed is not None
+
+    import worker.mock_worker as mock_worker_module
+
+    def _slow_mp3(_wav_path: Path) -> bool:
+        time.sleep(0.6)
+        return False
+
+    monkeypatch.setattr(mock_worker_module, "write_mix_mp3", _slow_mp3)
+    monkeypatch.setattr(queue_module, "job_timeout_sec", lambda _action: 0.2)
+    exited: list[int] = []
+    monkeypatch.setattr(queue_module, "_exit_process", lambda: exited.append(1))
+
+    jobs_module.run_claimed_job(claimed)
+
+    job = jobs_module.get_job(queued["id"])
+    assert job["status"] == "done"
+    assert job["take_id"]
+    assert exited == []
+    take_dir = storage.take_dir(project["id"], job["take_id"])
+    assert (take_dir / "mix.wav").is_file()

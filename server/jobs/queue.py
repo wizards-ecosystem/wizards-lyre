@@ -288,15 +288,27 @@ def _expire_job(job_id: str, deadline_sec: float) -> None:
     _exit_process()
 
 
-def _heartbeat_loop(job_id: str, stop: threading.Event, deadline_sec: float | None = None) -> None:
+def _heartbeat_loop(
+    job_id: str,
+    stop: threading.Event,
+    deadline_sec: float | None = None,
+    generation_done: threading.Event | None = None,
+) -> None:
     """Renew the job lease until `stop`, or expire it at `deadline_sec`.
 
     `deadline_sec` is measured from this loop's start, which is when the
     worker claimed the job and entered `run_claimed_job`. A deadline of None
     keeps the historical behavior (renew until the job returns).
+
+    `generation_done` lifts the deadline once `generate_music` has returned
+    and the take is being written (MP3 encode included). The heartbeat keeps
+    renewing so a slow encode is not reclaimed, and the watchdog cannot exit
+    in the middle of that write.
     """
     started = time.monotonic()
     while True:
+        if generation_done is not None and generation_done.is_set():
+            deadline_sec = None
         if deadline_sec is not None:
             remaining = deadline_sec - (time.monotonic() - started)
             if remaining <= 0:
@@ -307,6 +319,12 @@ def _heartbeat_loop(job_id: str, stop: threading.Event, deadline_sec: float | No
             wait = HEARTBEAT_INTERVAL_SEC
         if stop.wait(wait):
             return
+        # Checked before the deadline so a take write that finished during
+        # this wait is not expired.
+        if generation_done is not None and generation_done.is_set():
+            deadline_sec = None
+            _touch_heartbeat(job_id)
+            continue
         if deadline_sec is not None and time.monotonic() - started >= deadline_sec:
             _expire_job(job_id, deadline_sec)
             return
