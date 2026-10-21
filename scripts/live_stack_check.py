@@ -120,6 +120,33 @@ class Api:
     def post(self, path: str, body: dict | None = None):
         return self._request("POST", path, body)
 
+    def post_detailed(self, path: str, body: dict) -> tuple[int, dict[str, str], dict]:
+        """POST JSON and return the status, lower-cased headers, and body.
+
+        `urlopen` treats every 2xx as success, including the 202 from
+        `POST /v1/songs`. Callers that need the status or `Location` use this.
+        """
+        data = json.dumps(body).encode()
+        req = urllib.request.Request(
+            self.base + path,
+            data=data,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                payload = json.loads(resp.read())
+                headers = {key.lower(): value for key, value in resp.headers.items()}
+                return int(resp.status), headers, payload
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode(errors="replace")
+            raise CheckFailed(f"POST {path} -> HTTP {exc.code}: {detail}") from exc
+        except urllib.error.URLError as exc:
+            raise CheckFailed(
+                f"POST {path} -> cannot reach the server at {self.base} ({exc.reason}). "
+                "Is `./scripts/lyre server` running?"
+            ) from exc
+
     def put(self, path: str, body: dict):
         return self._request("PUT", path, body)
 
@@ -731,6 +758,109 @@ def stage_path_jail(run: Run, notes: list[str]) -> None:
     notes.append("traversal attempts rejected")
 
 
+def stage_one_shot_song(run: Run, notes: list[str]) -> None:
+    """SPEC.md sec 15 phase 9: `POST /v1/songs` is a generation entry point.
+
+    One instrumental of about 10 seconds. The handler must queue a job (202
+    and `Location`), the worker must persist a filled plan on that new
+    project, and the mix fetched from the job's artifact URL must be audible.
+    This project is separate from the studio project the other stages share,
+    and it is deleted when the stage passes.
+    """
+    prompt = "soft piano in an empty room, no vocals"
+    status, headers, queued = run.api.post_detailed(
+        "/v1/songs",
+        {
+            "prompt": prompt,
+            "instrumental": True,
+            "duration_sec": 10,
+            "seed": -1,
+            "title": "Live one-shot",
+        },
+    )
+    if status != 202:
+        raise CheckFailed(f"POST /v1/songs returned HTTP {status}, expected 202")
+    location = headers.get("location")
+    if location != f"/v1/jobs/{queued['id']}":
+        raise CheckFailed(f"Location was {location!r}, expected /v1/jobs/{queued['id']}")
+    if queued.get("action") != "generate":
+        raise CheckFailed(f"one-shot job action was {queued.get('action')!r}, expected generate")
+    project_id = queued["project_id"]
+    notes.append(f"queued {queued['id'][:8]} on {project_id[:8]}")
+
+    deadline = time.monotonic() + JOB_TIMEOUT_SEC
+    job = queued
+    while time.monotonic() < deadline:
+        job = run.api.get(f"/v1/jobs/{queued['id']}")
+        if job["status"] in ("done", "error", "cancelled"):
+            break
+        time.sleep(POLL_INTERVAL_SEC)
+    else:
+        raise CheckFailed(
+            f"POST /v1/songs job {queued['id']} still {job['status']} after "
+            f"{JOB_TIMEOUT_SEC / 60:.0f} min (project {project_id} kept)"
+        )
+    if job["status"] != "done":
+        raise CheckFailed(
+            f"one-shot song finished as {job['status']}: {job.get('error')} "
+            f"(project {project_id} kept)"
+        )
+
+    detail = run.api.get(f"/v1/projects/{project_id}")
+    plan = detail["plan"]
+    if plan.get("query") != prompt:
+        raise CheckFailed(f"the song plan query was {plan.get('query')!r}")
+    if not (plan.get("caption") or "").strip():
+        raise CheckFailed(
+            "the one-shot song did not persist a filled caption. Simple mode should write the "
+            "LM's plan back onto the project (SPEC.md sec 15.4)."
+        )
+    if not plan.get("instrumental"):
+        raise CheckFailed("the one-shot song dropped instrumental: true")
+    for meta_field in ("bpm", "keyscale"):
+        if not plan.get(meta_field):
+            raise CheckFailed(
+                f"the one-shot song left {meta_field} unfilled; the LM is supposed to set it"
+            )
+    notes.append(f"filled caption {plan['caption'][:60]!r}")
+    notes.append(f"lyrics {(plan.get('lyrics') or '')[:40]!r}")
+
+    takes = run.api.get(f"/v1/projects/{project_id}/takes")["data"]
+    take = next((item for item in takes if item["id"] == job["take_id"]), None)
+    if take is None:
+        raise CheckFailed(f"take {job['take_id']} is missing after the song job finished")
+    plan_duration = plan.get("duration_sec")
+    take_duration = take.get("duration_sec")
+    if not run.allow_mock and plan_duration != take_duration:
+        raise CheckFailed(f"plan.json says {plan_duration} but the take says {take_duration}")
+
+    wavs = [url for url in job.get("artifacts") or [] if str(url).endswith("/mix.wav")]
+    if not wavs:
+        raise CheckFailed("the finished song job listed no mix.wav artifact")
+    data = run.api.get_bytes(wavs[0])
+    duration, rms, rate = wav_stats(data)
+    notes.append(f"{len(data) / 1e6:.1f} MB, {duration:.1f}s, {rate} Hz, rms {rms:.4f}")
+    looks_mocked = rate == MOCK_SAMPLE_RATE and duration <= MOCK_MAX_DURATION_SEC
+    if looks_mocked and not run.allow_mock:
+        raise CheckFailed(
+            "the one-shot take is the mock worker's silent WAV. Restart the worker without "
+            "LYRE_WORKER=mock, or pass --allow-mock to check this script itself."
+        )
+    if run.allow_mock:
+        notes.append("audio assertions skipped (--allow-mock)")
+    else:
+        if rms == 0.0 or (not math.isnan(rms) and rms < MIN_RMS):
+            raise CheckFailed(f"one-shot take is silent (rms {rms:.5f})")
+        expected = take.get("duration_sec")
+        numeric = isinstance(expected, (int, float)) and not isinstance(expected, bool)
+        if numeric and abs(duration - float(expected)) > DURATION_TOLERANCE_SEC:
+            raise CheckFailed(f"one-shot audio is {duration:.1f}s but the take says {expected}s")
+        notes.append("audible audio from the artifact URL")
+
+    run.api.delete(f"/v1/projects/{project_id}")
+    notes.append("song project deleted")
+
+
 def stage_lora(run: Run, notes: list[str]) -> None:
     """Train a style pack from this project's takes and generate with it.
 
@@ -826,6 +956,11 @@ STAGES: list[tuple[str, str, object]] = [
     ("annotations", "favorite / notes / active take reach meta.json", stage_annotations_and_active),
     ("export", "export zip contents and member safety", stage_export),
     ("jail", "path traversal is rejected by the running server", stage_path_jail),
+    (
+        "song",
+        "one-shot POST /v1/songs instrumental, filled plan, audible audio",
+        stage_one_shot_song,
+    ),
     ("lora", "train a style pack and generate with it (~1 hour)", stage_lora),
 ]
 DEFAULT_STAGES = [name for name, _, _ in STAGES if name != "lora"]

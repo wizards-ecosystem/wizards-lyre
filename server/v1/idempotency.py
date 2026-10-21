@@ -3,8 +3,9 @@
 The key, the request hash, and the response live in the jobs SQLite
 database for 24 hours. The same key and the same raw body replay the
 stored response and do not run the handler again. The same key and a
-different body is `409`. A replay of `POST /v1/projects/{id}/jobs` is
-`200`; the first response stays `202`.
+different body is `409`. A replay of a POST that queued a job
+(`POST /v1/songs` and `POST /v1/projects/{id}/jobs`) is `200`; the first
+response stays `202`.
 
 The key is optional. Callers that omit it get ordinary, non-replayed
 behavior. When auth is on, the row is scoped to the API key id so one
@@ -32,7 +33,8 @@ from server.jobs.db import _connect
 
 # Visible ASCII, no spaces. Long enough for a UUID, short enough to index.
 _KEY_RE = re.compile(r"^[!-~]{1,255}$")
-_JOB_POST = re.compile(r"^/v1/projects/[^/]+/jobs$")
+# These POSTs answer 202 because they queued a job. The stored replay is 200.
+_QUEUED_JOB_POST = re.compile(r"^/v1/(?:songs|projects/[^/]+/jobs)$")
 IDEMPOTENCY_TTL_SECONDS = 24 * 60 * 60
 
 # Auth-off requests share this owner. It is not an API key id.
@@ -162,7 +164,7 @@ def remember(
     content_type: str | None,
 ) -> None:
     """Store a finished response. A queued job replays as `200`."""
-    stored = 200 if status == 202 and _JOB_POST.fullmatch(path) else status
+    stored = 200 if status == 202 and _QUEUED_JOB_POST.fullmatch(path) else status
     with closing(_connect()) as conn:
         conn.execute(
             "UPDATE idempotency_keys SET state = 'done', status_code = ?, body = ?, "

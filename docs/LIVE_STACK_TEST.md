@@ -55,6 +55,7 @@ information.
 | `annotations` | Favorite, notes, or the active take did not reach `meta.json` on disk. The API and disk layout disagree. |
 | `export` | The zip a user drops into a DAW is missing `project.json`, `plan.json`, or the active mix; is corrupt; contains a member escaping the archive root; or the mix is silent. |
 | `jail` | A traversing `upload_path` was accepted by the *running server*. This verifies the unit-tested guard in the live process. |
+| `song` | `POST /v1/songs` did not queue a generate job, did not persist a filled plan, or the mix at the job's artifact URL was silent. This is an instrumental of about 10 seconds on its own project. |
 | `lora` | Opt-in. Style-pack training failed, produced no `lora_id`, or the pack did not attach to a later generation. This stage requires FFmpeg; generation does not. See [TROUBLESHOOTING.md](TROUBLESHOOTING.md). The stage generates its own source takes, so it can run on its own. On a 16 GB card, applying the pack can trigger ACE-Step's much slower CPU VAE fallback; the verifier gives that generation the same extended timeout as training. |
 
 ## Audio checks

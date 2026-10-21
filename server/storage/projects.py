@@ -187,6 +187,18 @@ def load_plan(project_id: str) -> dict:
     return _read_plan_or_default(project_id)
 
 
+def replace_plan(project_id: str, plan: dict) -> dict:
+    """Write `plan` as plan.json without `validate_plan`.
+
+    `save_plan` rejects a null `duration_sec` and fills an omitted one with
+    120. A one-shot song stores null so ACE-Step's chain of thought can fill
+    the length, and stores a provided duration as given (SPEC.md sec 15.4).
+    The caller builds the complete plan. Unknown projects still raise
+    `ProjectNotFound`."""
+    snapshot = dict(plan)
+    return _update_plan(project_id, lambda _current: snapshot)
+
+
 def save_plan(project_id: str, plan: dict) -> dict:
     """Replace plan.json outright (PUT /api/projects/{id}/plan). The body is
     validated and normalized first (`validate_plan`): well-formed plans pass

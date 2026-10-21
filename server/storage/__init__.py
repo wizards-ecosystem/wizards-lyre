@@ -61,6 +61,7 @@ from server.storage.projects import (
     load_project,
     merge_plan_patch,
     patch_project,
+    replace_plan,
     save_plan,
     set_active_take,
 )
@@ -130,6 +131,7 @@ __all__ = [
     "project_dir",
     "project_json_path",
     "project_lifecycle_lock",
+    "replace_plan",
     "resolve_upload_path",
     "sanitize_filename",
     "save_plan",

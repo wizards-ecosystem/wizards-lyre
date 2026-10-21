@@ -5,9 +5,10 @@ so `app.openapi()` carries a response schema for each operation
 
 from __future__ import annotations
 
+import math
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 JobStatus = Literal["queued", "running", "done", "error", "cancelled"]
 JobStage = Literal["loading_model", "planning", "rendering", "writing_take"]
@@ -212,6 +213,63 @@ class JobCreate(BaseModel):
 
 class UploadCreated(BaseModel):
     upload_path: str
+
+
+class SongCreate(BaseModel):
+    """`POST /v1/songs` (SPEC.md sec 15.4).
+
+    Prompt only (empty caption and lyrics) is simple mode: the worker's LM
+    fills the plan. Caption or lyrics is custom mode, and `caption_rewrite`
+    then defaults to false. `webhook_url` is accepted as null; delivery is a
+    later phase, so a non-null URL is rejected rather than dropped.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    prompt: str = Field(min_length=1)
+    title: str | None = None
+    caption: str | None = None
+    lyrics: str | None = None
+    instrumental: bool = False
+    vocal_language: str = Field(default="en", min_length=1)
+    bpm: int | None = None
+    keyscale: str | None = None
+    timesignature: str | None = None
+    duration_sec: float | None = None
+    dit_profile: Literal["iterate", "polish", "quality"] = "iterate"
+    seed: int = -1
+    caption_rewrite: bool | None = None
+    webhook_url: str | None = None
+
+    @field_validator("prompt", "vocal_language", mode="before")
+    @classmethod
+    def _strip_required(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip()
+        return value
+
+    @field_validator("title", "caption", "lyrics", "keyscale", "timesignature", mode="before")
+    @classmethod
+    def _blank_to_none(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip() or None
+        return value
+
+    @field_validator("duration_sec")
+    @classmethod
+    def _positive_duration(cls, value: float | None) -> float | None:
+        if value is None:
+            return None
+        if not math.isfinite(value) or value <= 0:
+            raise ValueError("duration_sec must be a positive finite number")
+        return value
+
+    @field_validator("webhook_url")
+    @classmethod
+    def _webhook_not_yet(cls, value: str | None) -> str | None:
+        if value is not None:
+            raise ValueError("webhook delivery is not available yet")
+        return value
 
 
 class Lora(BaseModel):

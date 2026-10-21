@@ -469,9 +469,9 @@ If upstream parameter names drift, follow ACE-Step's current `GenerationParams` 
 
 Specified 2026-10-20. Partially implemented.
 
-Served now: the section 15.3 reads, the job object (every status, including `cancelled`), `POST /v1/jobs/{id}/cancel`, the stable artifact GETs, the section 15.3 writes (projects, plan, jobs, uploads, annotations, active take, delete, style packs, and export), `Idempotency-Key` on every `/v1` POST, worker `stage` / `cancel_requested`, and the section 15.2 API keys and bind rules. `docs/API.md` lists those routes. The default process still binds `127.0.0.1` with auth off and still serves the studio.
+Served now: the section 15.3 reads, the job object (every status, including `cancelled`), `POST /v1/jobs/{id}/cancel`, the stable artifact GETs, the section 15.3 writes (projects, plan, jobs, uploads, annotations, active take, delete, style packs, and export), `Idempotency-Key` on every `/v1` POST, `POST /v1/songs`, worker `stage` / `cancel_requested`, and the section 15.2 API keys and bind rules. `docs/API.md` lists those routes. The default process still binds `127.0.0.1` with auth off and still serves the studio.
 
-Not served yet, still one phase each in the section 12 order: `POST /v1/songs` (phase 9), SSE, webhooks, and signed artifact tokens (phase 10), the MCP server (phase 12), and `/api` deprecation headers (phase 13).
+Not served yet, still one phase each in the section 12 order: SSE, webhooks, and signed artifact tokens (phase 10), the MCP server (phase 12), and `/api` deprecation headers (phase 13). `POST /v1/songs` accepts `webhook_url: null`; a non-null webhook URL is rejected until phase 10.
 
 Design notes, rejected alternatives, and the defaults a maintainer may overturn: [docs/adr/0001-agent-api.md](docs/adr/0001-agent-api.md). This section wins when they disagree.
 

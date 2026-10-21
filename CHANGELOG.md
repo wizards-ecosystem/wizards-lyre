@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **One-shot songs.** `POST /v1/songs` creates a project, writes the plan, and
+  queues `generate` in one call (`202`, `Location: /v1/jobs/{id}`, the job
+  object). Scope `generate`. Prompt-only is simple mode; caption or lyrics is
+  custom mode and `caption_rewrite` defaults to false. A null duration is
+  stored as null. `Idempotency-Key` replays the queued job as `200`. A
+  non-null `webhook_url` is rejected until webhook delivery is served. `/api`
+  is unchanged.
 - **Agent API writes.** `/v1` can now create and update projects, replace a
   plan, upload a WAV/MP3, annotate takes, set the active take, delete a
   project, list style packs, and download the export zip. `POST
@@ -47,10 +54,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- SPEC.md section 15 specifies the rest of the agent API (one-shot songs,
-  SSE, webhooks, signed artifact tokens, MCP). Those routes are not served
-  yet. The studio default remains loopback with auth off, and ACE-Step 1.5
-  is still the only engine. See `docs/adr/0001-agent-api.md`.
+- SPEC.md section 15 specifies the rest of the agent API (SSE, webhooks,
+  signed artifact tokens, MCP). Those routes are not served yet. The studio
+  default remains loopback with auth off, and ACE-Step 1.5 is still the only
+  engine. See `docs/adr/0001-agent-api.md`.
 
 ## [0.2.0] - 2026-09-26
 
