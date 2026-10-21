@@ -1,11 +1,10 @@
 """Write the playback MP3 next to a take's WAV archive (SPEC.md sec 7).
 
 `mix.wav` is the archive. `mix.mp3` is the convenience copy the stable
-artifact URL serves. The encoder is `ffmpeg` on PATH, or the binary from
-`imageio-ffmpeg` when that package is already importable. Lyre does not
-declare imageio-ffmpeg. A missing or failed ffmpeg leaves no `mix.mp3`,
-so a job's artifact list — which only names files that exist — does not
-advertise one.
+artifact URL serves. The encoder is `ffmpeg` on PATH, which takes
+precedence, or the binary from the declared `imageio-ffmpeg` dependency.
+A missing or failed ffmpeg leaves no `mix.mp3`, so a job's artifact list
+— which only names files that exist — does not advertise one.
 """
 
 from __future__ import annotations
@@ -19,11 +18,11 @@ _ENCODE_TIMEOUT_SEC = 180
 
 
 def _ffmpeg_from_imageio() -> str | None:
-    """Bundled ffmpeg from `imageio-ffmpeg`, when that package is already installed.
+    """Bundled ffmpeg from the declared `imageio-ffmpeg` dependency.
 
-    Lyre does not declare the dependency. ACE-Step's environment often has
-    it, which is what a WSL machine with no system ffmpeg can use. A missing
-    package or a broken binary is a skip, not an error.
+    Used when `ffmpeg` is not on PATH, which is what a WSL machine with no
+    system ffmpeg uses. A missing package or a broken binary is a skip, not
+    an error.
     """
     try:
         module = importlib.import_module("imageio_ffmpeg")
@@ -43,7 +42,7 @@ def _ffmpeg_from_imageio() -> str | None:
 
 
 def _resolve_ffmpeg() -> str | None:
-    """`ffmpeg` on PATH, then imageio-ffmpeg's binary. Neither means skip."""
+    """`ffmpeg` on PATH, then imageio-ffmpeg's binary. PATH wins. Neither means skip."""
     found = shutil.which("ffmpeg")
     if found:
         return found

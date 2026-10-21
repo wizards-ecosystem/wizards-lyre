@@ -10,7 +10,9 @@ studio interface and runs without Node.js or npm.
 - `git` and [`uv`](https://docs.astral.sh/uv/)
 - about 20 GB free for the environment and default models, or at least 55 GB
   for every model profile
-- optionally, FFmpeg for style-pack training; generation works without it
+- optionally, system FFmpeg on `PATH` for style-pack training. It also takes
+  precedence for playback `mix.mp3`. Generation writes `mix.wav` without it;
+  the worker install's `imageio-ffmpeg` binary encodes `mix.mp3` otherwise.
 
 Confirm that `nvidia-smi` sees your GPU before setup. Native Windows, macOS, and
 non-NVIDIA accelerators are outside the current support boundary.

@@ -155,6 +155,9 @@ install_dependencies() {
     # --inexact, this first sync removes the GPU stack as "extraneous" only
     # for the second sync below to install it again. Source checkouts include
     # contributor tools; slim release bundles install runtime dependencies only.
+    # Those runtime dependencies include imageio-ffmpeg, the playback MP3
+    # fallback (`ffmpeg` on PATH still wins). The CUDA stack is the ACE-Step
+    # sync below, not this one.
     local sync_args=(--active --no-install-project --locked --inexact)
     if ! is_release_bundle; then
       sync_args+=(--extra dev)
@@ -269,7 +272,11 @@ EOF
   else
     doctor_warn "NVIDIA GPU is unavailable (the mock worker still works)"
   fi
-  if command -v ffmpeg >/dev/null 2>&1; then doctor_ok "FFmpeg (style-pack training)"; else doctor_warn "FFmpeg is missing; style-pack training will not work"; fi
+  if command -v ffmpeg >/dev/null 2>&1; then
+    doctor_ok "FFmpeg on PATH (style-pack training; preferred for mix.mp3)"
+  else
+    doctor_warn "FFmpeg is not on PATH; style-pack training will not work (mix.mp3 uses imageio-ffmpeg)"
+  fi
 
   if ((failures)); then
     if is_release_bundle; then

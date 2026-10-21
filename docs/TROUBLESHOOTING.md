@@ -84,14 +84,17 @@ will show something like `libavutil.so.56: cannot open shared object file`.
 sudo apt install ffmpeg      # or your platform's equivalent
 ```
 
-Missing FFmpeg stops style-pack LoRA training. Generation still writes
-`mix.wav` (it falls back to soundfile). The playback `mix.mp3` uses
-`ffmpeg` on `PATH`, then `imageio_ffmpeg.get_ffmpeg_exe()` when that
-package is already importable (ACE-Step's environment often has it; Lyre
-does not declare it). If neither is available the take still succeeds and
-the job's artifact list omits `mix.mp3`. A machine can therefore generate
-takes while the training dataset builder labels zero files. If the count
-is zero, install FFmpeg before investigating the takes.
+Missing system FFmpeg stops style-pack LoRA training. Generation still writes
+`mix.wav` (it falls back to soundfile). The playback `mix.mp3` uses `ffmpeg`
+on `PATH` first. That system binary takes precedence. When it is absent, the
+worker uses `imageio_ffmpeg.get_ffmpeg_exe()` from the declared
+`imageio-ffmpeg` dependency (installed with the worker, including a CUDA
+venv that has no system ffmpeg). If neither binary is available the take
+still succeeds and the job's artifact list omits `mix.mp3`. A machine can
+therefore generate takes while the training dataset builder labels zero
+files. If the count is zero, install system FFmpeg before investigating the
+takes. The bundled `imageio-ffmpeg` executable does not provide the shared
+libraries torchcodec needs.
 
 ## Switching to Extract / Lego / Complete is slow
 

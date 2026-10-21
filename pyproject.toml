@@ -22,6 +22,10 @@ dependencies = [
     "uvicorn[standard]>=0.29",
     "python-multipart>=0.0.9",
     "mcp>=2.3,<3",
+    # Playback MP3 fallback for the worker. `ffmpeg` on PATH takes precedence.
+    # Pinned: 0.6.0 has no PyPI/OSV/GHSA advisories, and its wheels include
+    # linux x86_64 and Windows. Not part of the ACE-Step CUDA stack.
+    "imageio-ffmpeg==0.6.0",
 ]
 
 [project.urls]
