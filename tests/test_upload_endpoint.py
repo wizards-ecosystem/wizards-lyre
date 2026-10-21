@@ -98,6 +98,24 @@ def test_oversized_upload_rejected_before_reaching_disk(
     assert not uploads_dir.exists() or list(uploads_dir.iterdir()) == []
 
 
+def test_upload_over_the_file_cap_deletes_the_partial(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Smaller than the ASGI middleware's slack, larger than MAX_UPLOAD_BYTES,
+    # so the streaming helper's own counter is what rejects it and the
+    # partial file does not stay under uploads/.
+    monkeypatch.setattr(storage, "MAX_UPLOAD_BYTES", 1000)
+    project_id = client.post("/api/projects", json={"title": "Inner cap"}).json()["id"]
+    response = client.post(
+        f"/api/projects/{project_id}/uploads",
+        files={"file": ("big.wav", b"0" * 5000, "audio/wav")},
+    )
+    assert response.status_code == 400
+    assert "too large" in response.json()["detail"]
+    uploads = storage.uploads_dir(project_id)
+    assert not uploads.exists() or list(uploads.iterdir()) == []
+
+
 def test_cover_from_uploaded_source(client: TestClient) -> None:
     project = client.post("/api/projects", json={"title": "Upload Cover Flow"}).json()
     project_id = project["id"]

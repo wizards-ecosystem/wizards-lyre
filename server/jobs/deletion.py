@@ -10,6 +10,7 @@ from __future__ import annotations
 import sqlite3
 from contextlib import closing
 
+from server import storage
 from server.jobs.db import _connect, _now
 from server.jobs.errors import ProjectDeletionConflict
 
@@ -19,8 +20,8 @@ def begin_project_deletion(project_id: str) -> list[str]:
     atomically records a tombstone in `project_deletions` and marks every
     still-`queued` job for this project `error`, all inside one `BEGIN
     IMMEDIATE` transaction. Returns the cancelled job ids, which the caller
-    (`server.app.delete_project`) must pass to `abort_project_deletion` if
-    the filesystem removal that follows this call ends up failing.
+    (`remove_project`) must pass to `abort_project_deletion` if the
+    filesystem removal that follows this call ends up failing.
 
     `BEGIN IMMEDIATE` -- the same pattern `claim_next_queued_job` uses --
     is what actually closes the race a concurrent `enqueue_job` for this
@@ -92,3 +93,29 @@ def abort_project_deletion(project_id: str, cancelled_job_ids: list[str]) -> Non
             (now, *cancelled_job_ids),
         )
         conn.commit()
+
+
+def remove_project(project_id: str) -> None:
+    """Delete `project_id` and cancel its queued jobs (SPEC.md sec 9.1).
+
+    `DELETE /api/projects/{id}` and `DELETE /v1/projects/{id}` both call
+    this. `storage.load_project` raises `ProjectNotFound` for an unknown id
+    before the queue or the filesystem is touched.
+
+    `begin_project_deletion` records a tombstone and cancels this project's
+    queued jobs in one atomic transaction. A non-atomic cancel-then-delete
+    left a window where a concurrent `enqueue_job` could insert a new queued
+    job after the cancel swept past it. The tombstone closes that window.
+    A job already running fails safely on its own once the directory is gone.
+
+    If the filesystem removal fails, the project still exists on disk, so
+    its jobs must not stay cancelled: `abort_project_deletion` restores them
+    and removes the tombstone before the original error is re-raised.
+    """
+    storage.load_project(project_id)
+    cancelled_job_ids = begin_project_deletion(project_id)
+    try:
+        storage.delete_project(project_id)
+    except Exception:
+        abort_project_deletion(project_id, cancelled_job_ids)
+        raise

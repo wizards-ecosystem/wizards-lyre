@@ -6,14 +6,16 @@ GPU host has its own, authenticated protocol; see
 [remote-gpu.md](remote-gpu.md#the-host-protocol).
 
 [SPEC.md](../SPEC.md) section 15 is the agent API. This server now serves the
-typed `/v1` reads, the job object, `POST /v1/jobs/{job_id}/cancel`, and the
-stable artifact GETs. API keys and a non-loopback bind are opt-in and off
+typed `/v1` reads and the studio-loop writes (projects, plan, jobs, uploads,
+annotations, active take, delete, style packs, export), the job object,
+`POST /v1/jobs/{job_id}/cancel`, stable artifact GETs, and `Idempotency-Key`
+on every `/v1` POST. API keys and a non-loopback bind are opt-in and off
 unless you set them ([Configuration](CONFIGURATION.md)). One-shot
-`POST /v1/songs`, the other `/v1` writes, idempotency keys, SSE, webhooks,
-signed artifact tokens, and the MCP server are not served yet. The design
-notes are in [adr/0001-agent-api.md](adr/0001-agent-api.md). When a phase
-mounts a route, this table gains a row in the same change: the test that
-reads this file fails if the table and the app disagree.
+`POST /v1/songs`, SSE, webhooks, signed artifact tokens, and the MCP server
+are not served yet. The design notes are in
+[adr/0001-agent-api.md](adr/0001-agent-api.md). When a phase mounts a route,
+this table gains a row in the same change: the test that reads this file
+fails if the table and the app disagree.
 
 The server is FastAPI, so the authoritative, always-current reference is the
 generated schema while it is running:
@@ -56,6 +58,16 @@ This page is the orientation; the schema is the specification.
 | `GET` | `/v1/projects/{id}/takes` | Take metadata page. |
 | `GET` | `/v1/jobs` | Job page. Filters: `project_id`, `action`, `active`, `limit`, `cursor`. |
 | `GET` | `/v1/jobs/{job_id}` | One job object, every status. |
+| `POST` | `/v1/projects` | Create from `{ title?, query? }`. |
+| `PATCH` | `/v1/projects/{id}` | Update `title`, `dit_profile`, or `favorite`. |
+| `DELETE` | `/v1/projects/{id}` | Delete the project and cancel its queued jobs. `204`. |
+| `PUT` | `/v1/projects/{id}/plan` | Replace `plan.json`. Validated and normalized. |
+| `POST` | `/v1/projects/{id}/active_take` | Set the active take. Rejects a failed take. |
+| `PATCH` | `/v1/projects/{id}/takes/{take_id}` | Update `favorite` / `notes` only. |
+| `POST` | `/v1/projects/{id}/uploads` | Upload a WAV/MP3 as a cover/repaint source. |
+| `GET` | `/v1/projects/{id}/loras` | Trained style packs for this project. |
+| `GET` | `/v1/projects/{id}/export` | Zip: `project.json`, `plan.json`, active mix, optional stems. |
+| `POST` | `/v1/projects/{id}/jobs` | Enqueue a job. `202`, `Location: /v1/jobs/{job_id}`, and the job object. |
 | `POST` | `/v1/jobs/{job_id}/cancel` | Cancel a queued job, or ask a running job to drop its audio. |
 | `GET` | `/v1/artifacts/{id}/{take_id}/mix.wav` | Stable `mix.wav` for a take. |
 | `GET` | `/v1/artifacts/{id}/{take_id}/mix.mp3` | Stable `mix.mp3` for a take. |
@@ -65,6 +77,10 @@ This page is the orientation; the schema is the specification.
 a hint telling you to build it.
 
 ## Enqueuing a job
+
+`POST /api/projects/{id}/jobs` and `POST /v1/projects/{id}/jobs` take the same
+body. `/v1` answers `202` with `Location: /v1/jobs/{job_id}` and the job
+object below. `/api` answers `200` with the queue row.
 
 `POST /api/projects/{id}/jobs`:
 
@@ -173,8 +189,10 @@ checkout.
 | Status | Meaning |
 |---|---|
 | `400` | Invalid plan field, invalid job body, a path escaping the jail, or a provider refusal. |
+| `401` | `/v1` only, when auth is on and the bearer secret is missing or unknown. |
+| `403` | `/v1` only. The key is known and does not include the scope. |
 | `404` | Unknown project, take, LoRA, or job. |
-| `409` | A Remote GPU is already running; stop it first. |
+| `409` | Idempotency key reused with a different body, or a Remote GPU is already running. |
 | `413` | Request body over the upload cap. |
 
 `/api` error responses are `{"detail": "..."}`, and the message names the
@@ -193,9 +211,20 @@ unchanged.
 ```
 
 `401` carries `WWW-Authenticate: Bearer`. `403` means the key is known and
-lacks the scope. `read` covers health, projects, takes, jobs, and artifacts.
-`generate` covers cancel, and may also read jobs and artifacts. `write` is
-reserved for later plan and project edits.
+lacks the scope. `read` covers health, projects, takes, jobs, artifacts, style packs, and
+export. `generate` covers enqueue and cancel, and may also read jobs and
+artifacts. `write` covers project create and update, plan edits, uploads,
+annotations, the active take, and project delete. `generate` does not include
+`write`.
+
+Every `/v1` POST accepts an optional `Idempotency-Key` (1–255 visible ASCII
+characters, no spaces). The server stores the key, a hash of the raw body,
+and the response in the jobs database for 24 hours. The same key and the same
+body return that response and do not run the handler again. A replay of
+`POST /v1/projects/{id}/jobs` is `200` with the same job; the first response
+is `202`. The same key and a different body, including a different query
+string, is `409` with `error.code` `idempotency_conflict`. Keys are scoped to
+the API key when auth is on. `/api` ignores the header.
 
 With no API key configured, `/v1` and `/api` are both open on loopback. Set
 `LYRE_REQUIRE_AUTH=1`, or bind a non-loopback address, and the process

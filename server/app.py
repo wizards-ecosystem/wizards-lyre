@@ -15,6 +15,8 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -23,7 +25,9 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from server import config, jobs, storage
 from server.remote_gpu import service as remote_gpu
 from server.remote_gpu.provisioners.base import AlreadyRunning, ProvisionerError
+from server.uploads import receive_audio_upload
 from server.v1.auth import ApiAuthError
+from server.v1.idempotency import IdempotencyMiddleware
 from server.v1.routes import BadPage
 from server.v1.routes import router as v1_router
 
@@ -94,6 +98,11 @@ class _MaxRequestBodyMiddleware:
         await self.app(scope, limited_receive, send)
 
 
+# Innermost first. The body limit counts bytes, then idempotency hashes the
+# buffered body for `/v1` POSTs that send a key, then the router runs.
+# Exception handlers sit inside this stack, so a stored 400 is the response
+# those handlers already built.
+app.add_middleware(IdempotencyMiddleware)
 app.add_middleware(_MaxRequestBodyMiddleware)
 
 
@@ -266,6 +275,25 @@ def _http_exception_handler(request, exc: HTTPException):
     return _error_body(request, exc.status_code, message, code=code)
 
 
+@app.exception_handler(RequestValidationError)
+async def _validation_handler(request, exc: RequestValidationError):
+    # `/api` keeps FastAPI's 422 `{"detail": [...]}` body. `/v1` uses the
+    # shared error schema and 400 for an invalid body (SPEC.md sec 15.3).
+    if not request.url.path.startswith("/v1"):
+        return await request_validation_exception_handler(request, exc)
+    errors = exc.errors()
+    first = errors[0] if errors else {}
+    loc = first.get("loc") or ()
+    param = None
+    for part in reversed(loc):
+        if isinstance(part, str) and part not in {"body", "query", "path", "header"}:
+            param = part
+            break
+    message = str(first.get("msg") or "invalid request")
+    code = "invalid_plan" if request.url.path.rstrip("/").endswith("/plan") else "invalid_request"
+    return _error_body(request, 400, message, code=code, param=param)
+
+
 @app.exception_handler(ValueError)
 def _value_error_handler(request, exc: ValueError):
     message = str(exc)
@@ -323,30 +351,10 @@ def patch_project(project_id: str, body: PatchProjectBody) -> dict:
 
 @app.delete("/api/projects/{project_id}", status_code=204)
 def delete_project(project_id: str) -> Response:
-    # SPEC.md sec 9.1 "Delete (confirm)". storage.load_project raises
-    # ProjectNotFound (-> 404, see the exception handler above) for an
-    # unknown id before either the job queue or the filesystem is touched.
-    #
-    # jobs.begin_project_deletion records a tombstone and cancels this
-    # project's queued jobs in one atomic transaction (reviewer-flagged: a
-    # non-atomic cancel-then-delete left a window where a concurrent
-    # enqueue_job could insert a new queued job for this project_id after
-    # the cancel swept past it, orphaning an actionable job for a project
-    # about to disappear -- see that function's docstring for how the
-    # tombstone closes it). A job already running for this project fails
-    # safely on its own once the directory disappears.
-    #
-    # If the filesystem removal itself fails (disk error, permissions, a
-    # handle still open), the project still exists on disk, so its jobs
-    # must not stay cancelled -- abort_project_deletion restores them and
-    # removes the tombstone before the original error is re-raised.
-    storage.load_project(project_id)
-    cancelled_job_ids = jobs.begin_project_deletion(project_id)
-    try:
-        storage.delete_project(project_id)
-    except Exception:
-        jobs.abort_project_deletion(project_id, cancelled_job_ids)
-        raise
+    # SPEC.md sec 9.1. `/v1` calls the same function, including the tombstone
+    # that closes the enqueue race and the restore if the filesystem removal
+    # fails. See `jobs.remove_project`.
+    jobs.remove_project(project_id)
     return Response(status_code=204)
 
 
@@ -414,35 +422,8 @@ def export_project(project_id: str, include_stems: bool = True) -> Response:
 
 @app.post("/api/projects/{project_id}/uploads")
 async def upload_audio(project_id: str, file: UploadFile = File(...)) -> dict:
-    # SPEC.md sec 12 Phase 6: drag-drop a local WAV/MP3 in as a cover/repaint
-    # source, path-jailed under projects/. Streamed to disk in bounded
-    # chunks -- never `await file.read()` in one shot -- so MAX_UPLOAD_BYTES
-    # is enforced as bytes arrive; an oversized upload is aborted (and its
-    # partial file deleted) mid-stream instead of only after the entire body
-    # has already been buffered in memory (reviewer-flagged: an unbounded
-    # single read is a memory-exhaustion vector). The final path is only
-    # published (atomic rename) once the whole body has been accepted, and
-    # is exactly what JobBody.upload_path already knows how to resolve
-    # (SPEC.md sec 8.1).
-    with storage.project_lifecycle_lock(project_id):
-        tmp_path, dest_path = storage.open_upload_destination(project_id, file.filename or "")
-        total_bytes = 0
-        try:
-            with open(tmp_path, "wb") as out:
-                while chunk := await file.read(storage.UPLOAD_CHUNK_BYTES):
-                    total_bytes += len(chunk)
-                    if total_bytes > storage.MAX_UPLOAD_BYTES:
-                        raise ValueError(
-                            f"upload too large: exceeds {storage.MAX_UPLOAD_BYTES} bytes"
-                        )
-                    out.write(chunk)
-        except BaseException:
-            tmp_path.unlink(missing_ok=True)
-            raise
-        finally:
-            await file.close()
-        upload_path = storage.finalize_upload(tmp_path, dest_path)
-    return {"upload_path": upload_path}
+    # SPEC.md sec 12 Phase 6. `/v1` calls the same streaming helper.
+    return await receive_audio_upload(project_id, file)
 
 
 @app.get("/api/projects/{project_id}/loras")

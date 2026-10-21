@@ -1,7 +1,13 @@
-"""`/v1` routes. Reads, the job object, cancel, and stable artifact GETs.
+"""`/v1` routes (SPEC.md sec 15.3).
 
-Writes, idempotency, one-shot songs, SSE, webhooks, and signed artifact
-tokens are later phases (SPEC.md sec 12). `/api` is unchanged.
+Reads, the job object, cancel, and stable artifact GETs landed in the first
+slice. This module adds the studio-loop writes: projects, plan, jobs,
+uploads, annotations, active take, delete, style packs, and export. `/api`
+keeps its own routes and its `{"detail": ...}` errors.
+
+`Idempotency-Key` on POSTs is enforced by `IdempotencyMiddleware`, which
+sees every `/v1` POST including ones added later (`POST /v1/songs`). The
+header parameter below only publishes it in OpenAPI.
 """
 
 from __future__ import annotations
@@ -9,19 +15,31 @@ from __future__ import annotations
 import os
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, File, Header, Response, UploadFile
 from fastapi.responses import FileResponse
 
 from server import jobs, storage
+from server.uploads import receive_audio_upload
 from server.v1.auth import require_scope
 from server.v1.models import (
+    ActiveTake,
     Error,
     Health,
     Job,
+    JobCreate,
     JobPage,
+    Lora,
+    Plan,
+    PlanWrite,
+    Project,
+    ProjectCreate,
     ProjectDetail,
     ProjectPage,
+    ProjectPatch,
+    Take,
     TakePage,
+    TakePatch,
+    UploadCreated,
 )
 from server.v1.present import job_object
 
@@ -34,8 +52,36 @@ _ERRORS: dict[int | str, dict[str, Any]] = {
     404: {"model": Error, "description": "Unknown project, take, or job"},
 }
 
+_POST_ERRORS: dict[int | str, dict[str, Any]] = {
+    **_ERRORS,
+    409: {
+        "model": Error,
+        "description": "Idempotency-Key reused with a different body",
+    },
+}
+
 _PAGE_DEFAULT = 50
 _PAGE_MAX = 100
+
+
+def declare_idempotency_key(
+    idempotency_key: Annotated[
+        str | None,
+        Header(
+            alias="Idempotency-Key",
+            description=(
+                "Optional. The same key and the same raw body replay the original "
+                "response for 24 hours. The same key and a different body is 409. "
+                "A replay of a queued job is 200."
+            ),
+        ),
+    ] = None,
+) -> None:
+    """Publish the header in OpenAPI. The middleware is what enforces it."""
+    del idempotency_key
+
+
+_IDEMPOTENT = [Depends(declare_idempotency_key)]
 
 
 class BadPage(ValueError):
@@ -85,6 +131,19 @@ def health(_auth: Annotated[Any, Depends(require_scope("read"))]) -> dict[str, A
     }
 
 
+@router.post(
+    "/projects",
+    response_model=Project,
+    responses=_POST_ERRORS,
+    dependencies=_IDEMPOTENT,
+)
+def create_project(
+    body: ProjectCreate,
+    _auth: Annotated[Any, Depends(require_scope("write"))],
+) -> dict[str, Any]:
+    return storage.create_project(title=body.title, query=body.query)
+
+
 @router.get("/projects", response_model=ProjectPage, responses=_ERRORS)
 def list_projects(
     _auth: Annotated[Any, Depends(require_scope("read"))],
@@ -109,6 +168,49 @@ def get_project(
     }
 
 
+@router.patch(
+    "/projects/{project_id}",
+    response_model=Project,
+    responses=_ERRORS,
+)
+def patch_project(
+    project_id: str,
+    body: ProjectPatch,
+    _auth: Annotated[Any, Depends(require_scope("write"))],
+) -> dict[str, Any]:
+    return storage.patch_project(project_id, body.model_dump(exclude_unset=True))
+
+
+@router.delete(
+    "/projects/{project_id}",
+    status_code=204,
+    responses={
+        204: {"description": "Deleted. Queued jobs for this project are cancelled."},
+        **_ERRORS,
+    },
+)
+def delete_project(
+    project_id: str,
+    _auth: Annotated[Any, Depends(require_scope("write"))],
+) -> Response:
+    # Same tombstone + filesystem removal as DELETE /api/projects/{id}.
+    jobs.remove_project(project_id)
+    return Response(status_code=204)
+
+
+@router.put(
+    "/projects/{project_id}/plan",
+    response_model=Plan,
+    responses=_ERRORS,
+)
+def put_plan(
+    project_id: str,
+    body: PlanWrite,
+    _auth: Annotated[Any, Depends(require_scope("write"))],
+) -> dict[str, Any]:
+    return storage.save_plan(project_id, body.model_dump(exclude_unset=True))
+
+
 @router.get("/projects/{project_id}/takes", response_model=TakePage, responses=_ERRORS)
 def list_takes(
     project_id: str,
@@ -120,6 +222,131 @@ def list_takes(
     takes = storage.list_takes(project_id)
     page = takes[offset : offset + limit]
     return {"data": page, "next_cursor": _next_cursor(offset, limit, offset + limit < len(takes))}
+
+
+@router.post(
+    "/projects/{project_id}/active_take",
+    response_model=Project,
+    responses=_POST_ERRORS,
+    dependencies=_IDEMPOTENT,
+)
+def set_active_take(
+    project_id: str,
+    body: ActiveTake,
+    _auth: Annotated[Any, Depends(require_scope("write"))],
+) -> dict[str, Any]:
+    # An active take must be playable. A failed take stays in the history.
+    take = storage.get_take(project_id, body.take_id)
+    if take.get("error") is not None:
+        raise ValueError(f"take has an error, cannot set active: {body.take_id}")
+    return storage.set_active_take(project_id, body.take_id)
+
+
+@router.patch(
+    "/projects/{project_id}/takes/{take_id}",
+    response_model=Take,
+    responses=_ERRORS,
+)
+def patch_take(
+    project_id: str,
+    take_id: str,
+    body: TakePatch,
+    _auth: Annotated[Any, Depends(require_scope("write"))],
+) -> dict[str, Any]:
+    return storage.update_take_annotations(
+        project_id, take_id, favorite=body.favorite, notes=body.notes
+    )
+
+
+@router.post(
+    "/projects/{project_id}/uploads",
+    response_model=UploadCreated,
+    responses={
+        **_POST_ERRORS,
+        413: {"model": Error, "description": "Body over the upload cap"},
+    },
+    dependencies=_IDEMPOTENT,
+)
+async def upload_audio(
+    project_id: str,
+    _auth: Annotated[Any, Depends(require_scope("write"))],
+    file: Annotated[UploadFile, File()],
+) -> dict[str, str]:
+    return await receive_audio_upload(project_id, file)
+
+
+@router.get(
+    "/projects/{project_id}/loras",
+    response_model=list[Lora],
+    responses=_ERRORS,
+)
+def list_loras(
+    project_id: str,
+    _auth: Annotated[Any, Depends(require_scope("read"))],
+) -> list[dict[str, Any]]:
+    return storage.list_loras(project_id)
+
+
+_ZIP: dict[int | str, dict[str, Any]] = {
+    200: {
+        "description": "Zip of project.json, plan.json, the active mix, and optional stems.",
+        "content": {"application/zip": {"schema": {"type": "string", "format": "binary"}}},
+    },
+    **_ERRORS,
+}
+
+
+@router.get("/projects/{project_id}/export", responses=_ZIP)
+def export_project(
+    project_id: str,
+    _auth: Annotated[Any, Depends(require_scope("read"))],
+    include_stems: bool = True,
+) -> Response:
+    project = storage.load_project(project_id)
+    zip_bytes = storage.build_export_zip(project_id, include_stems=include_stems)
+    filename = f"{storage.sanitize_filename(project['title'])}-export.zip"
+    return Response(
+        content=zip_bytes,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+_JOB_CREATED: dict[int | str, dict[str, Any]] = {
+    200: {"model": Job, "description": "Idempotent replay of the queued job."},
+    202: {
+        "model": Job,
+        "description": "Job queued.",
+        "headers": {
+            "Location": {
+                "description": "Path of the job object.",
+                "schema": {"type": "string"},
+            }
+        },
+    },
+    **_POST_ERRORS,
+}
+
+
+@router.post(
+    "/projects/{project_id}/jobs",
+    status_code=202,
+    response_model=Job,
+    responses=_JOB_CREATED,
+    dependencies=_IDEMPOTENT,
+)
+def create_job(
+    project_id: str,
+    body: JobCreate,
+    response: Response,
+    _auth: Annotated[Any, Depends(require_scope("generate"))],
+) -> dict[str, Any]:
+    # One enqueue function for /api and /v1. The row is queued; the worker
+    # is the only thing that runs it.
+    queued = jobs.enqueue_job(project_id, body.model_dump())
+    job = job_object(jobs.read_job(queued["id"]))
+    response.headers["Location"] = f"/v1/jobs/{job['id']}"
+    return job
 
 
 @router.get("/jobs", response_model=JobPage, responses=_ERRORS)
@@ -155,7 +382,12 @@ def get_job(
     return job_object(jobs.read_job(job_id))
 
 
-@router.post("/jobs/{job_id}/cancel", response_model=Job, responses=_ERRORS)
+@router.post(
+    "/jobs/{job_id}/cancel",
+    response_model=Job,
+    responses=_POST_ERRORS,
+    dependencies=_IDEMPOTENT,
+)
 def cancel_job(
     job_id: str, _auth: Annotated[Any, Depends(require_scope("generate"))]
 ) -> dict[str, Any]:

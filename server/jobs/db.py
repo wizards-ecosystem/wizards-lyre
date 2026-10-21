@@ -132,6 +132,27 @@ def init_db() -> None:
             )
             """
         )
+        # SPEC.md sec 15.3. One row per (caller, Idempotency-Key). `expires_at`
+        # is a unix timestamp; reserve() drops rows once that second has
+        # passed. `state` is `pending` while the first request is in flight
+        # and `done` once its response is stored for replay.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS idempotency_keys (
+                owner_id TEXT NOT NULL,
+                idempotency_key TEXT NOT NULL,
+                request_hash TEXT NOT NULL,
+                state TEXT NOT NULL,
+                status_code INTEGER NOT NULL DEFAULT 0,
+                body BLOB NOT NULL,
+                location TEXT,
+                content_type TEXT,
+                created_at INTEGER NOT NULL,
+                expires_at INTEGER NOT NULL,
+                PRIMARY KEY (owner_id, idempotency_key)
+            )
+            """
+        )
         conn.commit()
 
 
