@@ -1,8 +1,9 @@
 """One-shot song creation (SPEC.md sec 15.4).
 
-`POST /v1/songs` and, later, the MCP `create_song` tool both call
-`create_song`. It writes an ordinary project and queues `generate`. It
-does not render, and it does not call the worker.
+`POST /v1/songs` calls `create_song`. The MCP `create_song` tool calls that
+route over HTTP rather than this function, so the queue stays in one place.
+It writes an ordinary project and queues `generate`. It does not render,
+and it does not call the worker.
 """
 
 from __future__ import annotations

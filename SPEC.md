@@ -422,16 +422,16 @@ Typed read models for the data section 8 already stores. No new generation behav
 
 - CLI mint/revoke (section 15.2). Keys stored hashed, mode `0600`.
 - Default bind stays the constant `127.0.0.1` with auth off, and the studio is served.
-- Non-loopback bind refuses to start when no key exists. Non-loopback and `LYRE_REQUIRE_AUTH=1` serve `/v1` only, plus `/mcp` once phase 12 mounts it. They do not serve the SPA or `/api`.
+- Non-loopback bind refuses to start when no key exists. Non-loopback and `LYRE_REQUIRE_AUTH=1` serve `/v1` and `/mcp` only. They do not serve the SPA or `/api`.
 - Do not add a `0.0.0.0` literal to source. `tests/test_spec_lock.py` keeps forbidding that string. Operators who want every interface set `LYRE_BIND` themselves.
 
 **Acceptance:** pytest covers the default (no auth, loopback), startup refusal, 401/403, and the hidden SPA. **Real GPU:** no.
 
 ### Phase 12: MCP server
 
-- stdio entrypoint and Streamable HTTP `POST /mcp`, protocol revision 2026-07-28, tasks extension as in section 15.6.
-- Tools call the same service functions as `/v1`. The MCP process does not import `acestep` or `torch`.
-- A generation tool returns a task whose `taskId` is the job id, or JSON-RPC `-32021` when the client did not advertise the tasks extension.
+- stdio entrypoint and Streamable HTTP `POST /mcp`, protocol revision 2026-07-28 (the current revision when this phase landed; no later revision was published), tasks extension as in section 15.6.
+- The adapter is a thin client of the `/v1` HTTP API. It does not open the jobs database, does not import FastAPI route functions, and does not import `acestep` or `torch`. stdio reads `LYRE_URL` and an optional `LYRE_API_KEY`. `POST /mcp` calls `/v1` in-process and forwards the request bearer.
+- A generation tool returns a task whose `taskId` is the job id. It returns JSON-RPC `-32021` and does not enqueue when the client did not advertise the tasks extension and did not pass `wait_timeout_sec`. Passing `wait_timeout_sec` enqueues and polls until the job finishes or the timeout elapses, then returns a complete tool result.
 
 **Acceptance:** pytest speaks JSON-RPC in-process (stdio framing and one Streamable HTTP POST). `create_song` enqueues the same job shape phase 9 already GPU-checked. **Real GPU:** no.
 
@@ -469,9 +469,9 @@ If upstream parameter names drift, follow ACE-Step's current `GenerationParams` 
 
 Specified 2026-10-20. Partially implemented.
 
-Served now: the section 15.3 reads, the job object (every status, including `cancelled`), `POST /v1/jobs/{id}/cancel`, the stable artifact GETs, the section 15.3 writes (projects, plan, jobs, uploads, annotations, active take, delete, style packs, and export), `Idempotency-Key` on every `/v1` POST, `POST /v1/songs`, worker `stage` / `cancel_requested`, and the section 15.2 API keys and bind rules. `docs/API.md` lists those routes. The default process still binds `127.0.0.1` with auth off and still serves the studio.
+Served now: the section 15.3 reads, the job object (every status, including `cancelled`), `POST /v1/jobs/{id}/cancel`, the stable artifact GETs, the section 15.3 writes (projects, plan, jobs, uploads, annotations, active take, delete, style packs, and export), `Idempotency-Key` on every `/v1` POST, `POST /v1/songs`, worker `stage` / `cancel_requested`, the section 15.2 API keys and bind rules, and the section 15.6 MCP server (stdio and `POST /mcp`). `docs/API.md` lists the HTTP routes. `docs/MCP.md` is the client setup. The default process still binds `127.0.0.1` with auth off and still serves the studio.
 
-Not served yet, still one phase each in the section 12 order: SSE, webhooks, and signed artifact tokens (phase 10), the MCP server (phase 12), and `/api` deprecation headers (phase 13). `POST /v1/songs` accepts `webhook_url: null`; a non-null webhook URL is rejected until phase 10.
+Not served yet, still one phase each in the section 12 order: SSE, webhooks, and signed artifact tokens (phase 10), and `/api` deprecation headers (phase 13). `POST /v1/songs` accepts `webhook_url: null`; a non-null webhook URL is rejected until phase 10.
 
 Design notes, rejected alternatives, and the defaults a maintainer may overturn: [docs/adr/0001-agent-api.md](docs/adr/0001-agent-api.md). This section wins when they disagree.
 
@@ -661,7 +661,7 @@ Paths in JSON are relative (`/v1/artifacts/...`). Clients resolve them against t
 
 ### 15.6 MCP
 
-An MCP server exposes Lyre's tools to AI clients. Protocol revision **2026-07-28**. If a later revision is current when phase 12 is implemented, target that revision's tools and tasks extension and update this section in the same pull request.
+An MCP server exposes Lyre's tools to AI clients. Protocol revision **2026-07-28**, which was current when phase 12 was implemented. No later revision was published. A later revision, if one appears, is a spec change of its own.
 
 References:
 
@@ -683,7 +683,7 @@ Auth on `POST /mcp` is the same bearer key as `/v1`. The MCP OAuth authorization
 
 **Discovery.** `server/discover` advertises protocol `2026-07-28`, the `tools` capability (`listChanged: false`; the list is static and returned in the order below), the `resources` capability, and extension `io.modelcontextprotocol/tasks`.
 
-**Tools.** Each tool has an `inputSchema` and an `outputSchema`. Results set `resultType: "complete"` and include `structuredContent` plus the same JSON as a text content block. Generation tools are the exception: they return a task (below) instead of blocking.
+**Tools.** Each tool has an `inputSchema` and an `outputSchema`. Sync results set `resultType: "complete"` and include `structuredContent` plus the same JSON as a text content block. Generation tools return a task (below) unless the caller passes `wait_timeout_sec`, in which case the server polls and returns a complete result.
 
 | Tool | Kind | Calls |
 |---|---|---|
@@ -695,12 +695,15 @@ Auth on `POST /mcp` is the same bearer key as `/v1`. The MCP OAuth authorization
 | `get_project` | sync | `GET /v1/projects/{id}` |
 | `update_plan` | sync | `PUT /v1/projects/{id}/plan` |
 | `list_takes` | sync | `GET /v1/projects/{id}/takes` |
+| `get_artifact` | sync | `HEAD` of the three artifact URLs in section 15.4 |
 
-`transform_take` arguments are the section 8.1 fields for that action (`project_id`, `action`, `source_take_id` or `upload_path`, region, `track_name`, `audio_cover_strength`, `dit_profile`, `seed`). `delete_project`, `train_lora`, file upload, and Remote GPU session start are not tools. Those stay on the HTTP API (`train_lora` and upload) or on the loopback studio (session start, project delete).
+`create_song` and `transform_take` send `Idempotency-Key`: the caller's `idempotency_key`, or a generated UUID. The key matches the `/v1` rule (`^[!-~]{1,255}$`). `transform_take` arguments are the section 8.1 fields for that action (`project_id`, `action`, `source_take_id` or `upload_path`, region, `track_name`, `audio_cover_strength`, `dit_profile`, `seed`, `batch_size`). `get_artifact` takes `project_id` and `take_id` and HEADs `mix.wav`, `mix.mp3`, and `lyrics.lrc`. It returns each file's relative `url`, `absolute_url` (resolved from `LYRE_URL`, or from `http://{bind}:{port}` for `POST /mcp`), `media_type`, `available`, `content_length`, and `http_status`. It does not download the bytes. `401` and `403` are tool errors. Any other non-200 status sets `available` to false. `delete_project`, `train_lora`, file upload, and Remote GPU session start are not tools. Those stay on the HTTP API (`train_lora` and upload) or on the loopback studio (session start, project delete).
 
-**Tasks.** `create_song` and `transform_take` need the tasks extension. When the request's `_meta` capabilities include `io.modelcontextprotocol/tasks`, the server inserts the job row first, then returns `CreateTaskResult` (`resultType: "task"`) with `taskId` equal to the Lyre job id, `status: "working"`, `ttlMs: null`, `pollIntervalMs: 2000`, and a `statusMessage` of the current stage. When the client did not advertise the extension, the server returns JSON-RPC error `-32021` (Missing Required Client Capability) and does not enqueue. Generation takes minutes; a blocking `tools/call` will be killed by client timeouts, so a synchronous result is not offered.
+**Tasks.** `create_song` and `transform_take` need the tasks extension unless the caller passes `wait_timeout_sec`. When that argument is omitted and the request's `_meta` capabilities include `io.modelcontextprotocol/tasks`, the server enqueues first, then returns `CreateTaskResult` (`resultType: "task"`) with `taskId` equal to the Lyre job id, `status: "working"`, `ttlMs: null`, `pollIntervalMs: 2000`, and a `statusMessage` of the current stage (or `queued`). When the client did not advertise the extension and did not pass `wait_timeout_sec`, the server returns JSON-RPC error `-32021` (Missing Required Client Capability) and does not enqueue.
 
-`tasks/get` reads the job row. `tasks/cancel` is `POST /v1/jobs/{id}/cancel` and acknowledges immediately; the status may stay `working` until the worker honors the flag, which matches the tasks spec (cancellation is cooperative). `tasks/update` has nothing to do in this version: no tool enters `input_required`. A call for a known task returns an empty success; a call for an unknown task is a JSON-RPC error. Clients poll. `notifications/tasks` is not required in phase 12.
+`wait_timeout_sec` is the path for clients that cannot advertise tasks. The server validates it before any HTTP call: a finite number from 0 through 86400. An invalid value is a tool error and does not enqueue. A valid value enqueues, then polls `GET /v1/jobs/{id}` until a terminal status or the timeout. The result is a complete tool result, not a task. A timeout returns the current job plus a second text block and is not a tool error. A job status of `error` is a tool error. Generation still takes minutes; the default remains the task handle, and a blocking `tools/call` is only what the caller asked for by passing the timeout.
+
+`tasks/get` is `GET /v1/jobs/{id}`. `tasks/cancel` is `POST /v1/jobs/{id}/cancel` and acknowledges immediately; the status may stay `working` until the worker honors the flag, which matches the tasks spec (cancellation is cooperative). `tasks/update` has nothing to do in this version: no tool enters `input_required`. A call for a known task returns an empty success; a call for an unknown task is a JSON-RPC error. Clients poll. `notifications/tasks` is not required in phase 12.
 
 | Lyre job | MCP task `status` |
 |---|---|
@@ -713,7 +716,7 @@ The completed tool result's `structuredContent` is the job object, including art
 
 **Resources.** `lyre://project/{id}` and `lyre://take/{project_id}/{take_id}` return JSON text. `resources/read` of audio is not offered.
 
-The MCP adapter and the `/v1` routes call one service module. The adapter does not import FastAPI's route functions and does not import `acestep` or `torch`. stdio uses that module and the same SQLite file; it only enqueues, the same way the HTTP server does. The worker remains the only process that claims jobs.
+The MCP adapter is a thin client of the `/v1` HTTP API. It does not duplicate enqueue, plan, or artifact logic. It does not import FastAPI route functions, `acestep`, or `torch`, and it does not open the jobs database. stdio (`./scripts/lyre mcp`) reads `LYRE_URL` (default `http://127.0.0.1:8421`) and an optional `LYRE_API_KEY`, and calls that origin. The HTTP server must already be running. `POST /mcp` ignores `LYRE_URL` and calls `/v1` in-process, forwarding the request bearer. The worker remains the only process that claims jobs.
 
 ### 15.7 Worker and Remote GPU
 

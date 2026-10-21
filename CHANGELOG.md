@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **MCP server.** `./scripts/lyre mcp` speaks MCP 2026-07-28 on stdin/stdout,
+  and the HTTP server accepts stateless `POST /mcp` on the same port. Both
+  are a thin client of `/v1` (`LYRE_URL`, optional `LYRE_API_KEY` on stdio).
+  Tools: `create_song`, `transform_take`, `get_job`, `cancel_job`,
+  `list_projects`, `get_project`, `update_plan`, `list_takes`,
+  `get_artifact`. Resources: `lyre://project/{id}` and
+  `lyre://take/{project_id}/{take_id}`. Generation returns a task whose
+  `taskId` is the job id, or polls when the caller passes
+  `wait_timeout_sec`. See `docs/MCP.md`.
 - **One-shot songs.** `POST /v1/songs` creates a project, writes the plan, and
   queues `generate` in one call (`202`, `Location: /v1/jobs/{id}`, the job
   object). Scope `generate`. Prompt-only is simple mode; caption or lyrics is
@@ -54,10 +63,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- SPEC.md section 15 specifies the rest of the agent API (SSE, webhooks,
-  signed artifact tokens, MCP). Those routes are not served yet. The studio
-  default remains loopback with auth off, and ACE-Step 1.5 is still the only
-  engine. See `docs/adr/0001-agent-api.md`.
+- SPEC.md section 15 still specifies SSE, webhooks, and signed artifact
+  tokens. Those are not served yet. The studio default remains loopback
+  with auth off, and ACE-Step 1.5 is still the only engine. See
+  `docs/adr/0001-agent-api.md`.
 
 ## [0.2.0] - 2026-09-26
 

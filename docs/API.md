@@ -11,11 +11,13 @@ annotations, active take, delete, style packs, export), the job object,
 `POST /v1/jobs/{job_id}/cancel`, stable artifact GETs, and `Idempotency-Key`
 on every `/v1` POST. API keys and a non-loopback bind are opt-in and off
 unless you set them ([Configuration](CONFIGURATION.md)). One-shot
-`POST /v1/songs` is served. SSE, webhooks, signed artifact tokens, and the
-MCP server are not served yet. The design notes are in
-[adr/0001-agent-api.md](adr/0001-agent-api.md). When a phase mounts a route,
-this table gains a row in the same change: the test that reads this file
-fails if the table and the app disagree.
+`POST /v1/songs` is served. The MCP server is served at `POST /mcp` on the
+same port; setup for Claude Desktop and Cursor is in [MCP](MCP.md). SSE,
+webhooks, and signed artifact tokens are not served yet. The design notes
+are in [adr/0001-agent-api.md](adr/0001-agent-api.md). When a phase mounts a
+`/api` or `/v1` route, this table gains a row in the same change: the test
+that reads this file fails if the table and the app disagree. `POST /mcp` is
+documented in [MCP](MCP.md) rather than this table.
 
 The server is FastAPI, so the authoritative, always-current reference is the
 generated schema while it is running:
@@ -269,7 +271,8 @@ served. An idempotent replay of this POST is `200` with the same job.
 
 With no API key configured, `/v1` and `/api` are both open on loopback. Set
 `LYRE_REQUIRE_AUTH=1`, or bind a non-loopback address, and the process
-requires a key from `./scripts/lyre api-key create` and serves `/v1` only.
+requires a key from `./scripts/lyre api-key create` and serves `/v1` and
+`POST /mcp` only.
 There is no HTTP route that mints a key. The signed query token for players
 that cannot send a header is not served yet; use the bearer header, or run
 with auth off.
