@@ -21,12 +21,15 @@ of them to keep all writable state inside the checkout. Run
 | `LYRE_DEVICE` | `cuda` | Torch device string for the worker. |
 | `LYRE_BIND` | `127.0.0.1` | Address the HTTP server listens on. Unset means loopback. `127.0.0.1`, `localhost`, and `::1` are loopback. Any other address is a network bind: the process refuses to start until an API key is stored, and it serves `/v1` only (no studio, no `/api`). |
 | `LYRE_REQUIRE_AUTH` | off | Set to `1` to require a bearer API key even on loopback, and to hide the studio and `/api`. Use this when a tunnel or reverse proxy forwards traffic onto loopback. `0` on a network bind is a startup error. Unset on loopback leaves auth off. |
+| `LYRE_URL` | `http://127.0.0.1:8421` | Origin the stdio MCP client calls. An `http` or `https` origin with no userinfo, path, query, or fragment. `POST /mcp` ignores it and calls `/v1` in-process. See [MCP](MCP.md). |
+| `LYRE_API_KEY` | unset | Bearer token for `./scripts/lyre mcp` when the HTTP server requires auth. `POST /mcp` uses the caller's `Authorization` header instead. Do not put the key in a query string. |
+| `LYRE_ALLOWED_ORIGINS` | unset | Comma-separated origins that may send `Origin` on `/mcp`, in addition to loopback (`localhost`, `127.0.0.1`, and `[::1]`, any port). A missing `Origin` is still allowed. Any other origin is `403`. See [MCP](MCP.md). |
 
 Mint a key with `./scripts/lyre api-key create --name <name>` (default scopes
 `read,generate,write`). The secret is printed once. The server stores its
 sha256 in `api-keys.json` beside the jobs database, mode `0600`. Revoke with
-`./scripts/lyre api-key revoke <id>`. `LYRE_API_KEY` is the stdio MCP
-credential in SPEC.md section 15.6 and is not read until that phase.
+`./scripts/lyre api-key revoke <id>`. Put that secret in `LYRE_API_KEY` only
+in the environment of the stdio MCP process.
 
 ## Remote GPU variables
 

@@ -157,6 +157,7 @@ only ever rents one when you press Start. It is off unless you turn it on.
 | [Architecture](docs/ARCHITECTURE.md) | Process boundaries, queue leases, storage, and failure recovery |
 | [Configuration](docs/CONFIGURATION.md) | Every `LYRE_*` setting and all DiT profiles |
 | [HTTP API](docs/API.md) | Routes the server serves today; live OpenAPI is at `/docs` |
+| [MCP](docs/MCP.md) | Using Lyre as a music tool from Claude Desktop, Cursor, and other MCP hosts |
 | [Agent API amendment](docs/adr/0001-agent-api.md) | Why SPEC.md section 15 adds an opt-in API for AI agents, and the open questions |
 | [Remote GPU](docs/remote-gpu.md) | The opt-in lane for rendering on a GPU you rent or own, and its host protocol |
 | [Runpod](docs/runpod.md) | Starting, stopping, and paying for a Runpod pod from Lyre |

@@ -1,6 +1,6 @@
 # ADR 0001: An agent API for Lyre
 
-**Status:** Accepted as a spec amendment on 2026-10-20. Partially implemented (typed `/v1` reads and writes, job object, cooperative cancel, opt-in API keys, one-shot `POST /v1/songs`). SSE, webhooks, signed artifact tokens, MCP, and `/api` deprecation headers are not built yet.
+**Status:** Accepted as a spec amendment on 2026-10-20. Partially implemented (typed `/v1` reads and writes, job object, cooperative cancel, opt-in API keys, one-shot `POST /v1/songs`, MCP on stdio and stateless Streamable HTTP). SSE, webhooks, signed artifact tokens, and `/api` deprecation headers are not built yet.
 The normative contract is [SPEC.md](../../SPEC.md) section 15. This note
 records why that section looks the way it does, which alternatives were
 rejected, and which defaults a maintainer might still overturn. When this
@@ -74,7 +74,12 @@ each. The decisions that fix the shape:
 8. **MCP speaks revision 2026-07-28** on stdio and on stateless Streamable
    HTTP (`POST /mcp`). Generation tools return `io.modelcontextprotocol/tasks`
    handles whose `taskId` is the Lyre job id, or JSON-RPC `-32021` if the
-   client cannot handle tasks. Mix audio is a URL, not a base64 content block.
+   client cannot handle tasks and did not pass `wait_timeout_sec`. Passing
+   `wait_timeout_sec` makes the server poll and return a complete result,
+   which is how a client that does not advertise tasks still creates a song.
+   Mix audio is a URL, not a base64 content block. The adapter is a thin
+   client of `/v1` (`LYRE_URL` and `LYRE_API_KEY` on stdio); it does not
+   open the jobs database.
 9. **The worker and the Remote GPU lane are unchanged in role.** New columns
    are `stage` and `cancel_requested`. A queued agent job never calls the
    Runpod provisioner. Session start stays a human action on the loopback

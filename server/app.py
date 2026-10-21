@@ -20,9 +20,12 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from starlette.routing import Route
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from server import config, jobs, storage
+from server.mcp.http import gateway as mcp_gateway
+from server.mcp.http import mcp_lifespan
 from server.remote_gpu import service as remote_gpu
 from server.remote_gpu.provisioners.base import AlreadyRunning, ProvisionerError
 from server.uploads import receive_audio_upload
@@ -41,7 +44,8 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     # ours on a clean exit. Both are no-ops for the default manual provisioner.
     await asyncio.to_thread(remote_gpu.on_startup)
     try:
-        yield
+        async with mcp_lifespan():
+            yield
     finally:
         await asyncio.to_thread(remote_gpu.on_shutdown)
 
@@ -124,7 +128,7 @@ class _AgentSurfaceMiddleware:
             response = _bind_misconfigured(exc)
             await response(scope, receive, send)
             return
-        if restricted and not path.startswith("/v1"):
+        if restricted and not _agent_surface(path):
             response = JSONResponse(
                 status_code=404,
                 content={"error": {"code": "not_found", "message": "not found", "param": None}},
@@ -135,6 +139,11 @@ class _AgentSurfaceMiddleware:
 
 
 app.add_middleware(_AgentSurfaceMiddleware)
+
+
+def _agent_surface(path: str) -> bool:
+    """Routes that stay mounted when auth is required (SPEC.md sec 15.2)."""
+    return path.startswith("/v1") or path == "/mcp" or path.startswith("/mcp/")
 
 
 def _bind_misconfigured(exc: config.BindConfigError) -> JSONResponse:
@@ -488,6 +497,29 @@ def stop_remote_gpu_session() -> dict[str, Any]:
 
 
 app.include_router(v1_router)
+
+# Streamable HTTP MCP. Registered before the SPA so `/mcp` is not swallowed
+# by the static mount. Not part of the OpenAPI document; see docs/MCP.md.
+# A class instance is a raw ASGI app. `add_route` would type it as a request
+# endpoint, and `mount` redirects `/mcp` to `/mcp/`.
+app.router.routes.append(
+    Route(
+        "/mcp",
+        mcp_gateway,
+        methods=["GET", "POST", "DELETE"],
+        name="mcp",
+        include_in_schema=False,
+    )
+)
+app.router.routes.append(
+    Route(
+        "/mcp/",
+        mcp_gateway,
+        methods=["GET", "POST", "DELETE"],
+        name="mcp-slash",
+        include_in_schema=False,
+    )
+)
 
 
 # Prod: FastAPI serves the built SPA from web/dist (SPEC.md sec 5). Registered

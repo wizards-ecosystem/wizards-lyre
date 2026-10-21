@@ -47,6 +47,22 @@ from server.v1.songs import create_song as queue_song
 
 router = APIRouter(prefix="/v1")
 
+
+def _accepted_job(queued: dict[str, Any]) -> dict[str, Any]:
+    """The job this call accepted, still `queued`.
+
+    `read_job` can already see `running` when the worker claims the row
+    before the response is built. The 202 body is the accepted job.
+    `GET /v1/jobs/{id}` is the live status.
+    """
+    row = jobs.read_job(queued["id"])
+    row["status"] = "queued"
+    row["stage"] = None
+    row["take_id"] = None
+    row["error"] = None
+    return job_object(row)
+
+
 _ERRORS: dict[int | str, dict[str, Any]] = {
     400: {"model": Error, "description": "Invalid request"},
     401: {"model": Error, "description": "Missing or unknown API key"},
@@ -347,8 +363,7 @@ def create_song(
     Scope `generate` (SPEC.md sec 15.4). The response is the job object.
     Poll `GET /v1/jobs/{id}`, then fetch `artifacts`.
     """
-    queued = queue_song(body)
-    job = job_object(jobs.read_job(queued["id"]))
+    job = _accepted_job(queue_song(body))
     response.headers["Location"] = f"/v1/jobs/{job['id']}"
     return job
 
@@ -368,8 +383,7 @@ def create_job(
 ) -> dict[str, Any]:
     # One enqueue function for /api and /v1. The row is queued; the worker
     # is the only thing that runs it.
-    queued = jobs.enqueue_job(project_id, body.model_dump())
-    job = job_object(jobs.read_job(queued["id"]))
+    job = _accepted_job(jobs.enqueue_job(project_id, body.model_dump()))
     response.headers["Location"] = f"/v1/jobs/{job['id']}"
     return job
 

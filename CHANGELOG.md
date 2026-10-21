@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **MCP server.** `./scripts/lyre mcp` speaks MCP 2026-07-28 on stdin/stdout,
+  and the HTTP server accepts stateless `POST /mcp` on the same port. Both
+  are a thin client of `/v1` (`LYRE_URL`, optional `LYRE_API_KEY` on stdio).
+  Tools: `create_song`, `transform_take`, `get_job`, `cancel_job`,
+  `list_projects`, `get_project`, `update_plan`, `list_takes`,
+  `get_artifact`. Resources: `lyre://project/{id}` and
+  `lyre://take/{project_id}/{take_id}`. Generation returns a task whose
+  `taskId` is the job id, or polls when the caller passes
+  `wait_timeout_sec`. See `docs/MCP.md`.
 - **One-shot songs.** `POST /v1/songs` creates a project, writes the plan, and
   queues `generate` in one call (`202`, `Location: /v1/jobs/{id}`, the job
   object). Scope `generate`. Prompt-only is simple mode; caption or lyrics is
@@ -39,6 +48,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- `POST /mcp` rejects a present `Origin` that is not loopback (`localhost`,
+  `127.0.0.1`, or `[::1]`, any port) and not listed in `LYRE_ALLOWED_ORIGINS`.
+  The response is `403` in the `/v1` error shape. A missing `Origin` stays
+  allowed, so a web page cannot queue jobs on the default loopback server
+  while auth is off.
 - A bad `LYRE_BIND` / `LYRE_REQUIRE_AUTH` no longer returns its exception text
   on `/v1`. The response is a generic misconfigured error plus a `request_id`;
   the detail is logged on the server. `api-key create` still shows the secret
@@ -52,12 +66,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stay aligned with Lyre's lock. FastAPI 0.141.1 accepts Starlette >=0.46.0,
   and the overlay's `anyio==4.14.2` satisfies Starlette 1.7.
 
+### Fixed
+
+- `POST /v1/songs` and `POST /v1/projects/{id}/jobs` return the accepted
+  job as `queued`. A worker that claims the row before the response is
+  built no longer changes that `202` body. Poll `GET /v1/jobs/{id}` for
+  the live status.
+
 ### Changed
 
-- SPEC.md section 15 specifies the rest of the agent API (SSE, webhooks,
-  signed artifact tokens, MCP). Those routes are not served yet. The studio
-  default remains loopback with auth off, and ACE-Step 1.5 is still the only
-  engine. See `docs/adr/0001-agent-api.md`.
+- SPEC.md section 15 still specifies SSE, webhooks, and signed artifact
+  tokens. Those are not served yet. The studio default remains loopback
+  with auth off, and ACE-Step 1.5 is still the only engine. See
+  `docs/adr/0001-agent-api.md`.
 
 ## [0.2.0] - 2026-09-26
 
