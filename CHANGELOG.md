@@ -66,6 +66,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stay aligned with Lyre's lock. FastAPI 0.141.1 accepts Starlette >=0.46.0,
   and the overlay's `anyio==4.14.2` satisfies Starlette 1.7.
 
+### Fixed
+
+- `POST /v1/songs` and `POST /v1/projects/{id}/jobs` return the accepted
+  job as `queued`. A worker that claims the row before the response is
+  built no longer changes that `202` body. Poll `GET /v1/jobs/{id}` for
+  the live status.
+
 ### Changed
 
 - SPEC.md section 15 still specifies SSE, webhooks, and signed artifact
