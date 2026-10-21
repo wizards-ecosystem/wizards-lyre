@@ -15,6 +15,10 @@ process dies or the GPU crashes mid-job, the heartbeat stops; the next
 `reclaim_stale_jobs` call (run at worker startup and each poll) finds the
 stuck `running` row and either requeues it for another attempt or, past
 `MAX_ATTEMPTS`, marks it `error` instead of leaving it `running` forever.
+A job that is still heartbeating but has not finished within
+`job_timeout_sec` is a different failure: the same loop marks it `error`
+with a watchdog message and exits the process so the GPU lock is released
+instead of renewing the lease forever.
 
 This package is the single import surface -- `from server import jobs`, then
 `jobs.<name>` -- split by concern:
@@ -38,6 +42,8 @@ from server.jobs.deletion import (
 )
 from server.jobs.errors import JobCancelled, JobError, JobNotFound, ProjectDeletionConflict
 from server.jobs.queue import (
+    DEFAULT_JOB_TIMEOUT_SEC,
+    DEFAULT_LORA_TIMEOUT_SEC,
     HEARTBEAT_INTERVAL_SEC,
     MAX_ATTEMPTS,
     STALE_AFTER_SEC,
@@ -50,6 +56,7 @@ from server.jobs.queue import (
     enqueue_job,
     finish_done,
     get_job,
+    job_timeout_sec,
     list_jobs_page,
     list_recent_jobs,
     mark_cancelled,
@@ -121,6 +128,8 @@ __all__ = [
     "_run_train_lora_job",
     "_set_status",
     "_touch_heartbeat",
+    "DEFAULT_JOB_TIMEOUT_SEC",
+    "DEFAULT_LORA_TIMEOUT_SEC",
     "HEARTBEAT_INTERVAL_SEC",
     "LORA_ELIGIBLE_ACTIONS",
     "MAX_ATTEMPTS",
@@ -148,6 +157,7 @@ __all__ = [
     "enqueue_job",
     "finish_done",
     "get_job",
+    "job_timeout_sec",
     "get_worker_capability",
     "get_worker_status",
     "init_db",

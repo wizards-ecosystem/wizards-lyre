@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from server import storage
+from server.jobs import queue as job_queue
 from server.jobs.db import _now
 from server.jobs.errors import JobCancelled, JobError
 from server.jobs.queue import (
@@ -80,8 +81,14 @@ def run_claimed_job(job: dict[str, Any]) -> None:
     payload = job["payload"]
 
     stop_heartbeat = threading.Event()
+    # The heartbeat lease stays fresh while this process is alive, which is
+    # what hides a hung generate from reclaim_stale_jobs. deadline_sec is the
+    # bound on that lease: past it the loop marks the job error and exits.
     heartbeat_thread = threading.Thread(
-        target=_heartbeat_loop, args=(job_id, stop_heartbeat), daemon=True
+        target=_heartbeat_loop,
+        args=(job_id, stop_heartbeat),
+        kwargs={"deadline_sec": job_queue.job_timeout_sec(action)},
+        daemon=True,
     )
     heartbeat_thread.start()
     try:

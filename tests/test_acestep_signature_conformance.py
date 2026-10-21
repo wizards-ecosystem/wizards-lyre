@@ -51,7 +51,7 @@ def _field_names(cls: Any) -> set[str]:
 EXPECTED_KEYWORDS: dict[str, tuple[Any, set[str]]] = {
     "AceStepHandler.initialize_service": (
         acestep_handler.AceStepHandler.initialize_service,
-        {"project_root", "config_path", "device", "offload_to_cpu"},
+        {"project_root", "config_path", "device", "offload_to_cpu", "offload_dit_to_cpu"},
     ),
     "LLMHandler.initialize": (
         acestep_llm.LLMHandler.initialize,

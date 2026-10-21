@@ -218,10 +218,19 @@ def _install_fake_acestep(
     second one fail."""
     lora_status_overrides = lora_status_overrides if lora_status_overrides is not None else {}
 
+    class _Movable:
+        def __init__(self) -> None:
+            self.devices: list[str] = []
+
+        def to(self, device: str) -> _Movable:
+            self.devices.append(device)
+            return self
+
     class DefaultFakeAceStepHandler:
         def __init__(self) -> None:
             self.config_path: str | None = None
             self.offload_to_cpu = False
+            self.offload_dit_to_cpu = False
 
         def add_lora(self, *, lora_path: str, adapter_name: str) -> str:
             # Real signature: LoraManagerMixin.add_lora(lora_path, adapter_name)
@@ -283,7 +292,13 @@ def _install_fake_acestep(
             }
 
         def initialize_service(
-            self, *, project_root: str, config_path: str, device: str, offload_to_cpu: bool = False
+            self,
+            *,
+            project_root: str,
+            config_path: str,
+            device: str,
+            offload_to_cpu: bool = False,
+            offload_dit_to_cpu: bool = False,
         ) -> tuple[str, bool]:
             # Mirrors ACE-Step 1.5's real resolution: the DiT checkpoint
             # lives at <project_root>/checkpoints/<config_path>, not at
@@ -302,6 +317,7 @@ def _install_fake_acestep(
                         "config_path": config_path,
                         "device": device,
                         "offload_to_cpu": offload_to_cpu,
+                        "offload_dit_to_cpu": offload_dit_to_cpu,
                         "resolved_checkpoint_dir": resolved_checkpoint_dir,
                     },
                 )
@@ -310,12 +326,15 @@ def _install_fake_acestep(
             self.config_path = config_path
             self.device = device
             self.offload_to_cpu = offload_to_cpu
+            self.offload_dit_to_cpu = offload_dit_to_cpu
             return handler_init_result
 
     class FakeLLMHandler:
         def __init__(self) -> None:
             self.checkpoint_dir: str | None = None
             self.lm_model_path: str | None = None
+            self.offload_to_cpu = False
+            self.llm = _Movable()
 
         def initialize(
             self, *, checkpoint_dir: str, lm_model_path: str, backend: str, device: str
@@ -465,6 +484,7 @@ def test_run_job_matches_installed_api_contract(
     assert kwargs["config_path"] == "acestep-v15-turbo"
     assert kwargs["device"] == acestep_worker.DEVICE
     assert kwargs["offload_to_cpu"] is False  # iterate does not need offload_to_cpu
+    assert kwargs["offload_dit_to_cpu"] is False
 
     # LLMHandler is loaded through a *different* method with *different*
     # argument names than the DiT handler (the bug the reviewer flagged),
@@ -1016,6 +1036,11 @@ def test_quality_profile_requests_cpu_offload(
 
     handler_init = next(e for e in log if e[0] == "handler.initialize_service")
     assert handler_init[1]["offload_to_cpu"] is True  # requested for XL
+    # offload_to_cpu alone keeps the 4B DiT resident. The second flag is what
+    # moves it off the GPU before VAE decode.
+    assert handler_init[1]["offload_dit_to_cpu"] is True
+    assert acestep_worker._STATE["lm"].offload_to_cpu is True
+    assert acestep_worker._STATE["lm"].llm.devices == ["cpu"]
 
     generate_call = next(e for e in log if e[0] == "generate_music")
     params = generate_call[3]
@@ -2070,3 +2095,183 @@ def test_cancel_after_generate_music_drops_the_audio(
     assert any(entry[0] == "generate_music" for entry in log)
     assert "rendering" in stages
     assert "writing_take" not in stages
+
+
+_PLAN = {
+    "query": "",
+    "caption": "orchestral",
+    "lyrics": "[Instrumental]",
+    "instrumental": True,
+    "bpm": 90,
+    "keyscale": "D Minor",
+    "duration_sec": 15,
+}
+
+
+def test_quality_after_another_profile_unloads_that_dit_and_parks_the_lm(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The hang: polish (or iterate) left its DiT and the 1.7B LM on the GPU,
+    then quality's offload_to_cpu load kept the 4B DiT resident too. Decode
+    saw ~0 GB free and fell back to one CPU core."""
+    moved: list[str] = []
+
+    class _Module:
+        def to(self, device: str) -> _Module:
+            moved.append(device)
+            return self
+
+    class _Handler:
+        def __init__(self) -> None:
+            self.model = _Module()
+            self.vae = _Module()
+
+        def initialize_service(
+            self,
+            *,
+            project_root: str,
+            config_path: str,
+            device: str,
+            offload_to_cpu: bool = False,
+            offload_dit_to_cpu: bool = False,
+        ) -> tuple[str, bool]:
+            log.append(
+                (
+                    "handler.initialize_service",
+                    {
+                        "offload_to_cpu": offload_to_cpu,
+                        "offload_dit_to_cpu": offload_dit_to_cpu,
+                        "config_path": config_path,
+                    },
+                )
+            )
+            return "ready", True
+
+    log: list[tuple] = []
+    _install_fake_acestep(monkeypatch, log, handler_cls=_Handler)
+    for profile in ("polish", "quality"):
+        acestep_worker.run_job(
+            job={"action": "generate", "dit_profile": profile, "seed": 1, "src_audio": None},
+            plan=_PLAN,
+            take_id=f"swap-{profile}",
+            take_dir=tmp_path / profile,
+        )
+
+    quality_init = [entry for entry in log if entry[0] == "handler.initialize_service"][-1][1]
+    assert quality_init["offload_to_cpu"] is True
+    assert quality_init["offload_dit_to_cpu"] is True
+    assert moved == ["cpu", "cpu"]  # retired polish model and VAE
+    lm = acestep_worker._STATE["lm"]
+    assert lm.offload_to_cpu is True
+    assert lm.llm.devices == ["cpu"]
+
+    acestep_worker.run_job(
+        job={"action": "generate", "dit_profile": "iterate", "seed": 1, "src_audio": None},
+        plan=_PLAN,
+        take_id="swap-back",
+        take_dir=tmp_path / "iterate",
+    )
+    assert lm.offload_to_cpu is False
+    assert lm.llm.devices[-1] == acestep_worker.DEVICE
+
+
+def test_quality_rejected_when_dit_offload_flag_is_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Handler:
+        def initialize_service(
+            self,
+            *,
+            project_root: str,
+            config_path: str,
+            device: str,
+            offload_to_cpu: bool = False,
+        ) -> tuple[str, bool]:
+            return "ready", True
+
+    _install_fake_acestep(monkeypatch, [], handler_cls=_Handler)
+    ok, reason = acestep_worker.supports_dit_profile("quality")
+    assert ok is False
+    assert reason is not None
+    assert "offload_dit_to_cpu" in reason
+
+
+def test_cpu_thread_pool_follows_the_machine_or_the_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import os
+
+    from worker.acestep_worker import loading as loading_module
+
+    monkeypatch.delenv("OMP_NUM_THREADS", raising=False)
+    monkeypatch.delenv("MKL_NUM_THREADS", raising=False)
+    monkeypatch.delenv("LYRE_CPU_THREADS", raising=False)
+
+    class _Cuda:
+        def __init__(self) -> None:
+            self.synced = False
+            self.emptied = False
+            self.ipc = False
+
+        def is_available(self) -> bool:
+            return True
+
+        def synchronize(self) -> None:
+            self.synced = True
+
+        def empty_cache(self) -> None:
+            self.emptied = True
+
+        def ipc_collect(self) -> None:
+            self.ipc = True
+
+        def mem_get_info(self) -> tuple[int, int]:
+            return (15 * 1024**3, 16 * 1024**3)
+
+    class _Torch:
+        def __init__(self) -> None:
+            self.cuda = _Cuda()
+            self.threads = 0
+            self.interop = 0
+            self.interop_calls = 0
+
+        def set_num_threads(self, count: int) -> None:
+            self.threads = count
+
+        def get_num_threads(self) -> int:
+            return self.threads
+
+        def set_num_interop_threads(self, count: int) -> None:
+            self.interop_calls += 1
+            if self.interop_calls > 1:
+                raise RuntimeError("interop pool already started")
+            self.interop = count
+
+    torch_mod = _Torch()
+    monkeypatch.setitem(sys.modules, "torch", torch_mod)
+    monkeypatch.setattr(loading_module, "_configured_threads", None)
+    monkeypatch.setattr(loading_module.os, "cpu_count", lambda: 24)
+
+    loading_module._configure_torch_threads()
+    assert torch_mod.threads == 24
+    assert torch_mod.interop == 8
+    assert os.environ["OMP_NUM_THREADS"] == "24"
+
+    # Same count re-asserts the intra-op pool without resizing inter-op again.
+    loading_module._configure_torch_threads()
+    assert torch_mod.threads == 24
+    assert torch_mod.interop_calls == 1
+
+    # A changed count tries inter-op again and tolerates "already started".
+    monkeypatch.setenv("LYRE_CPU_THREADS", "4")
+    loading_module._configure_torch_threads()
+    assert torch_mod.threads == 4
+    assert torch_mod.interop_calls == 2
+
+    monkeypatch.setenv("LYRE_CPU_THREADS", "nope")
+    assert loading_module._cpu_thread_count() == 24
+
+    loading_module._release_accelerator_memory()
+    assert torch_mod.cuda.synced is True
+    assert torch_mod.cuda.emptied is True
+    assert torch_mod.cuda.ipc is True

@@ -68,6 +68,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Quality profile on a 16 GB card.** A `quality` job that followed
+  `iterate` or `polish` kept the previous DiT and the 1.7B LM on the GPU,
+  and passed `offload_to_cpu` without `offload_dit_to_cpu`. Upstream then
+  leaves the 4B DiT resident, so VAE decode saw ~0 GB free, fell back to
+  CPU, and sat on one core. Lyre now moves the retired DiT off the device
+  (`gc` + `empty_cache`) before the swap, parks the LM on CPU for that
+  profile, passes both offload flags, and sizes the CPU thread pool to
+  `cpu_count` (or `LYRE_CPU_THREADS`). `generate_music`'s arguments are
+  unchanged. Upstream still defaults the DiT to stay resident under
+  `offload_to_cpu` alone, and its CPU VAE fallback is single-threaded
+  unless the caller sets the pool; that should be filed against
+  ACE-Step 1.5 (same family as upstream issue #248).
+- **Hung generates.** The job heartbeat kept a stuck decode `running`
+  forever, because the lease is renewed while the process is alive. The
+  same loop now marks the job `error` and exits the worker when a
+  generate-shaped job exceeds `LYRE_JOB_TIMEOUT_SEC` (default 20 minutes)
+  or LoRA training exceeds `LYRE_LORA_TIMEOUT_SEC` (default 3 hours).
+  Restart the worker to continue the queue. The row is already `error`,
+  so stale-job reclaim does not requeue it.
+- **`mix.mp3`.** SPEC.md section 7's playback copy was never written, so
+  `GET /v1/artifacts/{project}/{take}/mix.mp3` was 404 after a successful
+  song while `mix.wav` and `lyrics.lrc` were 200. The worker transcodes
+  the WAV with ffmpeg. The job's `artifacts` list still names only files
+  that exist, so a machine without ffmpeg does not advertise `mix.mp3`.
+
 - `POST /v1/songs` and `POST /v1/projects/{id}/jobs` return the accepted
   job as `queued`. A worker that claims the row before the response is
   built no longer changes that `202` body. Poll `GET /v1/jobs/{id}` for

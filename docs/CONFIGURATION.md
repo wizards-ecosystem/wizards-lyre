@@ -19,6 +19,9 @@ of them to keep all writable state inside the checkout. Run
 | `LYRE_CHECKPOINTS_DIR` | `<repo>/checkpoints` | ACE-Step model weights. Must be a directory named `checkpoints`. Upstream resolves weights as `<parent>/checkpoints/<name>`, and the worker reports a mismatched path. |
 | `LYRE_WORKER` | `acestep` | Job backend. Set to `mock` for a GPU-free worker that writes silent WAVs; the whole UI and API work against it. Set to `remote` to render on a [Remote GPU](remote-gpu.md). |
 | `LYRE_DEVICE` | `cuda` | Torch device string for the worker. |
+| `LYRE_CPU_THREADS` | CPU count | Intra-op threads for a CPU VAE decode. Set this if a fallback decode pegs one core. |
+| `LYRE_JOB_TIMEOUT_SEC` | `1200` | Wall clock for one generate-shaped job. Past it the worker marks the job `error` and exits so the GPU lock drops. |
+| `LYRE_LORA_TIMEOUT_SEC` | `10800` | Same watchdog for `train_lora`. Independent of the generate budget. |
 | `LYRE_BIND` | `127.0.0.1` | Address the HTTP server listens on. Unset means loopback. `127.0.0.1`, `localhost`, and `::1` are loopback. Any other address is a network bind: the process refuses to start until an API key is stored, and it serves `/v1` only (no studio, no `/api`). |
 | `LYRE_REQUIRE_AUTH` | off | Set to `1` to require a bearer API key even on loopback, and to hide the studio and `/api`. Use this when a tunnel or reverse proxy forwards traffic onto loopback. `0` on a network bind is a startup error. Unset on loopback leaves auth off. |
 | `LYRE_URL` | `http://127.0.0.1:8421` | Origin the stdio MCP client calls. An `http` or `https` origin with no userinfo, path, query, or fragment. `POST /mcp` ignores it and calls `/v1` in-process. See [MCP](MCP.md). |

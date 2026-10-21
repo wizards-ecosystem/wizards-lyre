@@ -14,7 +14,11 @@ from typing import Any
 
 from worker.acestep_worker.api import _api_call, _import_acestep
 from worker.acestep_worker.errors import WorkerUnavailable
-from worker.acestep_worker.loading import _ensure_loaded, _ensure_lora_adapter
+from worker.acestep_worker.loading import (
+    _configure_torch_threads,
+    _ensure_loaded,
+    _ensure_lora_adapter,
+)
 from worker.acestep_worker.results import (
     _is_simple_mode,
     _lyric_timestamps,
@@ -31,6 +35,7 @@ from worker.acestep_worker.settings import (
     TASK_TYPE_BY_ACTION,
     TRACK_INSTRUCTION_ACTIONS,
 )
+from worker.playback import write_mix_mp3
 
 
 def _abort_if_cancelled(cancel_check: Callable[[], bool] | None) -> None:
@@ -241,6 +246,10 @@ def run_job(
         )
         _note_stage(on_stage, "rendering")
         _abort_if_cancelled(cancel_check)
+        # CPU VAE decode (the quality-profile fallback) uses this pool.
+        # Re-applied here because model load can initialize OpenMP at 1 thread.
+        # generate_music's arguments below are unchanged.
+        _configure_torch_threads()
         result = _api_call(
             "generate_music",
             generate_music,
@@ -299,6 +308,11 @@ def run_job(
     dest_path = take_dir / ("mix.mp3" if suffix == ".mp3" else "mix.wav")
     if src_path != dest_path:
         shutil.move(str(src_path), str(dest_path))
+    # SPEC.md sec 7: mix.wav is the archive, mix.mp3 is the playback copy.
+    # The job artifact list only names files that exist, so a failed encode
+    # is omitted rather than advertised as a 404.
+    if dest_path.suffix.lower() == ".wav":
+        write_mix_mp3(dest_path)
     _abort_if_cancelled(cancel_check)
 
     extra = getattr(result, "extra_outputs", None) or {}

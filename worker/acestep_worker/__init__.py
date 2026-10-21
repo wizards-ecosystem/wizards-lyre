@@ -18,8 +18,15 @@ Adapter notes (installed ACE-Step 1.5 Python API, SPEC.md sec 13 -- "follow
 ACE-Step's current API and keep Lyre's HTTP schema stable with an
 adapter"): `AceStepHandler`/`LLMHandler` are constructed with no arguments.
 `AceStepHandler` is loaded via `initialize_service(project_root=...,
-config_path=<checkpoint name>, device=..., offload_to_cpu=...)` -- CPU
-offload for `quality` (XL) is `offload_to_cpu`, not `cpu_offload`. Upstream
+config_path=<checkpoint name>, device=..., offload_to_cpu=...,
+offload_dit_to_cpu=...)` -- CPU offload for `quality` (XL) is those two
+flags, not `cpu_offload`. `offload_to_cpu` alone leaves the DiT resident
+(upstream's `_load_model_context` keeps the main model "persistent" unless
+`offload_dit_to_cpu` is also set). The 1.7B LM is a separate handler and is
+parked on CPU for that profile so VAE decode still has GPU memory. Upstream
+should offload the DiT by default when `offload_to_cpu` is set, and its CPU
+VAE fallback should use more than one core; both are worked around here
+rather than patched in the ACE-Step checkout. Upstream
 resolves the DiT checkpoint at `<project_root>/checkpoints/<config_path>`,
 *not* at `<project_root>/<config_path>` -- `project_root` and the checkpoint
 directory are two different things to ACE-Step, even though Lyre only has
