@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Agent API writes.** `/v1` can now create and update projects, replace a
+  plan, upload a WAV/MP3, annotate takes, set the active take, delete a
+  project, list style packs, and download the export zip. `POST
+  /v1/projects/{id}/jobs` queues a job (`202`, `Location`) through the same
+  enqueue function as `/api`. `/api` is unchanged.
+- **Idempotency-Key** on every `/v1` POST. The same key and the same raw body
+  replay the original response for 24 hours; a queued job replays as `200`.
+  The same key and a different body is `409`. Keys are stored in the jobs
+  SQLite database and expire.
 - **Agent API, first slice.** Typed `GET /v1` reads (health, projects, takes,
   jobs) with response schemas in OpenAPI, one job object for `queued`,
   `running`, `done`, `error`, and `cancelled`, and `POST /v1/jobs/{id}/cancel`.

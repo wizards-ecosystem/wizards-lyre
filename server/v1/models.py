@@ -146,3 +146,84 @@ class Job(BaseModel):
 class JobPage(BaseModel):
     data: list[Job]
     next_cursor: str | None
+
+
+class ProjectCreate(BaseModel):
+    """`POST /v1/projects`. Omitted fields match `POST /api/projects`."""
+
+    title: str | None = None
+    query: str | None = None
+
+
+class ProjectPatch(BaseModel):
+    """`PATCH /v1/projects/{id}`. Only fields the client sends are applied."""
+
+    title: str | None = None
+    dit_profile: str | None = None
+    favorite: bool | None = None
+
+
+class PlanWrite(BaseModel):
+    """`PUT /v1/projects/{id}/plan`. A partial object is filled by
+    `validate_plan`; unknown keys are dropped, same as `/api`."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    query: str | None = None
+    caption: str | None = None
+    negative: list[str] | None = None
+    lyrics: str | None = None
+    instrumental: bool | None = None
+    vocal_language: str | None = None
+    bpm: int | None = None
+    keyscale: str | None = None
+    timesignature: str | None = None
+    duration_sec: float | None = None
+    sections: list[PlanSection] | None = None
+    caption_rewrite: bool | None = None
+
+
+class ActiveTake(BaseModel):
+    take_id: str
+
+
+class TakePatch(BaseModel):
+    favorite: bool | None = None
+    notes: str | None = None
+
+
+class JobCreate(BaseModel):
+    """Section 8.1 job body. `enqueue_job` is what writes the row."""
+
+    action: str
+    dit_profile: str | None = None
+    source_take_id: str | None = None
+    source_take_ids: list[str] | None = None
+    upload_path: str | None = None
+    repainting_start: float = 0
+    repainting_end: float = -1
+    track_name: str | None = None
+    name: str | None = None
+    lora_id: str | None = None
+    audio_cover_strength: float = Field(0.7, ge=0.0, le=1.0)
+    seed: int = -1
+    batch_size: int = 1
+
+
+class UploadCreated(BaseModel):
+    upload_path: str
+
+
+class Lora(BaseModel):
+    """A style pack's meta.json. Training writes more fields than a failure."""
+
+    model_config = ConfigDict(extra="allow")
+
+    id: str
+    name: str | None = None
+    created_at: str | None = None
+    source_take_count: int | None = None
+    base_checkpoint: str | None = None
+    dit_profile: str | None = None
+    status: str | None = None
+    error: str | None = None

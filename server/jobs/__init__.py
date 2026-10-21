@@ -31,7 +31,11 @@ This package is the single import surface -- `from server import jobs`, then
 from __future__ import annotations
 
 from server.jobs.db import _connect, _ensure_column, _is_stale, _now, _row_to_dict, init_db
-from server.jobs.deletion import abort_project_deletion, begin_project_deletion
+from server.jobs.deletion import (
+    abort_project_deletion,
+    begin_project_deletion,
+    remove_project,
+)
 from server.jobs.errors import JobCancelled, JobError, JobNotFound, ProjectDeletionConflict
 from server.jobs.queue import (
     HEARTBEAT_INTERVAL_SEC,
@@ -152,6 +156,7 @@ __all__ = [
     "mark_cancelled",
     "queue_counts",
     "read_job",
+    "remove_project",
     "process_one_queued_job",
     "publish_worker_capability",
     "publish_worker_status",

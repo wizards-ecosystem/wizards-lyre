@@ -398,7 +398,7 @@ Typed read models for the data section 8 already stores. No new generation behav
 
 - `POST /v1/projects`, `PUT /v1/projects/{id}/plan`, `POST /v1/projects/{id}/jobs`, and the upload, annotation, active-take, and delete operations in section 15.3.
 - Job bodies match section 8.1. One enqueue function writes the SQLite row; `/api` and `/v1` both call it.
-- `Idempotency-Key` on the job POST (section 15.3).
+- `Idempotency-Key` on every `/v1` POST (section 15.3).
 
 **Acceptance:** pytest round-trips a plan, enqueues each existing action through `/v1`, and shows the same take the `/api` path would. **Real GPU:** no. The worker contract is unchanged.
 
@@ -469,9 +469,9 @@ If upstream parameter names drift, follow ACE-Step's current `GenerationParams` 
 
 Specified 2026-10-20. Partially implemented.
 
-Served now: the section 15.3 reads, the job object (every status, including `cancelled`), `POST /v1/jobs/{id}/cancel`, the stable artifact GETs, worker `stage` / `cancel_requested`, and the section 15.2 API keys and bind rules. `docs/API.md` lists those routes. The default process still binds `127.0.0.1` with auth off and still serves the studio.
+Served now: the section 15.3 reads, the job object (every status, including `cancelled`), `POST /v1/jobs/{id}/cancel`, the stable artifact GETs, the section 15.3 writes (projects, plan, jobs, uploads, annotations, active take, delete, style packs, and export), `Idempotency-Key` on every `/v1` POST, worker `stage` / `cancel_requested`, and the section 15.2 API keys and bind rules. `docs/API.md` lists those routes. The default process still binds `127.0.0.1` with auth off and still serves the studio.
 
-Not served yet, still one phase each in the section 12 order: `/v1` writes and idempotency (phase 8), `POST /v1/songs` (phase 9), SSE, webhooks, and signed artifact tokens (phase 10), the MCP server (phase 12), and `/api` deprecation headers (phase 13).
+Not served yet, still one phase each in the section 12 order: `POST /v1/songs` (phase 9), SSE, webhooks, and signed artifact tokens (phase 10), the MCP server (phase 12), and `/api` deprecation headers (phase 13).
 
 Design notes, rejected alternatives, and the defaults a maintainer may overturn: [docs/adr/0001-agent-api.md](docs/adr/0001-agent-api.md). This section wins when they disagree.
 
@@ -541,7 +541,7 @@ Errors:
 
 `/api` keeps today's `{"detail": "..."}` shape until it is removed. `/v1` does not copy that shape.
 
-**Idempotency.** `POST /v1/songs` and `POST /v1/projects/{id}/jobs` accept `Idempotency-Key`. The server stores the key, the request hash, and the job id for 24 hours. The same key and the same body return the original job with `200`. The same key and a different body return `409`.
+**Idempotency.** Every `POST` under `/v1` accepts `Idempotency-Key`, including `POST /v1/songs` and `POST /v1/projects/{id}/jobs`. The header is optional. The server stores the key, the request hash, and the response for 24 hours in the jobs database. The same key and the same raw body return the original response and do not run the handler again. A replay of a job that was queued returns that job with `200` (the first response is `202`). The same key and a different body return `409`.
 
 **Pages.** List endpoints take `limit` (default 50, max 100) and `cursor`. The response is `{ "data": [...], "next_cursor": null }`.
 
