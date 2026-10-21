@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Declared playback ffmpeg.** The worker runtime depends on `imageio-ffmpeg`
+  0.6.0 (no published PyPI, OSV, or GitHub advisories; wheels for Linux x86_64
+  and Windows, including `libmp3lame`). `./scripts/lyre install` installs it
+  with the other locked runtime dependencies, so a CUDA worker venv gets a
+  playback encoder without a system `ffmpeg` and without the CUDA stack being
+  part of the CUDA-less server install. `ffmpeg` on `PATH` still takes
+  precedence. Style-pack training still needs a system FFmpeg with shared
+  libraries; the bundled executable does not provide those.
 - **MCP server.** `./scripts/lyre mcp` speaks MCP 2026-07-28 on stdin/stdout,
   and the HTTP server accepts stateless `POST /mcp` on the same port. Both
   are a thin client of `/v1` (`LYRE_URL`, optional `LYRE_API_KEY` on stdio).
@@ -96,11 +104,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   song while `mix.wav` and `lyrics.lrc` were 200. The worker transcodes the
   WAV with ffmpeg. The output path is `mix.mp3.partial`, so the command
   passes `-f mp3` (without it ffmpeg exits 234, "Unable to choose an output
-  format"). The binary is `ffmpeg` on `PATH`, then
-  `imageio_ffmpeg.get_ffmpeg_exe()` when that package is already importable.
-  Lyre does not declare imageio-ffmpeg. The job's `artifacts` list still
-  names only files that exist, so a machine with neither binary does not
-  advertise `mix.mp3`.
+  format"). The binary is `ffmpeg` on `PATH`, which takes precedence, then
+  `imageio_ffmpeg.get_ffmpeg_exe()` from the declared `imageio-ffmpeg`
+  dependency. The job's `artifacts` list still names only files that exist,
+  so a machine with neither binary does not advertise `mix.mp3`.
 
 - `POST /v1/songs` and `POST /v1/projects/{id}/jobs` return the accepted
   job as `queued`. A worker that claims the row before the response is

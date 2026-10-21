@@ -14,7 +14,7 @@ Python environment.
 | Python | 3.11 or 3.12; `uv` installs 3.12 locally when needed |
 | Node.js | Not needed for a release bundle; 20.19+ or 22.12+ for a source checkout |
 | Tools | `git` and [`uv`](https://docs.astral.sh/uv/); Node.js and npm only for source |
-| Optional | FFmpeg, required only for training LoRA style packs; generation is unaffected |
+| Optional | System `ffmpeg` on `PATH`. Required for LoRA style-pack training. Playback `mix.mp3` uses that binary when it is present; otherwise the worker uses the `imageio-ffmpeg` binary installed with Lyre. |
 
 Lyre's Bash launcher supports Windows through WSL2, using the same commands as
 Linux. macOS and
@@ -107,9 +107,11 @@ Check the result:
 ./scripts/lyre doctor
 ```
 
-Warnings about models only disable the profiles they name. Missing FFmpeg stops
-style-pack training; generation remains available. Developers without a GPU can
-use the mock worker described in [CONTRIBUTING.md](../CONTRIBUTING.md).
+Warnings about models only disable the profiles they name. Missing system
+FFmpeg stops style-pack training; generation still writes `mix.wav`. Playback
+`mix.mp3` prefers `ffmpeg` on `PATH` and otherwise uses the `imageio-ffmpeg`
+binary from the worker install. Developers without a GPU can use the mock
+worker described in [CONTRIBUTING.md](../CONTRIBUTING.md).
 
 ## Run
 

@@ -114,7 +114,9 @@ idea -> plan -> generate -> listen -> keep / branch / reshape -> export
 - **Extract / Lego / Complete:** Isolate a track, add or replace one, or fill
   an arrangement using the base checkpoint.
 - **Style packs:** Train and apply a LoRA from at least eight of your own takes.
-  FFmpeg is required for training; generation works without it.
+  System FFmpeg on `PATH` is required for training and is preferred for
+  playback `mix.mp3`. Generation writes `mix.wav` without it, and the worker's
+  `imageio-ffmpeg` binary encodes `mix.mp3` when no system `ffmpeg` is installed.
 - **Traceable iteration:** Every generated take is immutable and points to its
   parent. Ratings, favorites, and notes remain yours to change.
 - **Local library:** Search projects, ingest WAV/MP3 sources, compare A/B, use

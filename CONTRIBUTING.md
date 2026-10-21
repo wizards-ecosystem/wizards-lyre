@@ -7,8 +7,10 @@ the product boundary.
 ## Getting set up
 
 You need `git`, [`uv`](https://docs.astral.sh/uv/), and Node.js 20.19+ or
-22.12+. Everything else is installed inside the checkout. FFmpeg is required
-only to *train* style packs; generation works without it.
+22.12+. Everything else is installed inside the checkout. System FFmpeg on
+`PATH` is required only to *train* style packs, and it takes precedence when
+encoding playback `mix.mp3`. Generation writes `mix.wav` without it; the
+worker then uses the declared `imageio-ffmpeg` binary.
 The [installation guide](docs/INSTALLATION.md) has the full platform and disk
 requirements.
 
