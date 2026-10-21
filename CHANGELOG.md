@@ -48,6 +48,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- `POST /mcp` rejects a present `Origin` that is not loopback (`localhost`,
+  `127.0.0.1`, or `[::1]`, any port) and not listed in `LYRE_ALLOWED_ORIGINS`.
+  The response is `403` in the `/v1` error shape. A missing `Origin` stays
+  allowed, so a web page cannot queue jobs on the default loopback server
+  while auth is off.
 - A bad `LYRE_BIND` / `LYRE_REQUIRE_AUTH` no longer returns its exception text
   on `/v1`. The response is a generic misconfigured error plus a `request_id`;
   the detail is logged on the server. `api-key create` still shows the secret

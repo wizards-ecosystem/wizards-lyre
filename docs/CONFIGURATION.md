@@ -23,6 +23,7 @@ of them to keep all writable state inside the checkout. Run
 | `LYRE_REQUIRE_AUTH` | off | Set to `1` to require a bearer API key even on loopback, and to hide the studio and `/api`. Use this when a tunnel or reverse proxy forwards traffic onto loopback. `0` on a network bind is a startup error. Unset on loopback leaves auth off. |
 | `LYRE_URL` | `http://127.0.0.1:8421` | Origin the stdio MCP client calls. An `http` or `https` origin with no userinfo, path, query, or fragment. `POST /mcp` ignores it and calls `/v1` in-process. See [MCP](MCP.md). |
 | `LYRE_API_KEY` | unset | Bearer token for `./scripts/lyre mcp` when the HTTP server requires auth. `POST /mcp` uses the caller's `Authorization` header instead. Do not put the key in a query string. |
+| `LYRE_ALLOWED_ORIGINS` | unset | Comma-separated origins that may send `Origin` on `/mcp`, in addition to loopback (`localhost`, `127.0.0.1`, and `[::1]`, any port). A missing `Origin` is still allowed. Any other origin is `403`. See [MCP](MCP.md). |
 
 Mint a key with `./scripts/lyre api-key create --name <name>` (default scopes
 `read,generate,write`). The secret is printed once. The server stores its

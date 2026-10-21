@@ -141,10 +141,12 @@ HTTP+SSE transport. Responses are JSON.
 When auth is on, send `Authorization: Bearer <key>`. `POST /mcp` forwards
 that token to `/v1`. It does not read `LYRE_API_KEY`.
 
-A missing `Origin` is allowed, which is what non-browser clients send. An
-`Origin` that is present must be this server's own `http` origin. On the
-default loopback bind that is `http://127.0.0.1:8421`, `http://localhost:8421`,
-or `http://[::1]:8421`. Any other origin is `403`.
+A missing `Origin` is allowed, which is what native MCP clients send. A
+present `Origin` must be loopback (`http` or `https`, host `localhost`,
+`127.0.0.1`, or `[::1]`, any port) or listed in `LYRE_ALLOWED_ORIGINS`. Any
+other origin is `403` in the `/v1` error shape (`error.code` `forbidden`),
+so a web page on another site cannot `POST` to the loopback server and queue
+a job while auth is off.
 
 Cursor can point at the HTTP endpoint instead of launching stdio:
 

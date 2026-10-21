@@ -1,19 +1,23 @@
 """Stateless Streamable HTTP `POST /mcp` on the Lyre server (SPEC.md sec 15.6).
 
 A fresh session manager is built for each process lifespan. The SDK allows
-`run()` once per manager, and tests open many app lifespans. DNS-rebinding
-checks stay off so this gateway can apply the spec's Origin rule itself:
-a present Origin that is not this server's is 403, and a missing Origin is
-allowed. `tasks/get`, `tasks/update`, and `tasks/cancel` must send `Mcp-Name`
-equal to `params.taskId` or the response is HTTP 400 and JSON-RPC `-32020`.
+`run()` once per manager, and tests open many app lifespans. The SDK's DNS
+rebinding check stays off so this gateway can apply the Origin rule itself.
+A missing Origin is allowed. A present Origin must be loopback (`localhost`,
+`127.0.0.1`, or `[::1]`, any port) or listed in `LYRE_ALLOWED_ORIGINS`;
+anything else is 403 in the `/v1` error shape. `tasks/get`, `tasks/update`,
+and `tasks/cancel` must send `Mcp-Name` equal to `params.taskId` or the
+response is HTTP 400 and JSON-RPC `-32020`.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from urllib.parse import urlsplit
 
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.shared.inbound import HEADER_MISMATCH, decode_header_value
@@ -108,22 +112,68 @@ class McpGateway:
 gateway = McpGateway()
 
 
-def server_origins() -> set[str]:
-    """HTTP origins that count as this process. Loopback aliases share one."""
-    port = config.lyre_port()
-    hosts = ("127.0.0.1", "localhost", "::1") if config.is_loopback() else (config.bind_host(),)
-    origins: set[str] = set()
-    for host in hosts:
-        shown = f"[{host}]" if ":" in host else host
-        origins.add(f"http://{shown}:{port}")
-    return origins
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+
+
+def allowed_origin_keys() -> set[str]:
+    """Canonical origins from `LYRE_ALLOWED_ORIGINS` (comma-separated)."""
+    raw = os.environ.get("LYRE_ALLOWED_ORIGINS", "")
+    keys: set[str] = set()
+    for part in raw.split(","):
+        parsed = _parse_origin(part)
+        if parsed is not None:
+            keys.add(_origin_key(parsed))
+    return keys
 
 
 def _origin_rejected(scope: Scope) -> bool:
     origin = Headers(scope=scope).get("origin")
-    if origin is None or origin == "":
+    if origin is None:
         return False
-    return origin.rstrip("/") not in server_origins()
+    parsed = _parse_origin(origin)
+    if parsed is None:
+        return True
+    _scheme, host, _port = parsed
+    if host in _LOOPBACK_HOSTS:
+        return False
+    return _origin_key(parsed) not in allowed_origin_keys()
+
+
+def _parse_origin(value: str) -> tuple[str, str, int | None] | None:
+    """`scheme, host, port` for an http(s) origin, or None.
+
+    A trailing slash is ignored. The default port is omitted. A path, query,
+    userinfo, or control character is not an origin.
+    """
+    stripped = value.strip()
+    if not stripped or any(ord(char) < 32 for char in stripped):
+        return None
+    try:
+        parts = urlsplit(stripped)
+        port = parts.port
+    except ValueError:
+        return None
+    scheme = parts.scheme.lower()
+    if scheme not in {"http", "https"}:
+        return None
+    if parts.username is not None or parts.password is not None:
+        return None
+    if parts.query or parts.fragment or parts.path not in {"", "/"}:
+        return None
+    host = parts.hostname
+    if not host:
+        return None
+    if (scheme == "http" and port == 80) or (scheme == "https" and port == 443):
+        port = None
+    return scheme, host, port
+
+
+def _origin_key(parsed: tuple[str, str, int | None]) -> str:
+    scheme, host, port = parsed
+    shown = f"[{host}]" if ":" in host else host
+    if port is None:
+        return f"{scheme}://{shown}"
+    return f"{scheme}://{shown}:{port}"
 
 
 def _authenticate(scope: Scope) -> tuple[str | None, Response | None]:

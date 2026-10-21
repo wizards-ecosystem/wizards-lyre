@@ -679,22 +679,74 @@ def test_bad_idempotency_key_and_unreachable_url(
     anyio.run(blow_up)
 
 
-def test_origin_is_rejected_and_missing_origin_is_allowed(api_client: TestClient) -> None:
+def test_origin_is_rejected_and_missing_origin_is_allowed(
+    api_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    before = api_client.get("/v1/jobs").json()["data"]
     rejected = _rpc(
         api_client,
-        "tools/list",
-        {"_meta": _meta()},
-        origin="http://evil.example",
+        "tools/call",
+        {
+            "name": "create_song",
+            "arguments": {"prompt": "from a web page"},
+            "_meta": _meta({TASKS: {}}),
+        },
+        name="create_song",
+        origin="https://evil.example",
     )
     assert rejected.status_code == 403
-    assert rejected.json()["error"]["code"] == "forbidden"
-    allowed = _rpc(
+    assert rejected.json() == {
+        "error": {"code": "forbidden", "message": "origin not allowed", "param": "Origin"}
+    }
+    assert api_client.get("/v1/jobs").json()["data"] == before
+
+    for origin in (
+        "http://127.0.0.1:9",
+        "http://localhost:3000",
+        "https://[::1]:8443",
+        "http://LOCALHOST",
+        "http://127.0.0.1:80",
+    ):
+        allowed = _rpc(api_client, "tools/list", {"_meta": _meta()}, origin=origin)
+        assert allowed.status_code == 200, origin
+
+    for origin in (
+        "http://127.0.0.2:8421",
+        "http://127.0.0.1:8421/mcp",
+        "null",
+        "http://evil.example",
+    ):
+        blocked = _rpc(api_client, "tools/list", {"_meta": _meta()}, origin=origin)
+        assert blocked.status_code == 403, origin
+
+    missing = _rpc(api_client, "tools/list", {"_meta": _meta()})
+    assert missing.status_code == 200
+
+    monkeypatch.setenv(
+        "LYRE_ALLOWED_ORIGINS",
+        "https://studio.example/, http://203.0.113.5:8421",
+    )
+    listed = _rpc(
         api_client,
         "tools/list",
         {"_meta": _meta()},
-        origin="http://127.0.0.1:8421",
+        origin="https://studio.example",
     )
-    assert allowed.status_code == 200
+    assert listed.status_code == 200
+    other_port = _rpc(
+        api_client,
+        "tools/list",
+        {"_meta": _meta()},
+        origin="http://203.0.113.5:9",
+    )
+    assert other_port.status_code == 403
+    same = _rpc(
+        api_client,
+        "tools/list",
+        {"_meta": _meta()},
+        origin="http://203.0.113.5:8421",
+    )
+    assert same.status_code == 200
 
 
 def test_streamable_http_enqueues_the_same_generate_job(api_client: TestClient) -> None:

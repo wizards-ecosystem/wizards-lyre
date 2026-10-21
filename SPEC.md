@@ -677,7 +677,7 @@ References:
 | **stdio** | Local agents. `./scripts/lyre mcp` speaks newline-delimited JSON-RPC on stdin/stdout. The credential, when the HTTP server requires auth, is `LYRE_API_KEY` in the environment. stdio does not use the MCP OAuth flow. |
 | **Streamable HTTP** | Remote agents, on the same port as `/v1`. A single `POST /mcp`. Every JSON-RPC message is its own POST. Responses are `application/json` or a request-scoped `text/event-stream`. |
 
-Streamable HTTP follows the 2026-07-28 rules: no protocol session, no `Mcp-Session-Id`, no GET stream, no legacy HTTP+SSE transport from 2024-11-05. `tasks/get`, `tasks/update`, and `tasks/cancel` set the `Mcp-Name` header to the task id. An `Origin` header that is present and not the server's own origin gets `403`. A missing `Origin` (non-browser clients) is allowed.
+Streamable HTTP follows the 2026-07-28 rules: no protocol session, no `Mcp-Session-Id`, no GET stream, no legacy HTTP+SSE transport from 2024-11-05. `tasks/get`, `tasks/update`, and `tasks/cancel` set the `Mcp-Name` header to the task id. An `Origin` header that is present and is neither a loopback origin (`localhost`, `127.0.0.1`, or `[::1]`, any port) nor listed in `LYRE_ALLOWED_ORIGINS` gets `403` in the `/v1` error shape. A missing `Origin` (non-browser clients) is allowed.
 
 Auth on `POST /mcp` is the same bearer key as `/v1`. The MCP OAuth authorization-server flow is not part of this spec. One key model for HTTP and for MCP.
 
