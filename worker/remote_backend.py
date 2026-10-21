@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from server.remote_gpu import client, connection
+from worker.playback import write_mix_mp3
 from worker.remote_host import build_id
 
 POLL_INTERVAL_SEC = 2.0
@@ -218,6 +219,10 @@ def run_job(
         on_stage("writing_take")
     take_dir.mkdir(parents=True, exist_ok=True)
     (take_dir / audio_name).write_bytes(audio)
+    if audio_name == "mix.wav":
+        # The host returns one audio file (it prefers WAV). The playback MP3
+        # is produced here so the local artifact URL matches a local take.
+        write_mix_mp3(take_dir / audio_name)
     try:
         remote.ack(token)
     except client.RemoteGpuError:

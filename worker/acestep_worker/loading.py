@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import gc
 import inspect
+import os
 from pathlib import Path
 from typing import Any
 
@@ -59,11 +60,19 @@ def _checkpoints_project_root() -> Path:
 
 
 def _handler_supports_cpu_offload(AceStepHandler: Any) -> bool:
+    """True when XL can be loaded without leaving the 4B DiT resident.
+
+    `offload_to_cpu` alone shuttles the VAE and text encoder. Upstream keeps
+    the DiT on the GPU unless `offload_dit_to_cpu` is also set
+    (`InitServiceOffloadContextMixin._load_model_context` returns early for
+    the main model). On a 16 GB card that persistent 4B, plus the 1.7B LM
+    Lyre loaded for `iterate`, fills the card and forces CPU VAE decode.
+    """
     try:
         params = inspect.signature(AceStepHandler.initialize_service).parameters
     except (TypeError, ValueError, AttributeError):
         return False
-    return "offload_to_cpu" in params
+    return {"offload_to_cpu", "offload_dit_to_cpu"} <= set(params)
 
 
 def _log_cuda_status() -> str:
@@ -88,6 +97,132 @@ def _log_cuda_status() -> str:
         return f"CUDA detect: error while querying CUDA/VRAM: {exc}"
 
 
+# Module attributes ACE-Step pins on the DiT handler. Dropping the handler
+# object is not enough: these stay in the CUDA caching allocator until they
+# are moved off the device and the cycle collector runs.
+_RESIDENT_MODULE_ATTRS = ("model", "vae", "text_encoder", "silence_latent")
+
+# Logged once per distinct pool size. Re-applied before every generate in
+# case another library pinned the pool at 1 after import.
+_configured_threads: int | None = None
+
+
+def _cpu_thread_count() -> int:
+    """How many intra-op threads CPU VAE decode may use.
+
+    A quality-profile decode that falls back to CPU was observed pegging one
+    of 24 cores. PyTorch's default pool is 1 in some WSL/Windows launches
+    (the OpenMP runtime initializes before `set_num_threads`). `LYRE_CPU_THREADS`
+    overrides the count; otherwise the machine's CPU count is used.
+    """
+    raw = os.environ.get("LYRE_CPU_THREADS", "").strip()
+    if raw:
+        try:
+            requested = int(raw)
+        except ValueError:
+            requested = 0
+        if requested > 0:
+            return requested
+        print(f"LYRE_CPU_THREADS={raw!r} is not a positive integer; using cpu_count")
+    return max(1, os.cpu_count() or 1)
+
+
+def _configure_torch_threads() -> None:
+    """Make a CPU VAE fallback use every core, not one thread.
+
+    Called at worker startup and again immediately before `generate_music`.
+    The `generate_music` arguments themselves are not changed. Torch stays a
+    lazy import so tests and the server process stay GPU-free.
+    """
+    global _configured_threads
+    count = _cpu_thread_count()
+    # Set before the first torch import when we still can. After import,
+    # set_num_threads is what actually resizes the intra-op pool.
+    os.environ["OMP_NUM_THREADS"] = str(count)
+    os.environ["MKL_NUM_THREADS"] = str(count)
+    try:
+        import torch
+    except ImportError:
+        return
+    torch.set_num_threads(count)
+    if _configured_threads != count:
+        interop = getattr(torch, "set_num_interop_threads", None)
+        if interop is not None:
+            try:
+                interop(max(1, min(count, 8)))
+            except RuntimeError:
+                # The inter-op pool can only be sized before the first
+                # parallel region. The intra-op count above is the one CPU
+                # conv decode uses.
+                pass
+        current = torch.get_num_threads()
+        print(f"CPU thread pool: {current} intra-op threads (cpu_count={os.cpu_count()})")
+        _configured_threads = count
+
+
+def _move_to_device(module: Any, device: str) -> None:
+    move = getattr(module, "to", None)
+    if not callable(move):
+        return
+    move(device)
+
+
+def _unload_resident_modules(handler: Any) -> None:
+    """Move a retired DiT handler's modules off the GPU, then drop them.
+
+    `gc.collect()` plus `empty_cache()` does not free a module that is still
+    referenced, and a CUDA tensor in a reference cycle is not freed by
+    reference counting. Moving the weights to CPU first releases the device
+    storage so the following collection can return it to the driver.
+    """
+    if handler is None:
+        return
+    for name in _RESIDENT_MODULE_ATTRS:
+        module = getattr(handler, name, None)
+        if module is None:
+            continue
+        try:
+            _move_to_device(module, "cpu")
+        except Exception as exc:
+            print(f"could not move retired DiT '{name}' to CPU: {exc}")
+        try:
+            setattr(handler, name, None)
+        except Exception as exc:
+            print(f"could not drop retired DiT '{name}': {exc}")
+
+
+def _park_language_model(lm: Any, *, cpu: bool) -> None:
+    """Keep the 1.7B LM off the GPU while a CPU-offloaded DiT is resident.
+
+    The LM is initialized once, for `iterate`, and stayed on CUDA for the
+    life of the process. `LLMHandler._load_model_context` only shuttles it
+    when `offload_to_cpu` is true, and Lyre never passed that flag (the
+    default profile fits beside the LM). Setting the flag and moving
+    `lm.llm` now makes an LM call visit the GPU only for that call, which
+    is what leaves room for a GPU VAE decode of the 4B profile.
+    """
+    if lm is None:
+        return
+    if bool(getattr(lm, "offload_to_cpu", False)) == cpu:
+        return
+    module = getattr(lm, "llm", None)
+    device = "cpu" if cpu else DEVICE
+    if module is not None:
+        try:
+            _move_to_device(module, device)
+        except Exception as exc:
+            print(f"could not move 5Hz LM to {device}: {exc}")
+            return
+    try:
+        lm.offload_to_cpu = cpu
+    except Exception as exc:
+        print(f"could not set 5Hz LM offload_to_cpu={cpu}: {exc}")
+        return
+    where = "CPU" if cpu else device
+    print(f"5Hz LM {'parked on' if cpu else 'restored to'} {where}")
+    _release_accelerator_memory()
+
+
 def _release_accelerator_memory() -> None:
     """Collect abandoned model/trainer cycles before constructing a DiT.
 
@@ -98,16 +233,31 @@ def _release_accelerator_memory() -> None:
     full collection followed by the allocator cache release keeps the
     one-DiT invariant true in physical VRAM as well as in `_STATE`.
 
+    Two collections: the first breaks cycles, the second reclaims objects
+    whose CUDA finalizers ran during the first. `empty_cache` only returns
+    blocks no tensor still owns, which is why callers move modules to CPU
+    before calling this.
+
     Torch stays a lazy optional import: ordinary tests and the server process
     must remain GPU-free, and cleanup must never turn an otherwise valid load
     into a failure merely because an accelerator runtime cannot be queried.
     """
     gc.collect()
+    gc.collect()
     try:
         import torch
 
         if torch.cuda.is_available():
+            torch.cuda.synchronize()
             torch.cuda.empty_cache()
+            ipc_collect = getattr(torch.cuda, "ipc_collect", None)
+            if ipc_collect is not None:
+                ipc_collect()
+            free_bytes, total_bytes = torch.cuda.mem_get_info()
+            print(
+                "VRAM after releasing accelerator memory: "
+                f"{free_bytes / (1024**3):.2f} GB free / {total_bytes / (1024**3):.2f} GB total"
+            )
     except (ImportError, AttributeError, RuntimeError):
         pass
 
@@ -130,6 +280,7 @@ def initialize_worker() -> tuple[bool, str]:
     GPU attached). `worker/run_worker.py` publishes the result so
     `server.jobs` can reflect real startup state, not an optimistic guess."""
     print(_log_cuda_status())
+    _configure_torch_threads()
     try:
         with _LOCK:
             _ensure_loaded("iterate")
@@ -170,10 +321,10 @@ def supports_dit_profile(dit_profile: str) -> tuple[bool, str | None]:
         return False, str(exc)
     if not _handler_supports_cpu_offload(AceStepHandler):
         return False, (
-            f"dit_profile 'quality' ({DIT_CHECKPOINTS['quality']}) requires a "
-            "CPU-offload-capable AceStepHandler.initialize_service() on a 16 GB GPU; "
-            "the installed acestep does not support offload_to_cpu. Use 'iterate' or "
-            "'polish' instead."
+            f"dit_profile 'quality' ({DIT_CHECKPOINTS['quality']}) requires "
+            "AceStepHandler.initialize_service() to accept offload_to_cpu and "
+            "offload_dit_to_cpu on a 16 GB GPU; the installed acestep does not. "
+            "Use 'iterate' or 'polish' instead."
         )
     return True, None
 
@@ -184,15 +335,27 @@ def _ensure_loaded(dit_profile: str) -> tuple[Any, Any, Any]:
 
     if _STATE["dit_profile"] != dit_profile or _STATE["handler"] is None:
         # Unload the previous DiT before loading the next; never hold two
-        # DiTs at once on a 16 GB card (SPEC.md sec 4.3).
+        # DiTs at once on a 16 GB card (SPEC.md sec 4.3). Move its modules
+        # to CPU before dropping the reference, or the caching allocator
+        # keeps their storage through the following `empty_cache`.
+        retired = _STATE["handler"]
         _STATE["handler"] = None
-        _release_accelerator_memory()
+        _STATE["dit_profile"] = None
         # A freshly constructed handler starts with no LoRA adapters loaded
         # -- forget whatever _ensure_lora_adapter previously recorded onto
         # the *old* handler object, or a later job could wrongly believe the
         # new handler already has an adapter loaded and skip loading it.
         _STATE["lora_id"] = None
         _STATE["lora_adapter_path"] = None
+        if retired is not None:
+            print(f"Unloading previous DiT before loading '{dit_profile}'")
+        _unload_resident_modules(retired)
+        del retired
+        _release_accelerator_memory()
+        # The 1.7B LM is not part of the DiT handler. Park it before the 4B
+        # weights are constructed so the card is empty for the offloaded load.
+        if dit_profile in CPU_OFFLOAD_PROFILES and _STATE["lm"] is not None:
+            _park_language_model(_STATE["lm"], cpu=True)
         checkpoint = DIT_CHECKPOINTS[dit_profile]
         cpu_offload = dit_profile in CPU_OFFLOAD_PROFILES
         if cpu_offload:
@@ -207,7 +370,13 @@ def _ensure_loaded(dit_profile: str) -> tuple[Any, Any, Any]:
             "device": DEVICE,
         }
         if cpu_offload:
+            # Both flags. offload_to_cpu shuttles VAE and text encoder.
+            # offload_dit_to_cpu is what actually moves the 4B DiT off the
+            # GPU before VAE decode. Upstream's default for the second flag
+            # is false, which keeps the DiT "persistent" and was the quality
+            # hang: free VRAM reported as 0.01 GB and decode fell back to CPU.
             init_kwargs["offload_to_cpu"] = True
+            init_kwargs["offload_dit_to_cpu"] = True
         result = _api_method_call(
             "AceStepHandler.initialize_service", handler, "initialize_service", **init_kwargs
         )
@@ -242,6 +411,7 @@ def _ensure_loaded(dit_profile: str) -> tuple[Any, Any, Any]:
         _check_init_result("LLMHandler.initialize", result)
         _STATE["lm"] = lm
 
+    _park_language_model(_STATE["lm"], cpu=dit_profile in CPU_OFFLOAD_PROFILES)
     return _STATE["handler"], _STATE["lm"], _STATE["dit_profile"]
 
 

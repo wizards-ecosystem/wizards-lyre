@@ -62,6 +62,11 @@ lot in appetite (see [CONFIGURATION.md](CONFIGURATION.md)):
 
 - `quality` (XL, 4B) needs CPU offload on a 16 GB card. If the worker reports
   it cannot load XL with offload, the server rejects `quality` jobs up front.
+  The worker unloads the previous DiT, parks the 1.7B LM on CPU, and passes
+  both `offload_to_cpu` and `offload_dit_to_cpu` so VAE decode stays on the
+  GPU. A generate that still does not finish is marked `error` after
+  `LYRE_JOB_TIMEOUT_SEC` (default 20 minutes) and the worker process exits;
+  start it again for anything left queued.
 - `polish` and `studio_ops` run 50 steps and are much slower than `iterate`'s 8.
 - LoRA training targets the base checkpoint and is the app's heaviest task.
   SPEC.md sizes it at "3090-class" (24 GB).
@@ -79,10 +84,14 @@ will show something like `libavutil.so.56: cannot open shared object file`.
 sudo apt install ffmpeg      # or your platform's equivalent
 ```
 
-Missing FFmpeg stops style-pack LoRA training; generation is unaffected because
-it falls back to soundfile. A machine can therefore generate takes while the
-training dataset builder labels zero files. If the count is zero, install
-FFmpeg before investigating the takes.
+Missing FFmpeg stops style-pack LoRA training. Generation still writes
+`mix.wav` (it falls back to soundfile). The playback `mix.mp3` uses
+`ffmpeg` on `PATH`, then `imageio_ffmpeg.get_ffmpeg_exe()` when that
+package is already importable (ACE-Step's environment often has it; Lyre
+does not declare it). If neither is available the take still succeeds and
+the job's artifact list omits `mix.mp3`. A machine can therefore generate
+takes while the training dataset builder labels zero files. If the count
+is zero, install FFmpeg before investigating the takes.
 
 ## Switching to Extract / Lego / Complete is slow
 

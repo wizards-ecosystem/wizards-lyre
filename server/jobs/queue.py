@@ -8,7 +8,9 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
+import time
 import uuid
 from contextlib import closing
 from typing import Any
@@ -31,6 +33,16 @@ from server.jobs.worker_registry import _check_worker_capability
 HEARTBEAT_INTERVAL_SEC = 5.0
 STALE_AFTER_SEC = 60.0
 MAX_ATTEMPTS = 3
+# A live worker renews `heartbeat_at` for as long as the process is inside
+# `generate_music`, so the stale-heartbeat reclaim never sees a hung decode.
+# This deadline is the other half of that lease: past it, the heartbeat loop
+# marks the job `error` and exits the process so the OS GPU lock is released.
+# Generate-shaped jobs default to 20 minutes (a 15s quality clip that follows
+# another profile should finish in a small fraction of that once VAE decode
+# stays on the GPU). LoRA training is the SPEC's ~1 hour job and gets its own
+# longer default so the generate watchdog does not kill it.
+DEFAULT_JOB_TIMEOUT_SEC = 20 * 60.0
+DEFAULT_LORA_TIMEOUT_SEC = 3 * 60 * 60.0
 
 
 def enqueue_job(project_id: str, body: dict[str, Any]) -> dict:
@@ -187,8 +199,135 @@ def _touch_heartbeat(job_id: str) -> None:
         conn.commit()
 
 
-def _heartbeat_loop(job_id: str, stop: threading.Event) -> None:
-    while not stop.wait(HEARTBEAT_INTERVAL_SEC):
+def _timeout_seconds(raw: str | None, default: float) -> float:
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        print(f"ignoring non-numeric job timeout {raw!r}; using {default:.0f}s")
+        return default
+    if value <= 0:
+        print(f"ignoring non-positive job timeout {raw!r}; using {default:.0f}s")
+        return default
+    return value
+
+
+def job_timeout_sec(action: str) -> float:
+    """Wall-clock budget for one running job.
+
+    `LYRE_JOB_TIMEOUT_SEC` overrides generate-shaped jobs.
+    `LYRE_LORA_TIMEOUT_SEC` overrides `train_lora` only, so a short generate
+    budget cannot cut off style-pack training.
+    """
+    if action == "train_lora":
+        return _timeout_seconds(os.environ.get("LYRE_LORA_TIMEOUT_SEC"), DEFAULT_LORA_TIMEOUT_SEC)
+    return _timeout_seconds(os.environ.get("LYRE_JOB_TIMEOUT_SEC"), DEFAULT_JOB_TIMEOUT_SEC)
+
+
+def _set_status_if_running(
+    job_id: str,
+    status: str,
+    take_id: str | None = None,
+    lora_id: str | None = None,
+    error: str | None = None,
+) -> bool:
+    """Transition a `running` row. Returns False if it already left `running`."""
+    with closing(_connect()) as conn:
+        cursor = conn.execute(
+            "UPDATE jobs SET status = ?, take_id = ?, lora_id = ?, error = ?, updated_at = ? "
+            "WHERE id = ? AND status = 'running'",
+            (status, take_id, lora_id, error, _now(), job_id),
+        )
+        conn.commit()
+        return cursor.rowcount == 1
+
+
+def _exit_process() -> None:
+    """End this worker process so the OS GPU lock drops.
+
+    A hung `generate_music` does not return to Python, so the heartbeat
+    thread cannot unwind the job's `finally`. Exiting is what releases the
+    lock. The job row is already terminal, so the next worker's stale-job
+    reclaim will not requeue it.
+    """
+    os._exit(1)
+
+
+def _expire_job(job_id: str, deadline_sec: float) -> None:
+    """Fail a job the heartbeat lease has been renewing past its deadline."""
+    try:
+        job = get_job(job_id)
+    except JobNotFound:
+        return
+    if job["status"] != "running":
+        return
+    stage = job.get("stage") or "running"
+    if job.get("cancel_requested"):
+        mark_cancelled(job_id)
+        try:
+            settled = get_job(job_id)
+        except JobNotFound:
+            return
+        if settled["status"] != "cancelled":
+            return
+        print(
+            f"job {job_id} exceeded the {deadline_sec:.0f}s watchdog while cancel was "
+            f"pending (stage: {stage}). Marked cancelled and released the GPU lease."
+        )
+        _exit_process()
+    message = (
+        f"job exceeded the {deadline_sec:.0f}s watchdog before generation finished "
+        f"(stage: {stage}). Marked error and released the GPU lease. "
+        "Restart the worker to run anything still queued. "
+        "Set LYRE_JOB_TIMEOUT_SEC to change this limit."
+    )
+    if not _set_status_if_running(job_id, "error", error=message):
+        return
+    print(message)
+    _exit_process()
+
+
+def _heartbeat_loop(
+    job_id: str,
+    stop: threading.Event,
+    deadline_sec: float | None = None,
+    generation_done: threading.Event | None = None,
+) -> None:
+    """Renew the job lease until `stop`, or expire it at `deadline_sec`.
+
+    `deadline_sec` is measured from this loop's start, which is when the
+    worker claimed the job and entered `run_claimed_job`. A deadline of None
+    keeps the historical behavior (renew until the job returns).
+
+    `generation_done` lifts the deadline once `generate_music` has returned
+    and the take is being written (MP3 encode included). The heartbeat keeps
+    renewing so a slow encode is not reclaimed, and the watchdog cannot exit
+    in the middle of that write.
+    """
+    started = time.monotonic()
+    while True:
+        if generation_done is not None and generation_done.is_set():
+            deadline_sec = None
+        if deadline_sec is not None:
+            remaining = deadline_sec - (time.monotonic() - started)
+            if remaining <= 0:
+                _expire_job(job_id, deadline_sec)
+                return
+            wait = min(HEARTBEAT_INTERVAL_SEC, remaining)
+        else:
+            wait = HEARTBEAT_INTERVAL_SEC
+        if stop.wait(wait):
+            return
+        # Checked before the deadline so a take write that finished during
+        # this wait is not expired.
+        if generation_done is not None and generation_done.is_set():
+            deadline_sec = None
+            _touch_heartbeat(job_id)
+            continue
+        if deadline_sec is not None and time.monotonic() - started >= deadline_sec:
+            _expire_job(job_id, deadline_sec)
+            return
         _touch_heartbeat(job_id)
 
 

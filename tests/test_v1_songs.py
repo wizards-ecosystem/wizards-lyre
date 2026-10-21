@@ -436,6 +436,54 @@ def test_song_auth_on_and_off(api_client: TestClient, monkeypatch: pytest.Monkey
     assert api_client.post("/api/projects", json={"title": "Studio"}).status_code == 404
 
 
+def test_song_artifact_list_includes_mix_mp3_only_when_the_file_exists(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SPEC.md sec 7: mix.mp3 is the playback copy. The job lists it only
+    when the encode actually wrote the file, so GET cannot 404 an advertised
+    artifact."""
+    from pathlib import Path
+
+    import worker.mock_worker as mock_worker_module
+
+    def _write(wav_path: Path) -> bool:
+        wav_path.with_name("mix.mp3").write_bytes(b"ID3-song")
+        return True
+
+    monkeypatch.setattr(mock_worker_module, "write_mix_mp3", _write)
+    created = client.post("/v1/songs", json={"prompt": "rain on tin", "seed": 4})
+    assert created.status_code == 202, created.text
+    job = wait_for_job(client, created.json()["id"])
+    assert job["status"] == "done"
+    viewed = client.get(f"/v1/jobs/{job['id']}").json()
+    assert any(url.endswith("/mix.wav") for url in viewed["artifacts"])
+    assert any(url.endswith("/mix.mp3") for url in viewed["artifacts"])
+    project_id = job["project_id"]
+    take_id = viewed["take_id"]
+    mp3 = client.get(f"/v1/artifacts/{project_id}/{take_id}/mix.mp3")
+    assert mp3.status_code == 200
+    assert mp3.headers["content-type"].startswith("audio/")
+    assert mp3.content == b"ID3-song"
+
+    def _skip(_wav_path: Path) -> bool:
+        return False
+
+    monkeypatch.setattr(mock_worker_module, "write_mix_mp3", _skip)
+    skipped = client.post("/v1/songs", json={"prompt": "dry", "seed": 5})
+    assert skipped.status_code == 202, skipped.text
+    skipped_job = wait_for_job(client, skipped.json()["id"])
+    assert skipped_job["status"] == "done"
+    skipped_view = client.get(f"/v1/jobs/{skipped_job['id']}").json()
+    assert any(url.endswith("/mix.wav") for url in skipped_view["artifacts"])
+    assert not any(url.endswith("/mix.mp3") for url in skipped_view["artifacts"])
+    missing = client.get(
+        f"/v1/artifacts/{skipped_job['project_id']}/{skipped_view['take_id']}/mix.mp3"
+    )
+    assert missing.status_code == 404
+    wav = client.get(f"/v1/artifacts/{skipped_job['project_id']}/{skipped_view['take_id']}/mix.wav")
+    assert wav.status_code == 200
+
+
 def test_song_openapi_schema() -> None:
     spec = app.openapi()
     operation = spec["paths"]["/v1/songs"]["post"]
