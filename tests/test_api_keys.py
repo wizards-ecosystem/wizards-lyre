@@ -5,6 +5,7 @@ These tests configure the app in-process. They do not open a socket.
 
 from __future__ import annotations
 
+import logging
 import stat
 
 import pytest
@@ -115,20 +116,48 @@ def test_auth_on_hides_the_studio_and_checks_scopes(
     assert generate["id"] != writer["id"]
 
 
-def test_cli_prints_the_secret_once(lyre_env, capsys: pytest.CaptureFixture[str]) -> None:
+def test_cli_prints_the_secret_once(
+    lyre_env, capfd: pytest.CaptureFixture[str], caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO, logger="server.api_keys")
     assert main(["create", "--name", "cursor"]) == 0
-    out = capsys.readouterr().out
+    out = capfd.readouterr().out
     secret = next(
         line.split(": ", 1)[1] for line in out.splitlines() if line.startswith("secret: ")
     )
     key_id = next(line.split(": ", 1)[1] for line in out.splitlines() if line.startswith("id: "))
     assert secret.startswith("lyre_")
+    assert out.count(secret) == 1
     assert "scopes: read, generate, write" in out
     assert secret not in keys_path().read_text(encoding="utf-8")
+    assert secret not in caplog.text
+    assert f"created API key id={key_id}" in caplog.text
     assert authenticate(secret) is not None
     assert main(["revoke", key_id]) == 0
     assert authenticate(secret) is None
     assert main(["revoke", key_id]) == 1
+
+
+def test_bind_error_response_hides_the_exception(
+    api_client: TestClient,
+    lyre_env,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setenv("LYRE_REQUIRE_AUTH", "nope")
+    caplog.set_level(logging.ERROR, logger="server.app")
+    response = api_client.get("/v1/health")
+    assert response.status_code == 500
+    body = response.json()["error"]
+    assert body["code"] == "misconfigured"
+    assert body["message"] == "server configuration error"
+    assert body["param"] is None
+    request_id = body["request_id"]
+    assert len(request_id) == 16
+    assert "LYRE_REQUIRE_AUTH" not in response.text
+    assert "Traceback" not in response.text
+    assert request_id in caplog.text
+    assert "LYRE_REQUIRE_AUTH must be 0 or 1" in caplog.text
 
 
 def test_corrupt_key_file_fails_closed(
@@ -147,15 +176,15 @@ def test_corrupt_key_file_fails_closed(
     assert response.json()["error"]["code"] == "misconfigured"
 
 
-def test_cli_rejects_a_bad_name_or_scope(lyre_env, capsys: pytest.CaptureFixture[str]) -> None:
+def test_cli_rejects_a_bad_name_or_scope(lyre_env, capfd: pytest.CaptureFixture[str]) -> None:
     assert main(["create", "--name", "  "]) == 1
-    assert "name" in capsys.readouterr().err
+    assert "name" in capfd.readouterr().err
     assert main(["create", "--name", "ok", "--scopes", "read,nope"]) == 1
-    assert "unknown scope" in capsys.readouterr().err
+    assert "unknown scope" in capfd.readouterr().err
     assert main(["create", "--name", "ok", "--scopes", "read,read"]) == 0
     secret = next(
         line.split(": ", 1)[1]
-        for line in capsys.readouterr().out.splitlines()
+        for line in capfd.readouterr().out.splitlines()
         if line.startswith("secret: ")
     )
     record = authenticate(secret)

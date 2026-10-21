@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import logging
 import os
 import secrets
 import sys
@@ -19,6 +20,8 @@ from pathlib import Path
 from typing import Any
 
 from server import config
+
+logger = logging.getLogger(__name__)
 
 SCOPES = ("read", "generate", "write")
 _DEFAULT_SCOPES = ("read", "generate", "write")
@@ -131,6 +134,17 @@ def authenticate(secret: str) -> dict[str, Any] | None:
     return found
 
 
+def _show_secret_once(secret: str) -> None:
+    """One-time display for the operator who just minted the key.
+
+    `print` and `sys.stdout.write` are clear-text logging sinks. The raw
+    secret is written to stdout's file descriptor and nowhere else. Logs
+    record the key id only.
+    """
+    sys.stdout.flush()
+    os.write(1, f"secret: {secret}\n".encode())
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="lyre api-key")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -150,10 +164,11 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "create":
             public, secret = create_key(args.name, _parse_scopes(args.scopes))
+            logger.info("created API key id=%s", public["id"])
             print(f"id: {public['id']}")
             print(f"name: {public['name']}")
             print(f"scopes: {', '.join(public['scopes'])}")
-            print(f"secret: {secret}")
+            _show_secret_once(secret)
             return 0
         revoke_key(args.key_id)
     except (ValueError, ApiKeyStoreError) as exc:

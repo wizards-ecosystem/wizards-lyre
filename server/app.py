@@ -7,7 +7,9 @@ See SPEC.md sec 8 for `/api` and sec 15 for `/v1`. The default bind is
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
+import secrets
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
@@ -24,6 +26,8 @@ from server.remote_gpu.provisioners.base import AlreadyRunning, ProvisionerError
 from server.v1.auth import ApiAuthError
 from server.v1.routes import BadPage
 from server.v1.routes import router as v1_router
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -108,10 +112,7 @@ class _AgentSurfaceMiddleware:
         try:
             restricted = config.auth_required()
         except config.BindConfigError as exc:
-            response = JSONResponse(
-                status_code=500,
-                content={"error": {"code": "misconfigured", "message": str(exc), "param": None}},
-            )
+            response = _bind_misconfigured(exc)
             await response(scope, receive, send)
             return
         if restricted and not path.startswith("/v1"):
@@ -125,6 +126,23 @@ class _AgentSurfaceMiddleware:
 
 
 app.add_middleware(_AgentSurfaceMiddleware)
+
+
+def _bind_misconfigured(exc: config.BindConfigError) -> JSONResponse:
+    """Generic body for a bad bind. The exception text stays in the log."""
+    request_id = secrets.token_hex(8)
+    logger.error("bind configuration error request_id=%s", request_id, exc_info=exc)
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": {
+                "code": "misconfigured",
+                "message": "server configuration error",
+                "param": None,
+                "request_id": request_id,
+            }
+        },
+    )
 
 
 def _error_body(

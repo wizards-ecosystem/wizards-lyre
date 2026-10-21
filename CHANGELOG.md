@@ -23,6 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- A bad `LYRE_BIND` / `LYRE_REQUIRE_AUTH` no longer returns its exception text
+  on `/v1`. The response is a generic misconfigured error plus a `request_id`;
+  the detail is logged on the server. `api-key create` still shows the secret
+  once on stdout and logs only the key id.
 - Bump the web devDependency `vite` to 7.3.7 so `npm audit` clears
   GHSA-698v-4r3x-3vcv (`launch-editor` percent-escaping on Windows). The
   studio bundle does not ship Vite.
