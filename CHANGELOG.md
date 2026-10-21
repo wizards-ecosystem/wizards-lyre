@@ -60,6 +60,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Bump the web devDependency `vite` to 7.3.7 so `npm audit` clears
   GHSA-698v-4r3x-3vcv (`launch-editor` percent-escaping on Windows). The
   studio bundle does not ship Vite.
+- Bump the web devDependency `vitest` to 4.1.12 so `npm audit` clears
+  GHSA-qxg6-89mg-rqv8 and GHSA-xp26-3454-mjgp in `@vitest/mocker`. Vitest
+  is a test runner only; the studio bundle does not ship it.
 - The ACE-Step overlay now pins `werkzeug==3.1.9` (CVE-2026-102598) and
   `urllib3==2.8.0` (GHSA-8988-9cw3-xx77, GHSA-vxq7-64xx-v4gw,
   GHSA-gh4c-6fx4-qh6g). `click` 8.5.0, `idna` 3.20, and `starlette` 1.7.0
