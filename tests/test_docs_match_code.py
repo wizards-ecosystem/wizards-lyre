@@ -12,6 +12,7 @@ Adding an endpoint or a setting without documenting it now fails the build.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 
 from server.app import app
@@ -22,11 +23,20 @@ ROOT = Path(__file__).resolve().parents[1]
 PATH_PARAM_ALIASES = {"{project_id}": "{id}"}
 
 
+def _iter_routes(routes: Iterable[object]) -> Iterator[object]:
+    for route in routes:
+        nested = getattr(route, "original_router", None)
+        if nested is not None:
+            yield from _iter_routes(nested.routes)
+            continue
+        yield route
+
+
 def _served_routes() -> set[tuple[str, str]]:
     routes: set[tuple[str, str]] = set()
-    for route in app.routes:
+    for route in _iter_routes(app.routes):
         path = getattr(route, "path", None)
-        if not path or not path.startswith("/api"):
+        if not path or not (path.startswith("/api") or path.startswith("/v1")):
             continue
         for alias, doc_form in PATH_PARAM_ALIASES.items():
             path = path.replace(alias, doc_form)

@@ -1,16 +1,19 @@
 # HTTP API
 
-All JSON, all under `http://127.0.0.1:8421` by default. The server this file
-describes has no authentication; see [SECURITY.md](../SECURITY.md). The
-optional Remote GPU host has its own, authenticated protocol; see
+All JSON, all under `http://127.0.0.1:8421` by default. The default server
+has no authentication; see [SECURITY.md](../SECURITY.md). The optional Remote
+GPU host has its own, authenticated protocol; see
 [remote-gpu.md](remote-gpu.md#the-host-protocol).
 
-[SPEC.md](../SPEC.md) section 15 specifies a later `/v1` surface for AI agents
-(API keys, an opt-in network bind, one-shot songs, job events, MCP). Those
-routes are not served yet, so they are not in the table below. The design
-notes are in [adr/0001-agent-api.md](adr/0001-agent-api.md). When a phase mounts
-a route, this table gains a row in the same change: the test that reads this
-file fails if the table and the app disagree.
+[SPEC.md](../SPEC.md) section 15 is the agent API. This server now serves the
+typed `/v1` reads, the job object, `POST /v1/jobs/{job_id}/cancel`, and the
+stable artifact GETs. API keys and a non-loopback bind are opt-in and off
+unless you set them ([Configuration](CONFIGURATION.md)). One-shot
+`POST /v1/songs`, the other `/v1` writes, idempotency keys, SSE, webhooks,
+signed artifact tokens, and the MCP server are not served yet. The design
+notes are in [adr/0001-agent-api.md](adr/0001-agent-api.md). When a phase
+mounts a route, this table gains a row in the same change: the test that
+reads this file fails if the table and the app disagree.
 
 The server is FastAPI, so the authoritative, always-current reference is the
 generated schema while it is running:
@@ -47,6 +50,16 @@ This page is the orientation; the schema is the specification.
 | `DELETE` | `/api/remote-gpu/connection` | Forget the connected host. |
 | `POST` | `/api/remote-gpu/session` | Rent a GPU with the configured provisioner. **Billable.** |
 | `DELETE` | `/api/remote-gpu/session` | Terminate the rental. Safe when nothing is running. |
+| `GET` | `/v1/health` | Typed health: backend, readiness, GPU, loaded DiT, queue counts. |
+| `GET` | `/v1/projects` | Page of project summaries. `limit` (default 50, max 100) and `cursor`. |
+| `GET` | `/v1/projects/{id}` | Project, plan, and takes. |
+| `GET` | `/v1/projects/{id}/takes` | Take metadata page. |
+| `GET` | `/v1/jobs` | Job page. Filters: `project_id`, `action`, `active`, `limit`, `cursor`. |
+| `GET` | `/v1/jobs/{job_id}` | One job object, every status. |
+| `POST` | `/v1/jobs/{job_id}/cancel` | Cancel a queued job, or ask a running job to drop its audio. |
+| `GET` | `/v1/artifacts/{id}/{take_id}/mix.wav` | Stable `mix.wav` for a take. |
+| `GET` | `/v1/artifacts/{id}/{take_id}/mix.mp3` | Stable `mix.mp3` for a take. |
+| `GET` | `/v1/artifacts/{id}/{take_id}/lyrics.lrc` | Stable timed lyrics. `404` when the take has none. |
 
 `/` serves the built SPA from `web/dist` when it exists, and otherwise returns
 a hint telling you to build it.
@@ -96,11 +109,26 @@ Enqueuing only inserts a row. Poll `GET /api/jobs/{job_id}` until `status`
 leaves `queued`/`running`:
 
 ```
-queued ---> running ---> done      take_id is set
-                    `--> error     error is set, and a meta.json records the failure
+queued ---> running ---> done       take_id is set
+   |            |     `--> error      error is set, and a meta.json records the failure
+   |            `-------> cancelled   audio is dropped; take_id and error are null
+   `------------------> cancelled     the worker never claims it
 ```
 
-A job stays `queued` while no worker is running. Check `/api/health`.
+`/v1` returns one job object for every state. `stage` is null while queued,
+then `loading_model`, `planning` (only when the LM fills a plan), `rendering`,
+and `writing_take`. On `done`, `artifacts` lists stable relative paths such as
+`/v1/artifacts/{project}/{take}/mix.wav`. `/api` reads the same row and may
+include `stage` and `cancel_requested` as extra fields.
+
+`POST /v1/jobs/{job_id}/cancel` returns that object. A queued job becomes
+`cancelled` immediately. A running job sets `cancel_requested` and stays
+`running` until the worker finishes the current ACE-Step call, then discards
+the audio. A job that already reached `done` stays `done`. `cancelled` is not
+requeued.
+
+A job stays `queued` while no worker is running. Check `/api/health` or
+`/v1/health`.
 
 `GET /api/jobs?project_id=...&action=train_lora&active=true` returns a project's
 complete still-active worklist with no recency truncation. That is what lets
@@ -149,6 +177,29 @@ checkout.
 | `409` | A Remote GPU is already running; stop it first. |
 | `413` | Request body over the upload cap. |
 
-Error responses are `{"detail": "..."}`, and the message names the offending
-field. The `/v1` error schema in SPEC.md section 15.3 applies once those
-routes exist; `/api` keeps this shape.
+`/api` error responses are `{"detail": "..."}`, and the message names the
+offending field.
+
+## `/v1`
+
+List responses are `{ "data": [...], "next_cursor": null }`. `limit` defaults
+to 50 and cannot exceed 100. `cursor` is opaque; pass `next_cursor` back
+unchanged.
+
+`/v1` errors are
+
+```json
+{ "error": { "code": "not_found", "message": "project not found: ...", "param": null } }
+```
+
+`401` carries `WWW-Authenticate: Bearer`. `403` means the key is known and
+lacks the scope. `read` covers health, projects, takes, jobs, and artifacts.
+`generate` covers cancel, and may also read jobs and artifacts. `write` is
+reserved for later plan and project edits.
+
+With no API key configured, `/v1` and `/api` are both open on loopback. Set
+`LYRE_REQUIRE_AUTH=1`, or bind a non-loopback address, and the process
+requires a key from `./scripts/lyre api-key create` and serves `/v1` only.
+There is no HTTP route that mints a key. The signed query token for players
+that cannot send a header is not served yet; use the bearer header, or run
+with auth off.

@@ -297,6 +297,7 @@ Commands:
   models-standard
              Download every profile except optional XL quality (~20 GB).
   server     Start Lyre's HTTP server on 127.0.0.1:8421.
+  api-key    Mint or revoke an API key (./scripts/lyre api-key create --name <name>).
   worker     Start Lyre's worker (local GPU by default; LYRE_WORKER=remote
              sends jobs to a Remote GPU, see docs/remote-gpu.md).
   remote-host
@@ -354,6 +355,11 @@ case "${1:-}" in
   server)
     ensure_venv
     exec "$VENV/bin/python" -m server.app
+    ;;
+  api-key)
+    ensure_venv
+    shift
+    exec "$VENV/bin/python" -m server.api_keys "$@"
     ;;
   worker)
     ensure_venv

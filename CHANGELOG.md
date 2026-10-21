@@ -7,8 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Agent API, first slice.** Typed `GET /v1` reads (health, projects, takes,
+  jobs) with response schemas in OpenAPI, one job object for `queued`,
+  `running`, `done`, `error`, and `cancelled`, and `POST /v1/jobs/{id}/cancel`.
+  Cancel is cooperative: a queued job is never claimed, and a running job
+  finishes the current ACE-Step call, then drops the audio. Stable artifact
+  GETs serve `mix.wav`, `mix.mp3`, and `lyrics.lrc`. The studio and `/api`
+  are unchanged, and `/api` does not yet send deprecation headers.
+- **Opt-in API keys.** `./scripts/lyre api-key create` / `revoke`. Secrets are
+  stored as sha256 in an owner-only file. Loopback with auth off stays the
+  default. A non-loopback `LYRE_BIND`, or `LYRE_REQUIRE_AUTH=1`, requires a
+  key and serves `/v1` only.
+
 ### Security
 
+- A bad `LYRE_BIND` / `LYRE_REQUIRE_AUTH` no longer returns its exception text
+  on `/v1`. The response is a generic misconfigured error plus a `request_id`;
+  the detail is logged on the server. `api-key create` still shows the secret
+  once on stdout and logs only the key id.
 - Bump the web devDependency `vite` to 7.3.7 so `npm audit` clears
   GHSA-698v-4r3x-3vcv (`launch-editor` percent-escaping on Windows). The
   studio bundle does not ship Vite.
@@ -20,12 +38,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- SPEC.md section 15 specifies an opt-in agent API: API-key auth, a
-  non-loopback bind, a typed `/v1` surface, one-shot songs, SSE and webhooks,
-  cooperative cancel, stable artifact URLs, and an MCP server (protocol
-  2026-07-28, stdio and Streamable HTTP). Nothing in this entry is
-  implemented. The studio, the loopback default, and ACE-Step 1.5-only
-  generation are unchanged. See `docs/adr/0001-agent-api.md`.
+- SPEC.md section 15 specifies the rest of the agent API (one-shot songs,
+  SSE, webhooks, signed artifact tokens, MCP). Those routes are not served
+  yet. The studio default remains loopback with auth off, and ACE-Step 1.5
+  is still the only engine. See `docs/adr/0001-agent-api.md`.
 
 ## [0.2.0] - 2026-09-26
 

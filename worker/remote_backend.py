@@ -139,6 +139,7 @@ def _wait(
     remote: client.RemoteClient,
     token: str,
     on_dit_loaded: Callable[[str], None] | None,
+    cancel_check: Callable[[], bool] | None = None,
 ) -> dict[str, Any]:
     announced: str | None = None
     last_answer = time.monotonic()
@@ -165,7 +166,18 @@ def _wait(
                 raise RemoteJobError("the Remote GPU reported done without a result")
             return result
         if status.get("status") == "error":
+            if status.get("error") == "canceled":
+                from server.jobs.errors import JobCancelled
+
+                raise JobCancelled()
             raise RemoteJobError(f"Remote GPU: {status.get('error') or 'job failed'}")
+        if cancel_check is not None and cancel_check():
+            # The host cannot interrupt ACE-Step. POST /jobs/{token}/cancel
+            # asks it to drop the audio when the call returns (SPEC.md sec 15.7).
+            try:
+                remote.cancel(token)
+            except client.RemoteGpuError:
+                pass
         time.sleep(POLL_INTERVAL_SEC)
 
 
@@ -175,12 +187,22 @@ def run_job(
     take_id: str,
     take_dir: Path,
     on_dit_loaded: Callable[[str], None] | None = None,
+    on_stage: Callable[[str], None] | None = None,
+    cancel_check: Callable[[], bool] | None = None,
 ) -> tuple[dict, dict | None, str | None]:
     """Render one job on the connected Remote GPU. Returns `(take_meta,
     plan_patch, lrc_text)` exactly as the local backends do."""
+    if cancel_check is not None and cancel_check():
+        from server.jobs.errors import JobCancelled
+
+        raise JobCancelled()
+    if on_stage is not None:
+        on_stage("loading_model")
     remote = client.RemoteClient(_connection())
     token = _submit(remote, _submission(job, plan, take_id))
-    result = _wait(remote, token, on_dit_loaded)
+    if on_stage is not None:
+        on_stage("rendering")
+    result = _wait(remote, token, on_dit_loaded, cancel_check)
 
     audio_name = result.get("audio_name")
     if audio_name not in ("mix.wav", "mix.mp3"):
@@ -192,6 +214,8 @@ def run_job(
     expected = result.get("audio_bytes")
     if isinstance(expected, int) and expected != len(audio):
         raise RemoteJobError(f"the take download was cut short ({len(audio)} of {expected} bytes)")
+    if on_stage is not None:
+        on_stage("writing_take")
     take_dir.mkdir(parents=True, exist_ok=True)
     (take_dir / audio_name).write_bytes(audio)
     try:

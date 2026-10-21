@@ -8,6 +8,7 @@ favorite/notes fields.
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 from server import config
@@ -104,6 +105,29 @@ def take_lrc_path(project_id: str, take_id: str) -> Path:
     if candidate.exists():
         return _jail(config.projects_dir(), candidate)
     raise TakeNotFound(take_id)
+
+
+def discard_unfinished_take(project_id: str, take_id: str) -> None:
+    """Delete a take that must not be kept. Cooperative cancel allocates a
+    directory before generation and then drops it (SPEC.md sec 15.5: write
+    no take). If the project was already pointed at this id, clear that
+    pointer too."""
+    from server.storage.errors import ProjectNotFound
+    from server.storage.projects import _update_project, load_project
+
+    tdir = take_dir(project_id, take_id)
+    if tdir.exists():
+        shutil.rmtree(tdir)
+    try:
+        project = load_project(project_id)
+    except ProjectNotFound:
+        return
+    if project.get("active_take_id") == take_id:
+
+        def mutate(current: dict) -> None:
+            current["active_take_id"] = None
+
+        _update_project(project_id, mutate)
 
 
 def allocate_take_dir(project_id: str) -> tuple[str, Path]:

@@ -7,18 +7,23 @@ the row `error`, rather than leaving it `running` or losing the failure.
 
 from __future__ import annotations
 
+import shutil
 import threading
 from pathlib import Path
 from typing import Any
 
 from server import storage
 from server.jobs.db import _now
-from server.jobs.errors import JobError
+from server.jobs.errors import JobCancelled, JobError
 from server.jobs.queue import (
     HEARTBEAT_INTERVAL_SEC,
     _heartbeat_loop,
     _set_status,
+    cancel_requested,
     claim_next_queued_job,
+    finish_done,
+    mark_cancelled,
+    set_stage,
 )
 from server.jobs.validation import (
     _distinct_lora_source_ids,
@@ -110,7 +115,22 @@ def _error_lora_meta(lora_id: str, payload: dict[str, Any], error: str) -> dict:
     }
 
 
+def _discard_lora(project_id: str, lora_id: str | None) -> None:
+    if lora_id is None:
+        return
+    lora_path = storage.lora_dir(project_id, lora_id)
+    if lora_path.exists():
+        shutil.rmtree(lora_path, ignore_errors=True)
+
+
 def _run_train_lora_job(job_id: str, project_id: str, payload: dict[str, Any]) -> None:
+    # Training has no DiT swap or generate_music call, so the only stages
+    # that exist for it are skipped (SPEC.md sec 15.7). Cancel is still
+    # cooperative: a request that lands during training is honored when the
+    # call returns, and the pack is not kept.
+    if cancel_requested(job_id):
+        mark_cancelled(job_id)
+        return
     lora_id: str | None = None
     try:
         source_paths = [Path(p) for p in _resolve_lora_sources(project_id, payload)]
@@ -128,9 +148,22 @@ def _run_train_lora_job(job_id: str, project_id: str, payload: dict[str, Any]) -
             lora_dir=lora_dir,
             source_paths=source_paths,
         )
+        if cancel_requested(job_id):
+            _discard_lora(project_id, lora_id)
+            mark_cancelled(job_id)
+            return
         storage.write_lora_meta(project_id, lora_id, meta)
-        _set_status(job_id, "done", lora_id=lora_id)
+        if not finish_done(job_id, lora_id=lora_id):
+            _discard_lora(project_id, lora_id)
+            mark_cancelled(job_id)
+    except JobCancelled:
+        _discard_lora(project_id, lora_id)
+        mark_cancelled(job_id)
     except Exception as exc:
+        if cancel_requested(job_id):
+            _discard_lora(project_id, lora_id)
+            mark_cancelled(job_id)
+            return
         if lora_id is not None:
             try:
                 storage.write_lora_meta(
@@ -157,11 +190,26 @@ def _run_generate_shaped_job(
             True, f"worker: '{loaded_profile}' DiT + LM currently loaded", loaded_profile
         )
 
+    def _on_stage(stage: str) -> None:
+        set_stage(job_id, stage)
+
+    def _cancel_check() -> bool:
+        return cancel_requested(job_id)
+
     take_id: str | None = None
     try:
+        # Set before the worker is entered: a cancel that landed while the
+        # job was queued-but-just-claimed never calls generate_music.
+        if _cancel_check():
+            mark_cancelled(job_id)
+            return
         worker_fn = _resolve_worker()
         plan = storage.load_plan(project_id)
         src_audio = _resolve_source_audio(project_id, action, payload)
+        if _cancel_check():
+            mark_cancelled(job_id)
+            return
+        _on_stage("loading_model")
         take_id, tdir = storage.allocate_take_dir(project_id)
         meta, plan_patch, lrc_text = worker_fn(
             job={**payload, "action": action, "dit_profile": dit_profile, "src_audio": src_audio},
@@ -169,13 +217,20 @@ def _run_generate_shaped_job(
             take_id=take_id,
             take_dir=tdir,
             on_dit_loaded=_publish_dit_loaded,
+            on_stage=_on_stage,
+            cancel_check=_cancel_check,
         )
+        if _cancel_check():
+            storage.discard_unfinished_take(project_id, take_id)
+            mark_cancelled(job_id)
+            return
         # Written before meta.json so a client polling right after the job
         # flips to "done" never sees meta["has_lrc"] True while
         # lyrics.lrc itself doesn't exist yet (SPEC.md sec 7 / sec 12
         # Phase 4). If this raises, the except block below writes an error
         # take_meta instead -- same as a merge_plan_patch failure further
         # down.
+        _on_stage("writing_take")
         if lrc_text is not None:
             storage.write_take_lrc(project_id, take_id, lrc_text)
         storage.write_take_meta(project_id, take_id, meta)
@@ -189,13 +244,28 @@ def _run_generate_shaped_job(
             # delta, not a full plan replacement -- see worker.mock_worker
             # / worker.acestep_worker.
             storage.merge_plan_patch(project_id, plan_patch)
+        if _cancel_check():
+            storage.discard_unfinished_take(project_id, take_id)
+            mark_cancelled(job_id)
+            return
         # Promote the take to active only after every fallible persistence
         # step above has actually succeeded (reviewer-flagged): if
         # merge_plan_patch raised, the except block below marks this take
         # `error`, and active_take_id must not be left pointing at it.
         storage.set_active_take(project_id, take_id)
-        _set_status(job_id, "done", take_id=take_id)
+        if not finish_done(job_id, take_id=take_id):
+            storage.discard_unfinished_take(project_id, take_id)
+            mark_cancelled(job_id)
+    except JobCancelled:
+        if take_id is not None:
+            storage.discard_unfinished_take(project_id, take_id)
+        mark_cancelled(job_id)
     except Exception as exc:
+        if _cancel_check():
+            if take_id is not None:
+                storage.discard_unfinished_take(project_id, take_id)
+            mark_cancelled(job_id)
+            return
         if take_id is not None:
             try:
                 storage.write_take_meta(

@@ -109,12 +109,27 @@ def _plan_from_query(plan: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _abort_if_cancelled(cancel_check: Callable[[], bool] | None) -> None:
+    if cancel_check is None or not cancel_check():
+        return
+    from server.jobs.errors import JobCancelled
+
+    raise JobCancelled()
+
+
+def _note_stage(on_stage: Callable[[str], None] | None, stage: str) -> None:
+    if on_stage is not None:
+        on_stage(stage)
+
+
 def run_job(
     job: dict[str, Any],
     plan: dict[str, Any],
     take_id: str,
     take_dir: Path,
     on_dit_loaded: Callable[[str], None] | None = None,
+    on_stage: Callable[[str], None] | None = None,
+    cancel_check: Callable[[], bool] | None = None,
 ) -> tuple[dict, dict | None, str | None]:
     """Run one mocked job. Returns `(take_meta, plan_patch, lrc_text)`;
     `plan_patch` is a delta of the fields to persist when this job filled the
@@ -134,29 +149,44 @@ def run_job(
     only after the whole job finishes (SPEC.md sec 4.3: swapping between
     iterate and studio_ops should show as "loading" only for the swap
     itself, not for the inference that follows it).
+
+    `on_stage` and `cancel_check` implement SPEC.md sec 15.7. Stages that
+    do not apply (planning, when this is not a simple-mode generate) are
+    skipped. A cancel observed before the silent WAV is written never
+    writes it; a cancel observed after the write raises `JobCancelled` so
+    the caller can drop the file.
     """
     global _simulated_loaded_dit_profile
+    _abort_if_cancelled(cancel_check)
+    _note_stage(on_stage, "loading_model")
     # A successful job run implies this profile is now "loaded", same as
     # worker.acestep_worker's _ensure_loaded -- this is what makes a worker
     # that reported unavailable at startup show as recovered afterward.
     _simulated_loaded_dit_profile = job.get("dit_profile", DEFAULT_SIMULATED_DIT_PROFILE)
     if on_dit_loaded is not None:
         on_dit_loaded(_simulated_loaded_dit_profile)
+    _abort_if_cancelled(cancel_check)
 
     take_dir.mkdir(parents=True, exist_ok=True)
 
     plan_patch: dict[str, Any] | None = None
     effective_plan = plan
     if job.get("action") == "generate" and _is_simple_mode(plan):
+        _note_stage(on_stage, "planning")
         plan_patch = _plan_from_query(plan)
         effective_plan = {**plan, **plan_patch}
+        _abort_if_cancelled(cancel_check)
 
+    _note_stage(on_stage, "rendering")
+    _abort_if_cancelled(cancel_check)
     seed = job.get("seed", -1)
     if seed is None or seed == -1:
         seed = random.randint(1, 2**31 - 1)
 
     audio_path = take_dir / "mix.wav"
     duration = _write_silent_wav(audio_path)
+    _abort_if_cancelled(cancel_check)
+    _note_stage(on_stage, "writing_take")
 
     meta = {
         "id": take_id,

@@ -12,7 +12,7 @@ Browser (127.0.0.1:8421)
         |        Never imports acestep. Never touches CUDA.
         |
         |  SQLite (projects/lyre.db)
-        |  queued -> running -> done | error
+        |  queued -> running -> done | error | cancelled
         v
    worker/       Separate OS process. Loads ACE-Step and CUDA.
                  Runs one job at a time under a GPU lease.
@@ -115,11 +115,11 @@ temp-file-plus-`os.replace`. A reader never sees a partial file.
 
 - **Path jail:** `server/storage/paths.py`. Nothing outside `projects/` or
   `output/` is writable.
-- **Localhost bind:** `server/config.py` fixes the host at `127.0.0.1`.
-  `tests/test_spec_lock.py` fails the build on a public bind literal.
-  SPEC.md section 15 specifies an opt-in `LYRE_BIND` that is not implemented;
-  the default constant stays `127.0.0.1`, and agents remain clients of this
-  same queue.
+- **Loopback bind by default:** `server/config.py` keeps the constant
+  `127.0.0.1`. `tests/test_spec_lock.py` fails the build on a public bind
+  literal. `LYRE_BIND` is opt-in (SPEC.md section 15.2). Auth off serves the
+  studio, `/api`, and `/v1`. Auth on serves `/v1` only. Agents and the studio
+  share one queue.
 - **No other engines:** `tests/test_spec_lock.py` scans this project's source for
   forbidden imports and vendor names.
 - **No GPU in tests:** the default backend under `pytest` is

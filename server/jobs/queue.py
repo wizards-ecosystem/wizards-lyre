@@ -243,11 +243,24 @@ def reclaim_stale_jobs(stale_after: float = STALE_AFTER_SEC) -> list[str]:
     with closing(_connect()) as conn:
         conn.execute("BEGIN IMMEDIATE")
         rows = conn.execute(
-            "SELECT id, attempts, heartbeat_at, updated_at FROM jobs WHERE status = 'running'"
+            "SELECT id, attempts, heartbeat_at, updated_at, cancel_requested "
+            "FROM jobs WHERE status = 'running'"
         ).fetchall()
         for row in rows:
             reference = row["heartbeat_at"] or row["updated_at"]
             if not _is_stale(reference, stale_after):
+                continue
+
+            # SPEC.md sec 15.5: cancelled is terminal. A running job whose
+            # cancel was requested must not be requeued when its heartbeat
+            # goes stale; the worker that died never gets another attempt.
+            if row["cancel_requested"]:
+                conn.execute(
+                    "UPDATE jobs SET status = 'cancelled', error = NULL, take_id = NULL, "
+                    "updated_at = ? WHERE id = ? AND status = 'running'",
+                    (_now(), row["id"]),
+                )
+                reclaimed.append(row["id"])
                 continue
 
             if row["attempts"] >= MAX_ATTEMPTS:
@@ -277,6 +290,130 @@ def get_job(job_id: str) -> dict:
     if row is None:
         raise JobNotFound(job_id)
     return _row_to_dict(row)
+
+
+def read_job(job_id: str) -> dict:
+    """`get_job` plus the stored request payload. The payload stays off the
+    `/api` row (it holds resolved filesystem paths); `/v1` uses it only to
+    fill `seed` on the public job object."""
+    with closing(_connect()) as conn:
+        row = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+    if row is None:
+        raise JobNotFound(job_id)
+    job = _row_to_dict(row)
+    job["payload"] = json.loads(row["payload_json"])
+    return job
+
+
+def cancel_requested(job_id: str) -> bool:
+    with closing(_connect()) as conn:
+        row = conn.execute("SELECT cancel_requested FROM jobs WHERE id = ?", (job_id,)).fetchone()
+    if row is None:
+        return False
+    return bool(row["cancel_requested"])
+
+
+def set_stage(job_id: str, stage: str) -> None:
+    """Record the worker's current stage. A job that is no longer `running`
+    (already finished, or already cancelled) is left alone."""
+    with closing(_connect()) as conn:
+        conn.execute(
+            "UPDATE jobs SET stage = ?, updated_at = ? WHERE id = ? AND status = 'running'",
+            (stage, _now(), job_id),
+        )
+        conn.commit()
+
+
+def mark_cancelled(job_id: str) -> None:
+    """Terminal `cancelled`. Does not touch a job that already reached `done`
+    or `error` (SPEC.md sec 15.5: a job that finished before the flag was
+    honored stays finished)."""
+    with closing(_connect()) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute(
+            "UPDATE jobs SET status = 'cancelled', error = NULL, take_id = NULL, "
+            "cancel_requested = 1, updated_at = ? "
+            "WHERE id = ? AND status IN ('queued', 'running')",
+            (_now(), job_id),
+        )
+        conn.commit()
+
+
+def finish_done(job_id: str, *, take_id: str | None = None, lora_id: str | None = None) -> bool:
+    """Mark a running job `done` unless cancel won the race. Returns False
+    when `cancel_requested` is set or the job is no longer `running`, so the
+    caller can drop the audio instead of publishing it."""
+    with closing(_connect()) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        cursor = conn.execute(
+            "UPDATE jobs SET status = 'done', take_id = ?, lora_id = ?, error = NULL, "
+            "stage = 'writing_take', updated_at = ? "
+            "WHERE id = ? AND status = 'running' AND cancel_requested = 0",
+            (take_id, lora_id, _now(), job_id),
+        )
+        won = cursor.rowcount == 1
+        conn.commit()
+    return won
+
+
+def cancel_job(job_id: str) -> dict:
+    """SPEC.md sec 15.5. A queued job becomes `cancelled` and is never
+    claimed. A running job only sets `cancel_requested`; ACE-Step cannot
+    interrupt a diffusion call, so the worker finishes that call, drops the
+    audio, and then marks the job `cancelled`. `done` and `error` are
+    unchanged."""
+    with closing(_connect()) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute("SELECT status FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        if row is None:
+            conn.rollback()
+            raise JobNotFound(job_id)
+        now = _now()
+        if row["status"] == "queued":
+            conn.execute(
+                "UPDATE jobs SET status = 'cancelled', error = NULL, take_id = NULL, "
+                "cancel_requested = 1, updated_at = ? WHERE id = ? AND status = 'queued'",
+                (now, job_id),
+            )
+        elif row["status"] == "running":
+            conn.execute(
+                "UPDATE jobs SET cancel_requested = 1, updated_at = ? "
+                "WHERE id = ? AND status = 'running'",
+                (now, job_id),
+            )
+        conn.commit()
+    return get_job(job_id)
+
+
+def list_jobs_page(
+    *,
+    limit: int,
+    offset: int,
+    project_id: str | None = None,
+    action: str | None = None,
+    active: bool = False,
+) -> tuple[list[dict], bool]:
+    """Newest first. Returns the page and whether another row follows it,
+    so the caller can set `next_cursor` without a second count query."""
+    clauses: list[str] = []
+    params: list[Any] = []
+    if project_id is not None:
+        clauses.append("project_id = ?")
+        params.append(project_id)
+    if action is not None:
+        clauses.append("action = ?")
+        params.append(action)
+    if active:
+        clauses.append("status IN ('queued', 'running')")
+    query = "SELECT * FROM jobs"
+    if clauses:
+        query += " WHERE " + " AND ".join(clauses)
+    query += " ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?"
+    params.extend([limit + 1, offset])
+    with closing(_connect()) as conn:
+        rows = conn.execute(query, params).fetchall()
+    more = len(rows) > limit
+    return [_row_to_dict(row) for row in rows[:limit]], more
 
 
 def list_recent_jobs(
@@ -320,3 +457,17 @@ def list_recent_jobs(
     with closing(_connect()) as conn:
         rows = conn.execute(query, params).fetchall()
     return [_row_to_dict(row) for row in rows]
+
+
+def queue_counts() -> dict[str, int]:
+    """How many jobs are waiting or in progress. `/v1/health` reports this
+    so a client can tell a quiet worker from a backed-up queue."""
+    counts = {"queued": 0, "running": 0}
+    with closing(_connect()) as conn:
+        rows = conn.execute(
+            "SELECT status, COUNT(*) AS n FROM jobs WHERE status IN ('queued', 'running') "
+            "GROUP BY status"
+        ).fetchall()
+    for row in rows:
+        counts[row["status"]] = int(row["n"])
+    return counts
