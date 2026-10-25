@@ -383,6 +383,30 @@ kbd {
 .job-model {
   margin-left: auto;
 }
+.job-note {
+  color: var(--muted);
+  font-family: inherit;
+}
+.status-cancelled .job-pulse {
+  background: var(--muted-dim);
+}
+.job-strip .text-button,
+.save-state .text-button {
+  font: inherit;
+}
+.draft-offer {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  border-bottom: 1px solid var(--rule);
+  padding: 8px 0;
+  font-size: 12px;
+}
+.draft-offer > span {
+  flex: 1 1 260px;
+}
 @keyframes job-pulse {
   50% {
     opacity: 0.28;
@@ -470,6 +494,12 @@ kbd {
 }
 .save-error > span {
   background: var(--danger);
+}
+.save-conflict {
+  color: var(--signal);
+}
+.save-conflict > span {
+  background: var(--signal);
 }
 .plan-scroll {
   flex: 1 1 auto;

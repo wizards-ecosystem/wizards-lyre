@@ -3,19 +3,21 @@
 
 export const HEALTH_POLL_INTERVAL_MS = 5000;
 export const JOB_POLL_INTERVAL_MS = 1000;
-// Real ACE-Step generation can take a while (SPEC.md sec 5: it queues
-// behind a dedicated worker process); give it a generous ceiling before
-// giving up on polling rather than declaring failure too early.
-export const JOB_POLL_TIMEOUT_MS = 10 * 60 * 1000;
-// train_lora runs the whole training loop under the worker's GPU-exclusive
-// lock and can take roughly an hour (SPEC.md sec 4.4) -- far longer than the
-// ceiling above that's tuned for ordinary generate/cover/repaint jobs.
-export const LORA_TRAIN_POLL_TIMEOUT_MS = 90 * 60 * 1000;
-// Cadence for the recovery poll that watches a train_lora job discovered via
-// GET /api/jobs (i.e. one that outlived a page refresh, or is running in
-// another tab). Training itself is hour-scale, so this only needs to be
-// prompt enough that completion shows up shortly after it happens.
-export const LORA_TRAIN_RECOVERY_POLL_MS = 3000;
+// Observation never times out (SPEC.md sec 16.5: a slow render is not a
+// failed one). Past this it only polls less often; style-pack training is
+// hour-scale and lands here too.
+export const JOB_SLOW_POLL_AFTER_MS = 10 * 60 * 1000;
+export const JOB_SLOW_POLL_INTERVAL_MS = 5000;
+// While jobs are active, re-list the project's queue every few ticks to
+// pick up work another tab or an agent started.
+export const JOB_DISCOVERY_EVERY_TICKS = 5;
+// With nothing active, that re-list is all the polling there is.
+export const JOB_IDLE_DISCOVERY_MS = 5000;
+// A submission whose response was lost is resent under the same identity
+// this many times before the page gives up and keeps it for a reload.
+export const SUBMIT_RETRY_ATTEMPTS = 3;
+// A remembered submission older than this is not resent on reload.
+export const PENDING_SUBMISSION_MAX_AGE_MS = 10 * 60 * 1000;
 
 // SPEC.md sec 4.4 "Style pack | LoRA train / load | 8+ songs" -- mirrors
 // server.jobs.MIN_LORA_SOURCE_TAKES so the Train button can disable itself
@@ -26,6 +28,9 @@ export const MIN_LORA_SOURCE_TAKES = 8;
 // keystroke (which can complete out of order and let an older request
 // overwrite a newer edit on disk).
 export const PLAN_SAVE_DEBOUNCE_MS = 500;
+// A failed plan save is retried on this schedule (the last delay repeats)
+// while the edit stays on screen and in the local draft (SPEC.md sec 16.6).
+export const PLAN_SAVE_RETRY_DELAYS_MS = [2000, 5000, 15000, 30000] as const;
 
 // Identities for the two kinds of waveform regions (SPEC.md sec 9.2), which
 // share one RegionsPlugin instance: the single ad-hoc repaint selection and

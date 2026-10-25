@@ -265,3 +265,20 @@ it("replaces a selected lyrics range when a structure tag button is clicked", as
 
   expect(textarea.value).toBe("[Bridge]\n\nmore lyrics");
 });
+
+it("does not queue a job against a plan whose latest edit failed to save", async () => {
+  // SPEC.md sec 16.6: Generate flushes the latest edit first. When that save
+  // fails, nothing is queued -- the job would otherwise snapshot the older
+  // plan the server still has -- and the edit stays on screen.
+  app = await renderOpenedProject();
+  const server = app.server;
+  server.failNextPlanPuts(10);
+  fireEvent.change(screen.getByLabelText("Caption"), { target: { value: "unsaved idea" } });
+  fireEvent.click(screen.getByRole("button", { name: "Generate" }));
+
+  await screen.findByText(/plan save failed/);
+  expect(server.jobRequests()).toHaveLength(0);
+  expect((screen.getByLabelText("Caption") as HTMLInputElement).value).toBe("unsaved idea");
+  expect(localStorage.getItem("lyre.planDraft.proj-1")).toContain("unsaved idea");
+  localStorage.clear();
+});

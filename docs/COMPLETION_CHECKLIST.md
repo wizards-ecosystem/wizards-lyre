@@ -11,7 +11,7 @@ repository (tests, or a recorded report for the live gates).
 | 02 | Resolve ideas and explicit fields consistently | P0 | 01 | done |
 | 03 | Freeze submissions and complete provenance | P0 | 02 | done |
 | 04 | Make recovery and edits safe together | P0 | 03 | done |
-| 05 | Restore and observe every core job (browser) | P0 | 03, 04 | open |
+| 05 | Restore and observe every core job (browser) | P0 | 03, 04 | done |
 | 06 | Make the creation screen coherent | P1 | 02, 05 | open |
 | 07 | Truthful readiness and curated presets | P1 | 02, 06 | open |
 | 08 | Finish audition, keep, and reuse | P1 | 03, 06 | open |

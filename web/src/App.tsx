@@ -6,7 +6,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { api, Job, Lora, ProjectDetail, ProjectSummary, Section } from "./api";
+import { api, Job, JobRequest, Lora, Plan, ProjectDetail, ProjectSummary, Section } from "./api";
 import { ConfirmationDialog } from "./components/ConfirmationDialog";
 import { Icon } from "./components/Icon";
 import { LibraryPane } from "./components/LibraryPane";
@@ -21,18 +21,19 @@ import {
   StudioStage,
   TakesRail,
 } from "./components/Workbench";
-import {
-  DIT_PROFILE_OPTIONS,
-  LORA_TRAIN_POLL_TIMEOUT_MS,
-  LORA_TRAIN_RECOVERY_POLL_MS,
-  MIN_LORA_SOURCE_TAKES,
-  STRUCTURE_TAGS,
-} from "./constants";
+import { DIT_PROFILE_OPTIONS, MIN_LORA_SOURCE_TAKES, STRUCTURE_TAGS } from "./constants";
 import { formatClock, parseSeed } from "./lib/format";
-import { pollJob } from "./lib/jobs";
+import { jobBodies } from "./lib/jobBodies";
+import { describeJob, errorSummary, submitJob } from "./lib/jobs";
+import { useProjectJobs } from "./hooks/useProjectJobs";
 import { useHealth } from "./hooks/useHealth";
 import { RemoteGpuControl } from "./components/RemoteGpuControl";
-import { usePlanAutosave } from "./hooks/usePlanAutosave";
+import {
+  clearLocalDraft,
+  LocalDraft,
+  readLocalDraft,
+  usePlanAutosave,
+} from "./hooks/usePlanAutosave";
 import { useTakeNotes } from "./hooks/useTakeNotes";
 import { useWaveform } from "./hooks/useWaveform";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
@@ -51,9 +52,12 @@ export default function App() {
   const [newTitle, setNewTitle] = useState("");
   const [newQuery, setNewQuery] = useState("");
   const [creatingProject, setCreatingProject] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [busyStatus, setBusyStatus] = useState<string | null>(null);
-  const [activeJobAction, setActiveJobAction] = useState<string | null>(null);
+  // True only while a job body is on its way to the server. Whether a job is
+  // queued or running comes from the queue itself (useProjectJobs below).
+  const [submitting, setSubmitting] = useState(false);
+  // A local draft newer than nothing on the server but older than the saved
+  // plan: offered back to the user, never applied silently (sec 16.6).
+  const [draftOffer, setDraftOffer] = useState<LocalDraft | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [selectedTakeId, setSelectedTakeId] = useState<string | null>(null);
   const [compareTakeId, setCompareTakeId] = useState<string | null>(null);
@@ -95,13 +99,10 @@ export default function App() {
   // (SPEC.md sec 4.4 "LoRA train / load" -- the load half). Separate from
   // loraSourceIds above, which only feeds *training* a new pack.
   const [selectedLoraId, setSelectedLoraId] = useState<string | null>(null);
-  // This project's train_lora jobs that are still queued/running, recovered
-  // from GET /api/jobs on project load and kept current by a poll below.
-  // This is what makes a long training survive a page refresh: the busy
-  // state of the session that started it is gone, but the job row in the
-  // queue is not, so the Style Packs pane can keep showing its status and
-  // refresh the pack list the moment it finishes (no second reload needed).
-  const [trainingJobs, setTrainingJobs] = useState<Job[]>([]);
+  // Jobs this page submitted. Only their completion selects the new take for
+  // listening or clears the inputs that produced it; a job another tab or an
+  // agent started finishes without moving this page's selection.
+  const startedHereRef = useRef<Set<string>>(new Set());
 
   // Plan saves are debounced and serialized: at most one PUT /plan in
   // flight at a time, always carrying the latest edit. Without this, one
@@ -116,9 +117,16 @@ export default function App() {
   //
   const {
     saveState,
+    retrying: planSaveRetrying,
     setSaveState,
     savePlanField,
+    savePlan: savePlanDraft,
     flushPendingPlanSave,
+    retryNow: retryPlanSave,
+    resolveConflict: resolvePlanConflict,
+    hasPendingEdit: hasPendingPlanEdit,
+    flushOnUnload: flushPlanOnUnload,
+    setServerRevision,
     reset: resetPlanAutosave,
   } = usePlanAutosave({
     getContext: () => (activeId && detail ? { projectId: activeId, plan: detail.plan } : null),
@@ -200,6 +208,9 @@ export default function App() {
   useEffect(() => {
     function flushTakeNotesOnUnload() {
       flushAllPendingTakeNotes({ keepalive: true }).catch(() => {});
+      // The last debounced plan edit too (SPEC.md sec 16.6); its local draft
+      // stays until a save confirms it, in case the browser drops this one.
+      flushPlanOnUnload();
     }
     window.addEventListener("pagehide", flushTakeNotesOnUnload);
     window.addEventListener("beforeunload", flushTakeNotesOnUnload);
@@ -372,11 +383,18 @@ export default function App() {
     const data = await api.getProject(id);
     // Discard a response that's no longer for the active project (see
     // activeIdRef above) -- covers both a rapid A->B switch racing this
-    // fetch and generate()'s post-job refresh completing after the user
-    // has since switched away from the project the job ran in.
+    // fetch and a job-completion refresh landing after the user has since
+    // switched away from the project the job ran in.
     if (activeIdRef.current !== id) return;
     const openingProject = detail?.project.id !== id;
-    setDetail(data);
+    // An edit still waiting to save is newer than the server's plan: keep
+    // it on screen rather than replacing it with the older copy (sec 16.6).
+    const keepLocalPlan = !openingProject && hasPendingPlanEdit();
+    if (!keepLocalPlan) setServerRevision(id, data.plan.revision);
+    setDetail((current) =>
+      keepLocalPlan && current?.project.id === id ? { ...data, plan: current.plan } : data,
+    );
+    if (openingProject) offerLocalDraft(id, data.plan);
     setSelectedTakeId((current) => {
       if (current && data.takes.some((take) => take.id === current)) return current;
       return data.project.active_take_id ?? data.takes[0]?.id ?? null;
@@ -388,27 +406,43 @@ export default function App() {
     }
   }
 
+  // SPEC.md sec 16.6: an unsent edit survives a reload. When the server plan
+  // is still the revision the edit started from, the edit is simply resumed
+  // (nothing newer can be overwritten). When the server moved on, the edit
+  // is offered, never applied silently.
+  function offerLocalDraft(id: string, serverPlan: Plan): void {
+    const draft = readLocalDraft(id);
+    setDraftOffer(null);
+    if (!draft) return;
+    if (JSON.stringify(draft.plan) === JSON.stringify(serverPlan)) {
+      clearLocalDraft(id);
+      return;
+    }
+    if (draft.baseRevision != null && draft.baseRevision === (serverPlan.revision ?? null)) {
+      savePlanDraft(draft.plan, id);
+      return;
+    }
+    setDraftOffer(draft);
+  }
+
+  function restoreDraftOffer(): void {
+    if (!draftOffer || draftOffer.projectId !== activeIdRef.current) return;
+    // The user chose this edit over the newer saved plan, so it is sent
+    // against the current revision.
+    savePlanDraft(draftOffer.plan, draftOffer.projectId);
+    setDraftOffer(null);
+  }
+
+  function discardDraftOffer(): void {
+    if (draftOffer) clearLocalDraft(draftOffer.projectId);
+    setDraftOffer(null);
+  }
+
   async function refreshLoras(id: string) {
     const data = await api.listLoras(id);
     // Same stale-response guard as refreshDetail above.
     if (activeIdRef.current !== id) return;
     setLoras(data);
-  }
-
-  // Rediscovers this project's still-active (queued/running) train_lora job
-  // from the shared job queue (SPEC.md sec 8 GET /api/jobs) -- called on
-  // project load so a refresh mid-training restores visible progress, and
-  // again after a training finishes/fails so the pane matches the queue.
-  // active: true returns the project's complete queued/running worklist
-  // (no recency truncation server-side), so an older running training can
-  // never be pushed out of the result by newer jobs and lost to the
-  // recovery.
-  async function refreshTrainingJobs(id: string): Promise<void> {
-    const jobs = await api.listJobs({ projectId: id, action: "train_lora", active: true });
-    // Same stale-response guard as refreshDetail above. The client-side
-    // filter is belt-and-braces on top of the server's active filter.
-    if (activeIdRef.current !== id) return;
-    setTrainingJobs(jobs.filter((j) => j.status === "queued" || j.status === "running"));
   }
 
   useEffect(() => {
@@ -430,16 +464,12 @@ export default function App() {
     setLoraSourceIds(new Set());
     setLoraName("");
     setSelectedLoraId(null);
-    setTrainingJobs([]);
+    setDraftOffer(null);
     setEditingTitle(false);
     setTitleDraft("");
     if (activeId) {
       refreshDetail(activeId).catch((err) => setErrorMsg(String(err)));
       refreshLoras(activeId).catch((err) => setErrorMsg(String(err)));
-      // Recover a style-pack training that is still queued/running for this
-      // project (started before a refresh, or in another tab) so the Style
-      // Packs pane keeps showing its status.
-      refreshTrainingJobs(activeId).catch((err) => setErrorMsg(String(err)));
     } else {
       setDetail(null);
       setLoras([]);
@@ -448,83 +478,6 @@ export default function App() {
     // listing them would refetch the whole project on every state change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeId]);
-
-  // Recovery poll for the train_lora jobs above: while any are active,
-  // re-check the job queue and, the moment one completes or fails, refresh
-  // the pack list so the selector/pack entries update without another page
-  // reload. A failed training also surfaces its job error in the banner --
-  // a failure before the pack directory is allocated (e.g. the worker
-  // crashing on claim) never produces a pack entry, so this is the only
-  // place that error becomes visible. The session that started the training
-  // has its own pollJob running too; double-observing the same job is
-  // harmless (both just re-list an idempotent queue) and is exactly what
-  // makes this survive a refresh, which kills that original poller.
-  const trainingJobIds = trainingJobs.map((j) => j.id).join(",");
-  useEffect(() => {
-    if (!activeId || trainingJobIds === "") return;
-    const projectId = activeId;
-    const watchedIds = trainingJobIds.split(",");
-    let cancelled = false;
-
-    async function tick() {
-      let jobs: Job[];
-      try {
-        // active: true returns the complete queued/running worklist (no
-        // recency truncation server-side), so a watched training can never
-        // drop out of this list (and out of the pane/poll) just because
-        // newer jobs piled up behind it while it runs.
-        jobs = await api.listJobs({ projectId, action: "train_lora", active: true });
-      } catch {
-        return; // transient (server restarting...) -- retry on the next tick
-      }
-      if (cancelled || activeIdRef.current !== projectId) return;
-      const activeIds = new Set(jobs.map((j) => j.id));
-      // A watched id that fell out of the active set has finished (done or
-      // error). Fetch those by id -- the active-filtered list excludes them
-      // by definition, and a recency-limited unfiltered list can drop them
-      // too, which would silently lose the finish event and its error.
-      const finishedIds = watchedIds.filter((id) => !activeIds.has(id));
-      if (finishedIds.length === 0) {
-        setTrainingJobs(jobs);
-        return;
-      }
-      const finished: Job[] = [];
-      for (const id of finishedIds) {
-        try {
-          finished.push(await api.getJob(id));
-        } catch {
-          // No longer fetchable (e.g. the job row vanished with a project
-          // deletion) -- nothing left to surface for it.
-        }
-      }
-      // setTrainingJobs (below) drops this tick's now-finished id from
-      // trainingJobIds, which is this effect's own dependency -- committing
-      // that update re-runs the effect and marks this closure `cancelled`
-      // via its cleanup. Do the refresh/error work first so that this
-      // self-triggered cleanup can never preempt it.
-      if (finished.length > 0 && !cancelled && activeIdRef.current === projectId) {
-        await refreshLoras(projectId);
-      }
-      // The await above can outlast a project switch -- never surface this
-      // project's training failure on top of another project's workspace.
-      if (cancelled || activeIdRef.current !== projectId) return;
-      setTrainingJobs(jobs);
-      for (const job of finished) {
-        if (job.status === "error") {
-          // The pack entry itself (refreshLoras above) shows up in the
-          // list whenever the worker allocated one before failing; this
-          // banner is the actionable message either way.
-          setErrorMsg(`style pack training failed: ${job.error ?? "unknown error"}`);
-        }
-      }
-    }
-
-    const interval = setInterval(tick, LORA_TRAIN_RECOVERY_POLL_MS);
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
-  }, [activeId, trainingJobIds]);
 
   // An uploaded file and a selected take are alternative cover/repaint
   // sources (server.jobs._resolve_source_audio accepts exactly one) --
@@ -697,97 +650,135 @@ export default function App() {
     addSection({ name: "", start_sec: region.start, end_sec: region.end, lyrics: "" });
   }
 
-  async function generate() {
+  // Submitting, observing, and collecting are separate (SPEC.md sec 16.5):
+  // startJob flushes the plan and queues the job with a submission identity,
+  // useProjectJobs observes it from the queue (surviving reloads and project
+  // switches), and handleJobFinished collects the result.
+  const { activeJobs, lastFinished, track } = useProjectJobs({
+    projectId: activeId,
+    onFinished: handleJobFinished,
+  });
+  const busy = submitting || activeJobs.length > 0;
+  const currentJob = activeJobs[activeJobs.length - 1] ?? lastFinished;
+  const activeJobAction = currentJob
+    ? currentJob.action === "train_lora"
+      ? "style pack training"
+      : currentJob.action
+    : null;
+  const trainingJobs = activeJobs.filter((job) => job.action === "train_lora");
+
+  async function startJob(body: JobRequest): Promise<void> {
     if (!activeId) return;
-    // Same base-model-swap gate as extract()/lego()/complete() (SPEC.md sec
-    // 4.3) -- a lora's weights only load against the studio_ops base
-    // checkpoint, so selecting one forces the same swap those already gate
-    // behind confirmation. Only shown when a lora is actually selected; a
-    // plain generate never prompts.
-    if (selectedLoraId) {
-      const accepted = await requestConfirmation({
-        title: "Load the studio model?",
-        message:
-          "Generate needs the studio_ops base model for this style pack. Lyre will unload the current model before the job starts.",
-        confirmLabel: "Load model & generate",
-      });
-      if (!accepted) return;
-    }
-    setBusy(true);
-    setBusyStatus("queued");
-    setActiveJobAction("generate");
+    const projectId = activeId;
+    setSubmitting(true);
     setErrorMsg(null);
     try {
       // The plan can still be mid-debounce (or an earlier save still in
-      // flight) when Generate is clicked -- without this, the job can read
-      // the plan from before the user's last edit (e.g. the query/caption
-      // they just typed).
+      // flight) when an action is clicked. The job snapshots the plan when
+      // it is queued, so it must be the plan the user last saw. A save
+      // that failed stops the job instead of queuing stale content.
       await flushPendingPlanSave();
-      const queued = await api.generate(activeId, selectedLoraId, parseSeed(seedInput));
-      const job = await pollJob(queued.id, (update) => setBusyStatus(update.status));
-      if (job.status === "error") {
-        setErrorMsg(job.error ?? "generate job failed");
-        setBusyStatus("error");
-      } else {
-        setBusyStatus("done");
+      const job = await submitJob(projectId, body);
+      startedHereRef.current.add(job.id);
+      if (activeIdRef.current === projectId) track(job);
+    } catch (err) {
+      if (activeIdRef.current === projectId) setErrorMsg(String(err));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  function handleJobFinished(job: Job): void {
+    const projectId = job.project_id;
+    // useProjectJobs only reports jobs of the project it observes, but the
+    // refreshes below are async: every write checks the project again.
+    if (activeIdRef.current !== projectId) return;
+    const startedHere = startedHereRef.current.delete(job.id);
+    if (job.status === "error") {
+      setErrorMsg(
+        job.action === "train_lora" && !startedHere
+          ? `style pack training failed: ${job.error ?? "unknown error"}`
+          : (job.error ?? `${job.action} job failed`),
+      );
+    }
+    if (job.action === "train_lora") {
+      if (job.status === "done" && startedHere) {
+        setLoraSourceIds(new Set());
+        setLoraName("");
       }
-      await refreshDetail(activeId);
-      if (job.status === "done" && job.take_id) setSelectedTakeId(job.take_id);
+      refreshLoras(projectId).catch((err) => setErrorMsg(String(err)));
+      return;
+    }
+    refreshDetail(projectId)
+      .then(() => {
+        if (activeIdRef.current !== projectId || !startedHere) return;
+        if (job.status === "done" && job.take_id) {
+          // Selected for listening, not kept: the active take only changes
+          // when the user says so (SPEC.md sec 16.5).
+          setSelectedTakeId(job.take_id);
+          if (job.action === "repaint" || job.action === "lego") clearRegion();
+        }
+      })
+      .catch((err) => setErrorMsg(String(err)));
+  }
+
+  async function cancelCurrentJob(): Promise<void> {
+    if (!currentJob) return;
+    try {
+      track(await api.cancelJob(currentJob.id));
     } catch (err) {
       setErrorMsg(String(err));
-      setBusyStatus("error");
-    } finally {
-      setBusy(false);
     }
+  }
+
+  async function retryCurrentJob(): Promise<void> {
+    if (!currentJob || !activeId) return;
+    const projectId = activeId;
+    try {
+      const retried = await api.retryJob(currentJob.id);
+      startedHereRef.current.add(retried.id);
+      if (activeIdRef.current === projectId) track(retried);
+    } catch (err) {
+      setErrorMsg(String(err));
+    }
+  }
+
+  async function copyJobSummary(): Promise<void> {
+    if (!currentJob) return;
+    try {
+      await navigator.clipboard.writeText(errorSummary(currentJob));
+    } catch {
+      setErrorMsg(errorSummary(currentJob));
+    }
+  }
+
+  // Same base-model-swap gate as extract()/lego()/complete() (SPEC.md sec
+  // 4.3) -- a lora's weights only load against the studio_ops base
+  // checkpoint, so selecting one forces the same swap those already gate
+  // behind confirmation. Only shown when a lora is actually selected; a
+  // plain generate never prompts.
+  async function confirmStyleSwap(verb: string): Promise<boolean> {
+    if (!selectedLoraId) return true;
+    return requestConfirmation({
+      title: "Load the studio model?",
+      message: `${verb[0].toUpperCase()}${verb.slice(1)} needs the studio_ops base model for this style pack. Lyre will unload the current model before the job starts.`,
+      confirmLabel: `Load model & ${verb}`,
+    });
+  }
+
+  async function generate(creationMode?: "from_idea" | "from_brief") {
+    if (!activeId) return;
+    if (!(await confirmStyleSwap("generate"))) return;
+    await startJob(jobBodies.generate(selectedLoraId, parseSeed(seedInput), creationMode));
   }
 
   async function cover() {
     if (!activeId || (!selectedTakeId && !uploadedSourcePath)) return;
-    // Same base-model-swap gate as generate() above.
-    if (selectedLoraId) {
-      const accepted = await requestConfirmation({
-        title: "Load the studio model?",
-        message:
-          "Cover needs the studio_ops base model for this style pack. Lyre will unload the current model before the job starts.",
-        confirmLabel: "Load model & cover",
-      });
-      if (!accepted) return;
-    }
-    setBusy(true);
-    setBusyStatus("queued");
-    setActiveJobAction("cover");
-    setErrorMsg(null);
-    try {
-      // Same race as generate(): the plan can still be mid-debounce (or an
-      // earlier save still in flight) when Cover is clicked -- the worker
-      // reads the on-disk plan, so a stale caption/lyrics edit would
-      // otherwise silently leak into the cover job.
-      await flushPendingPlanSave();
-      const source = selectedTakeId
-        ? { takeId: selectedTakeId }
-        : { uploadPath: uploadedSourcePath! };
-      const queued = await api.cover(
-        activeId,
-        source,
-        coverStrength,
-        selectedLoraId,
-        parseSeed(seedInput),
-      );
-      const job = await pollJob(queued.id, (update) => setBusyStatus(update.status));
-      if (job.status === "error") {
-        setErrorMsg(job.error ?? "cover job failed");
-        setBusyStatus("error");
-      } else {
-        setBusyStatus("done");
-      }
-      await refreshDetail(activeId);
-      if (job.status === "done" && job.take_id) setSelectedTakeId(job.take_id);
-    } catch (err) {
-      setErrorMsg(String(err));
-      setBusyStatus("error");
-    } finally {
-      setBusy(false);
-    }
+    if (!(await confirmStyleSwap("cover"))) return;
+    const source = selectedTakeId
+      ? { takeId: selectedTakeId }
+      : { uploadPath: uploadedSourcePath! };
+    await startJob(jobBodies.cover(source, coverStrength, selectedLoraId, parseSeed(seedInput)));
   }
 
   async function repaint() {
@@ -801,164 +792,50 @@ export default function App() {
     } else if (!uploadedSourcePath) {
       return;
     }
-    // Same base-model-swap gate as generate() above.
-    if (selectedLoraId) {
-      const accepted = await requestConfirmation({
-        title: "Load the studio model?",
-        message:
-          "Repaint needs the studio_ops base model for this style pack. Lyre will unload the current model before the job starts.",
-        confirmLabel: "Load model & repaint",
-      });
-      if (!accepted) return;
-    }
-    setBusy(true);
-    setBusyStatus("queued");
-    setActiveJobAction("repaint");
-    setErrorMsg(null);
-    try {
-      // Same race as generate()/cover(): flush any in-flight plan edit before
-      // the worker reads plan.json off disk.
-      await flushPendingPlanSave();
-      const source = selectedTakeId
-        ? { takeId: selectedTakeId }
-        : { uploadPath: uploadedSourcePath! };
-      const start = selectedTakeId ? region!.start : 0;
-      const end = selectedTakeId ? region!.end : -1;
-      const queued = await api.repaint(
-        activeId,
-        source,
-        start,
-        end,
-        selectedLoraId,
-        parseSeed(seedInput),
-      );
-      const job = await pollJob(queued.id, (update) => setBusyStatus(update.status));
-      if (job.status === "error") {
-        setErrorMsg(job.error ?? "repaint job failed");
-        setBusyStatus("error");
-      } else if (selectedTakeId) {
-        clearRegion();
-        setBusyStatus("done");
-      } else {
-        setBusyStatus("done");
-      }
-      await refreshDetail(activeId);
-      if (job.status === "done" && job.take_id) setSelectedTakeId(job.take_id);
-    } catch (err) {
-      setErrorMsg(String(err));
-      setBusyStatus("error");
-    } finally {
-      setBusy(false);
-    }
+    if (!(await confirmStyleSwap("repaint"))) return;
+    const source = selectedTakeId
+      ? { takeId: selectedTakeId }
+      : { uploadPath: uploadedSourcePath! };
+    const start = selectedTakeId ? region!.start : 0;
+    const end = selectedTakeId ? region!.end : -1;
+    await startJob(jobBodies.repaint(source, start, end, selectedLoraId, parseSeed(seedInput)));
+  }
+
+  // SPEC.md sec 4.3: one GPU occupant -- swapping between the iterate and
+  // studio_ops base models unloads/reloads the DiT, so these must be a
+  // deliberate, confirmed action, not a side effect of a stray click.
+  async function confirmBaseModelSwap(message: string, confirmLabel: string): Promise<boolean> {
+    return requestConfirmation({ title: "Load the studio model?", message, confirmLabel });
   }
 
   async function extract() {
     if (!activeId || !selectedTakeId || !trackName.trim()) return;
-    // SPEC.md sec 4.3: one GPU occupant -- swapping between the iterate and
-    // studio_ops base models unloads/reloads the DiT, so this must be a
-    // deliberate, confirmed action, not a side effect of a stray click.
-    const accepted = await requestConfirmation({
-      title: "Load the studio model?",
-      message:
-        "Extract uses the studio_ops base model. Lyre will unload the current model before isolating this track.",
-      confirmLabel: "Load model & extract",
-    });
+    const accepted = await confirmBaseModelSwap(
+      "Extract uses the studio_ops base model. Lyre will unload the current model before isolating this track.",
+      "Load model & extract",
+    );
     if (!accepted) return;
-    setBusy(true);
-    setBusyStatus("queued");
-    setActiveJobAction("extract");
-    setErrorMsg(null);
-    try {
-      // Same race as cover()/repaint(): flush any in-flight plan edit before
-      // the worker reads plan.json off disk.
-      await flushPendingPlanSave();
-      const queued = await api.extract(activeId, selectedTakeId, trackName);
-      const job = await pollJob(queued.id, (update) => setBusyStatus(update.status));
-      if (job.status === "error") {
-        setErrorMsg(job.error ?? "extract job failed");
-        setBusyStatus("error");
-      } else {
-        setBusyStatus("done");
-      }
-      await refreshDetail(activeId);
-      if (job.status === "done" && job.take_id) setSelectedTakeId(job.take_id);
-    } catch (err) {
-      setErrorMsg(String(err));
-      setBusyStatus("error");
-    } finally {
-      setBusy(false);
-    }
+    await startJob(jobBodies.extract(selectedTakeId, trackName));
   }
 
   async function lego() {
     if (!activeId || !selectedTakeId || !trackName.trim()) return;
-    // Same base-model-swap gate as extract() (SPEC.md sec 4.3).
-    const accepted = await requestConfirmation({
-      title: "Load the studio model?",
-      message:
-        "Lego uses the studio_ops base model. Lyre will unload the current model before adding or replacing the track.",
-      confirmLabel: "Load model & add track",
-    });
+    const accepted = await confirmBaseModelSwap(
+      "Lego uses the studio_ops base model. Lyre will unload the current model before adding or replacing the track.",
+      "Load model & add track",
+    );
     if (!accepted) return;
-    setBusy(true);
-    setBusyStatus("queued");
-    setActiveJobAction("lego");
-    setErrorMsg(null);
-    try {
-      // Same race as cover()/repaint()/extract(): flush any in-flight plan
-      // edit before the worker reads plan.json (and its caption) off disk.
-      await flushPendingPlanSave();
-      const queued = await api.lego(activeId, selectedTakeId, trackName, region);
-      const job = await pollJob(queued.id, (update) => setBusyStatus(update.status));
-      if (job.status === "error") {
-        setErrorMsg(job.error ?? "lego job failed");
-        setBusyStatus("error");
-      } else {
-        clearRegion();
-        setBusyStatus("done");
-      }
-      await refreshDetail(activeId);
-      if (job.status === "done" && job.take_id) setSelectedTakeId(job.take_id);
-    } catch (err) {
-      setErrorMsg(String(err));
-      setBusyStatus("error");
-    } finally {
-      setBusy(false);
-    }
+    await startJob(jobBodies.lego(selectedTakeId, trackName, region));
   }
 
   async function complete() {
     if (!activeId || !selectedTakeId || !trackName.trim()) return;
-    // Same base-model-swap gate as extract() (SPEC.md sec 4.3).
-    const accepted = await requestConfirmation({
-      title: "Load the studio model?",
-      message:
-        "Complete uses the studio_ops base model. Lyre will unload the current model before filling the arrangement.",
-      confirmLabel: "Load model & complete",
-    });
+    const accepted = await confirmBaseModelSwap(
+      "Complete uses the studio_ops base model. Lyre will unload the current model before filling the arrangement.",
+      "Load model & complete",
+    );
     if (!accepted) return;
-    setBusy(true);
-    setBusyStatus("queued");
-    setActiveJobAction("complete");
-    setErrorMsg(null);
-    try {
-      await flushPendingPlanSave();
-      const queued = await api.complete(activeId, selectedTakeId, trackName);
-      const job = await pollJob(queued.id, (update) => setBusyStatus(update.status));
-      if (job.status === "error") {
-        setErrorMsg(job.error ?? "complete job failed");
-        setBusyStatus("error");
-      } else {
-        setBusyStatus("done");
-      }
-      await refreshDetail(activeId);
-      if (job.status === "done" && job.take_id) setSelectedTakeId(job.take_id);
-    } catch (err) {
-      setErrorMsg(String(err));
-      setBusyStatus("error");
-    } finally {
-      setBusy(false);
-    }
+    await startJob(jobBodies.complete(selectedTakeId, trackName));
   }
 
   function toggleLoraSource(takeId: string): void {
@@ -972,68 +849,10 @@ export default function App() {
 
   async function trainLora() {
     if (!activeId || loraSourceIds.size < MIN_LORA_SOURCE_TAKES || !loraName.trim()) return;
-    // Captured once, up front -- training can run for up to
-    // LORA_TRAIN_POLL_TIMEOUT_MS (~90 minutes), and nothing stops the user
-    // from switching to a different project while it's in flight. Every
-    // mutation below that touches project-specific state (the error banner,
-    // the source-take selection, the name field, the mid-poll status text)
-    // must check activeIdRef against this before writing, or a stale poll
-    // tick / late completion for project A can clobber project B's
-    // in-progress selections or surface A's failure in B's UI (reviewer-
-    // flagged). busy itself is the exception: it's the single cross-app
-    // "a job is in flight" lock (SPEC.md sec 4.3 one GPU occupant), not
-    // project-specific data, so it's still cleared unconditionally in
-    // `finally` -- guarding that clear would leave every other project
-    // permanently disabled if the user isn't back on this one the moment
-    // training finishes.
-    const projectId = activeId;
-    const sourceIds = Array.from(loraSourceIds);
-    const name = loraName.trim();
-    setBusy(true);
-    setBusyStatus("queued");
-    setActiveJobAction("style pack training");
-    setErrorMsg(null);
-    try {
-      const queued = await api.trainLora(projectId, sourceIds, name);
-      // Show the new training in the Style Packs pane right away (same
-      // in-flight entry a refresh would recover) and arm the recovery poll
-      // for it, so the pane's view of training is identical whether or not
-      // the page is reloaded mid-training.
-      refreshTrainingJobs(projectId).catch(() => {});
-      // Training runs the ACE-Step training loop under the worker's
-      // GPU-exclusive lock and can take roughly an hour (SPEC.md sec 4.4) --
-      // far past the default job-poll ceiling tuned for generate/cover/etc.
-      const job = await pollJob(
-        queued.id,
-        (update) => {
-          if (activeIdRef.current === projectId) setBusyStatus(update.status);
-        },
-        LORA_TRAIN_POLL_TIMEOUT_MS,
-      );
-      if (activeIdRef.current === projectId) {
-        if (job.status === "error") {
-          setErrorMsg(job.error ?? "train_lora job failed");
-          setBusyStatus("error");
-        } else {
-          setLoraSourceIds(new Set());
-          setLoraName("");
-          setBusyStatus("done");
-        }
-      }
-      await refreshLoras(projectId);
-    } catch (err) {
-      if (activeIdRef.current === projectId) {
-        setErrorMsg(String(err));
-        setBusyStatus("error");
-      }
-    } finally {
-      setBusy(false);
-      // Re-sync the recovered-training view with the queue. On success this
-      // just clears any entry; on a poll-timeout (the catch above) the job
-      // is still running server-side, and this is what hands it over to the
-      // recovery poll so it keeps being tracked after `busy` is released.
-      refreshTrainingJobs(projectId).catch(() => {});
-    }
+    // Training runs up to ~1 hour (SPEC.md sec 4.4). It is observed like any
+    // job, so it survives a reload or a project switch; its completion
+    // clears the source selection only on the page that started it.
+    await startJob(jobBodies.trainLora(Array.from(loraSourceIds), loraName.trim()));
   }
 
   // While an extract/lego/complete job is busy, the base model may still be
@@ -1076,27 +895,27 @@ export default function App() {
     .filter((project) => project.title.toLowerCase().includes(librarySearch.toLowerCase()))
     .sort((a, b) => Number(b.favorite) - Number(a.favorite));
   const selectedTake = detail?.takes.find((take) => take.id === selectedTakeId) ?? null;
-  const jobStatusLabel = activeJobAction
-    ? busyStatus === "queued"
-      ? `Waiting for GPU: ${activeJobAction}`
-      : busyStatus === "running" && studioOpsLoading
-        ? `Loading base model: ${activeJobAction}`
-        : busyStatus === "running"
-          ? `Running: ${activeJobAction}`
-          : busyStatus === "done"
-            ? `Complete: ${activeJobAction}`
-            : busyStatus === "error"
-              ? `Interrupted: ${activeJobAction}`
-              : activeJobAction
+  const jobStatusLabel = currentJob
+    ? describeJob(currentJob, {
+        loadingBaseModel: currentJob.status === "running" && studioOpsLoading,
+      })
     : null;
+  const jobIsActive = currentJob
+    ? !["done", "error", "cancelled"].includes(currentJob.status)
+    : false;
+  const jobHeld = currentJob?.status === "queued" && currentJob.stage === "needs_confirmation";
   const saveStateLabel =
     saveState === "saving"
       ? "Saving..."
       : saveState === "saved"
         ? "Saved"
         : saveState === "error"
-          ? "Couldn’t save"
-          : "Local plan";
+          ? planSaveRetrying
+            ? "Save failed, retrying"
+            : "Save failed"
+          : saveState === "conflict"
+            ? "Changed elsewhere"
+            : "Local plan";
 
   return (
     <AppShell>
@@ -1300,11 +1119,54 @@ export default function App() {
                 </div>
               </header>
 
-              {jobStatusLabel && (
-                <div className={`job-strip status-${busyStatus ?? "idle"}`} aria-live="polite">
+              {jobStatusLabel && currentJob && (
+                <div className={`job-strip status-${currentJob.status}`} aria-live="polite">
                   <span className="job-pulse" />
                   <strong>{jobStatusLabel}</strong>
+                  {currentJob.status === "running" && currentJob.cancel_requested ? (
+                    <small className="job-note">
+                      ACE-Step cannot stop mid-render: it finishes the current pass and its output
+                      is discarded.
+                    </small>
+                  ) : jobHeld ? (
+                    <small className="job-note">
+                      Queued before this version and never snapshotted. Retry it with the current
+                      plan, or cancel it.
+                    </small>
+                  ) : null}
                   <span className="job-model">{health?.dit_loaded ?? "worker"}</span>
+                  {jobIsActive && !currentJob.cancel_requested && (
+                    <button type="button" className="text-button" onClick={cancelCurrentJob}>
+                      Cancel
+                    </button>
+                  )}
+                  {(currentJob.status === "error" ||
+                    currentJob.status === "cancelled" ||
+                    jobHeld) && (
+                    <button type="button" className="text-button" onClick={retryCurrentJob}>
+                      Retry
+                    </button>
+                  )}
+                  {currentJob.status === "error" && (
+                    <button type="button" className="text-button" onClick={copyJobSummary}>
+                      Copy error summary
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {draftOffer && (
+                <div className="draft-offer" role="alert">
+                  <span>
+                    Unsaved plan edits from {new Date(draftOffer.savedAt).toLocaleString()} are
+                    older than the saved plan.
+                  </span>
+                  <button type="button" className="button-secondary" onClick={restoreDraftOffer}>
+                    Restore my edits
+                  </button>
+                  <button type="button" className="text-button" onClick={discardDraftOffer}>
+                    Discard
+                  </button>
                 </div>
               )}
 
@@ -1322,6 +1184,38 @@ export default function App() {
                     >
                       <span />
                       {saveStateLabel}
+                      {saveState === "error" && (
+                        <button
+                          type="button"
+                          className="text-button"
+                          onClick={() => retryPlanSave().catch(() => {})}
+                        >
+                          Retry now
+                        </button>
+                      )}
+                      {saveState === "conflict" && (
+                        <>
+                          <button
+                            type="button"
+                            className="text-button"
+                            onClick={() => resolvePlanConflict("keep-mine").catch(() => {})}
+                          >
+                            Keep my edits
+                          </button>
+                          <button
+                            type="button"
+                            className="text-button"
+                            onClick={() => {
+                              resolvePlanConflict("use-saved").catch(() => {});
+                              if (activeId) {
+                                refreshDetail(activeId).catch((err) => setErrorMsg(String(err)));
+                              }
+                            }}
+                          >
+                            Use saved plan
+                          </button>
+                        </>
+                      )}
                     </div>
                     <button
                       type="button"
@@ -1442,9 +1336,13 @@ export default function App() {
                             Duration (sec)
                             <input
                               type="number"
-                              value={detail.plan.duration_sec}
+                              value={detail.plan.duration_sec ?? ""}
+                              placeholder="auto"
                               onChange={(event) =>
-                                savePlanField("duration_sec", Number(event.target.value))
+                                savePlanField(
+                                  "duration_sec",
+                                  event.target.value === "" ? null : Number(event.target.value),
+                                )
                               }
                             />
                           </label>
@@ -1716,7 +1614,7 @@ export default function App() {
                           <button
                             type="button"
                             className="generate-button"
-                            onClick={generate}
+                            onClick={() => generate()}
                             disabled={busy}
                             title="Shortcuts: G generate; Space play/pause; Up/Down previous/next take; Ctrl/Cmd+S save plan"
                           >
