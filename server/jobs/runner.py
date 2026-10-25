@@ -499,7 +499,14 @@ def _run_generate_shaped_job(
         meta["provenance"]["timestamps"]["committed_at"] = _now()
         storage.write_staged_meta(project_id, take_id, meta)
 
-        outcome = _commit_take(job_id, attempt_token, project_id, take_id)
+        outcome = _commit_take(
+            job_id,
+            attempt_token,
+            project_id,
+            take_id,
+            plan_patch=plan_patch,
+            plan_revision=(creation_record or {}).get("plan_revision"),
+        )
         if outcome == "cancelled":
             take_id = None
             _cancel()
@@ -520,23 +527,6 @@ def _run_generate_shaped_job(
         if outcome != take_id:
             return  # an earlier attempt's take was already committed
         take_id = None  # committed: nothing below may discard or overwrite it
-        if plan_patch is not None:
-            # A planned brief updates the editable draft only if the draft is
-            # still at the revision this job was submitted from: a newer edit
-            # wins, and the take keeps its own brief either way (SPEC.md sec
-            # 16.3). The take is already committed, so a draft that cannot
-            # be updated (the project went away) loses nothing.
-            try:
-                storage.merge_plan_patch(
-                    project_id,
-                    plan_patch,
-                    expected_revision=(creation_record or {}).get("plan_revision"),
-                )
-            except Exception as exc:
-                # The take is committed and keeps its own brief; only the
-                # draft did not pick it up (a lock timeout, the project
-                # going away). That is not a failed job.
-                print(f"job {job_id}: planned brief not merged into the draft: {exc}")
     except JobFenced:
         # Another attempt owns this job now. Publish nothing and leave the
         # row to its owner.
@@ -568,7 +558,15 @@ def _run_generate_shaped_job(
         _set_status(job_id, "error", take_id=take_id, error=message, attempt_token=attempt_token)
 
 
-def _commit_take(job_id: str, attempt_token: str | None, project_id: str, take_id: str) -> str:
+def _commit_take(
+    job_id: str,
+    attempt_token: str | None,
+    project_id: str,
+    take_id: str,
+    *,
+    plan_patch: dict[str, Any] | None = None,
+    plan_revision: int | None = None,
+) -> str:
     """Publish a staged take (SPEC.md sec 16.5). Under the project lock and
     one `BEGIN IMMEDIATE`: check the attempt still owns the running job,
     that it was not cancelled, that the project still exists and is not
@@ -576,6 +574,12 @@ def _commit_take(job_id: str, attempt_token: str | None, project_id: str, take_i
     rename the staged directory into takes/ and mark the job `done` in the
     same transaction. A crash between the rename and the commit leaves a
     take whose `job_id` the next attempt finds and finishes with.
+
+    A planned brief is merged into the draft inside the same critical
+    section, before the job reads `done`, so a client that sees the job
+    finish also sees the draft it produced. The merge only applies when the
+    draft is still at the submitted revision (SPEC.md sec 16.3), and a
+    merge that fails never fails the committed take.
 
     Returns the committed take id (this one, or an earlier attempt's),
     `"cancelled"`, or `"project_deleted"`. Raises `JobFenced` when another
@@ -614,6 +618,8 @@ def _commit_take(job_id: str, attempt_token: str | None, project_id: str, take_i
             final = earlier or take_id
             if earlier is None:
                 storage.promote_staged_take(project_id, take_id)
+                if plan_patch is not None:
+                    _merge_planned_brief(job_id, project_id, plan_patch, plan_revision)
             conn.execute(
                 "UPDATE jobs SET status = 'done', take_id = ?, error = NULL, "
                 "stage = 'writing_take', updated_at = ? WHERE id = ?",
@@ -631,6 +637,16 @@ def _commit_take(job_id: str, attempt_token: str | None, project_id: str, take_i
         # playable take of a project becomes active (SPEC.md sec 16.5).
         storage.set_active_take_if_unset(project_id, take_id)
         return take_id
+
+
+def _merge_planned_brief(
+    job_id: str, project_id: str, plan_patch: dict[str, Any], plan_revision: int | None
+) -> None:
+    try:
+        storage.merge_plan_patch(project_id, plan_patch, expected_revision=plan_revision)
+    except Exception as exc:
+        # The take keeps its own brief; only the draft did not pick it up.
+        print(f"job {job_id}: planned brief not merged into the draft: {exc}")
 
 
 def cleanup_staging() -> list[str]:
