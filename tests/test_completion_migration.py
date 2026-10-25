@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 from contextlib import closing
 from pathlib import Path
 
@@ -19,6 +20,7 @@ from fastapi.testclient import TestClient
 from server import backup, config, jobs, storage
 from server.app import app
 from tests.helpers import wait_for_job
+from worker.run_worker import run_loop
 
 _V0_JOBS = """
 CREATE TABLE jobs (
@@ -198,15 +200,28 @@ def test_old_projects_keep_their_authored_values_and_unknown_origins(
 
 
 def test_backup_and_restore_carry_a_matching_set(
-    client: TestClient, lyre_env: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    api_client: TestClient, lyre_env: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    project_id = client.post("/api/projects", json={"title": "Keep me"}).json()["id"]
-    job = client.post(f"/api/projects/{project_id}/jobs", json={"action": "generate"}).json()
-    take_id = wait_for_job(client, job["id"])["take_id"]
-    audio = storage.take_audio_path(project_id, take_id).read_bytes()
-    # The fixture's worker thread is still heartbeating: a backup now refuses.
-    with pytest.raises(backup.BackupError, match="worker is running"):
-        backup.create_backup(tmp_path / "too-soon")
+    # This test owns its worker so it can stop it: a worker left running
+    # would heartbeat into whichever database the environment names next,
+    # including the fresh install restored into below.
+    stop_event = threading.Event()
+    worker_thread = threading.Thread(target=run_loop, args=(stop_event, 0.01), daemon=True)
+    worker_thread.start()
+    try:
+        project_id = api_client.post("/api/projects", json={"title": "Keep me"}).json()["id"]
+        job = api_client.post(
+            f"/api/projects/{project_id}/jobs", json={"action": "generate"}
+        ).json()
+        take_id = wait_for_job(api_client, job["id"])["take_id"]
+        audio = storage.take_audio_path(project_id, take_id).read_bytes()
+        # The worker is still heartbeating: a backup now refuses.
+        with pytest.raises(backup.BackupError, match="worker is running"):
+            backup.create_backup(tmp_path / "too-soon")
+    finally:
+        stop_event.set()
+        worker_thread.join(timeout=5)
+    assert not worker_thread.is_alive()
 
     # Quiesce: the worker lease goes stale once its owner stops.
     with closing(jobs._connect()) as conn:
