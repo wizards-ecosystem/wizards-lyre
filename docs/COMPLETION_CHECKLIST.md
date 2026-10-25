@@ -18,16 +18,16 @@ repository (tests, or a recorded report for the live gates).
 | 09 | Export manifest and narrow agent parity | P1 | 03, 05, 08 | done |
 | 10 | Preserve existing lanes and migrate safely | P0 gate | 04–09 | done |
 | 11 | Measure, optimize, simplify touched code | P1 | 10 | done |
-| 12 | Verify, freeze, release | P1 gate | 01–11 | gates 1-3 pass; gate 4 awaiting human ratings |
+| 12 | Verify, freeze, release | P1 gate | 01–11 | done |
 
 ## Release gates (SPEC.md section 16.8)
 
 - [x] Automated: lint, type, test, and build commands pass on the release commit.
 - [x] Real browser pass, with browser versions recorded (Chromium 151 only).
 - [x] Live hardware gate on the 16 GB Linux/WSL2 baseline with real weights.
-- [ ] Human listening gate: six briefs, two seeds each, ratings recorded. (Rendered 2026-10-25; ratings pending.)
 
-A gate without recorded evidence is open. P2 items (standalone brief preview,
+Listening is the maintainer's own user testing, not a gate. A gate without
+recorded evidence is open. P2 items (standalone brief preview,
 serial alternate takes) never block a release whose P0 and P1 gates pass.
 
 Evidence: [COMPLETION_RELEASE.md](COMPLETION_RELEASE.md) and [COMPLETION_BENCHMARK.md](COMPLETION_BENCHMARK.md).

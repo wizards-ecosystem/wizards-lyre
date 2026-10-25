@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Listening is the maintainer's own user testing instead of a release gate,
+  and `scripts/listening_set.py` is gone (SPEC.md section 16.8).
+
 ## [0.3.0] - 2026-10-25
 
 ### Added

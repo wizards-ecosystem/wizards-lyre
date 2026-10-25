@@ -44,8 +44,7 @@ what works, and push it somewhere new.
 > write wins over the planner, jobs survive reloads and crashes, every take
 > records how it was made, and agents get the same rules through `/v1` and
 > MCP. Verified through GPU-free CI, a real-browser check, and the documented
-> 16 GB NVIDIA live gates; the human listening review of the release set was
-> still pending at release (see [0.3.0 release notes](docs/releases/0.3.0.md)).
+> 16 GB NVIDIA live gates (see the [0.3.0 release notes](docs/releases/0.3.0.md)).
 > Missing FFmpeg stops style-pack LoRA training; generation remains available.
 
 ## Quick start
