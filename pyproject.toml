@@ -30,6 +30,7 @@ dependencies = [
 
 [project.urls]
 Homepage = "https://github.com/wizards-ecosystem/wizards-lyre"
+Releases = "https://github.com/wizards-ecosystem/wizards-lyre/releases"
 Repository = "https://github.com/wizards-ecosystem/wizards-lyre"
 Issues = "https://github.com/wizards-ecosystem/wizards-lyre/issues"
 Changelog = "https://github.com/wizards-ecosystem/wizards-lyre/blob/main/CHANGELOG.md"

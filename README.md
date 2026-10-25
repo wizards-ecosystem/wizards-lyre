@@ -6,7 +6,7 @@
 </h1>
 
 <p align="center">
-  Shape music on your own GPU. Keep every take. Send nothing to the cloud.
+  Shape music on your own GPU. Keep every take. Choose where generation runs.
 </p>
 
 <p align="center">
@@ -15,7 +15,7 @@
   <a href="https://github.com/wizards-ecosystem/wizards-lyre/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/wizards-ecosystem/wizards-lyre?display_name=tag&amp;sort=semver&amp;color=456348"></a>
   <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-272522"></a>
   <a href="pyproject.toml"><img alt="Python 3.11 and 3.12" src="https://img.shields.io/badge/python-3.11%20%7C%203.12-6f816d"></a>
-  <img alt="Local only" src="https://img.shields.io/badge/inference-local%20only-35633b">
+  <img alt="Local-first; remote GPU optional" src="https://img.shields.io/badge/inference-local%20first-35633b">
 </p>
 
 <p align="center">
@@ -26,11 +26,12 @@
 </p>
 
 Lyre is a local, human-guided generative music studio powered by
-[ACE-Step 1.5][acestep]. There are no accounts, subscriptions, or cloud music
-services. After setup, generation stays on your machine. The server you run
-today has no API keys. An opt-in key and a typed `/v1` surface are
-available when you want an agent on this machine; [SPEC.md](SPEC.md) section
-15 is the contract, and the default install does not turn them on.
+[ACE-Step 1.5][acestep]. The default generation path runs on your machine after setup, with no Lyre
+account or cloud music subscription. The opt-in [Remote GPU lane](docs/remote-gpu.md)
+sends render inputs to the worker you configure; rented compute has its own costs.
+The studio binds to loopback without authentication by default. Opt-in API keys,
+a typed `/v1` surface and an MCP server support agent access; [SPEC.md](SPEC.md)
+section 15 defines their contract.
 
 Each song is a project with an editable composition plan, an immutable lineage
 of takes, and a waveform you can select and reshape. Throw a seed, listen, keep
