@@ -312,6 +312,10 @@ Commands:
   remote-host
              Run the Remote GPU host on this machine's GPU for another Lyre
              to use. Needs LYRE_REMOTE_SECRET. See docs/remote-gpu.md.
+  backup     Copy the jobs database, API keys, and projects to a new directory,
+             consistently (stop the server and worker first). See
+             docs/COMPLETION_MIGRATION.md.
+  restore    Restore a backup into an empty install.
   smoke-gpu  Run the manual ACE-Step GPU smoke test.
   live-check Run the end-to-end check against a running server and worker.
   doctor     Check tools, local install, models, GPU, and optional FFmpeg.
@@ -377,6 +381,10 @@ case "${1:-}" in
   worker)
     ensure_venv
     exec "$VENV/bin/python" -m worker.run_worker
+    ;;
+  backup|restore)
+    ensure_venv
+    exec "$VENV/bin/python" -m server.backup "$@"
     ;;
   remote-host)
     ensure_venv
