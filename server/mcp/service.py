@@ -93,6 +93,23 @@ def transform_body(arguments: Mapping[str, Any]) -> tuple[str, dict[str, Any]]:
     return project_id, body
 
 
+def generate_body(arguments: Mapping[str, Any]) -> tuple[str, dict[str, Any]]:
+    """A `generate` job body for an existing project (SPEC.md sec 16.6).
+    `creation_mode` is `from_idea` (re-plan from the idea), `from_brief`
+    (render the stored brief: another take), or omitted (the plan's own)."""
+    project_id = arguments.get("project_id")
+    if not isinstance(project_id, str) or not project_id:
+        raise ToolError("project_id is required")
+    mode = arguments.get("creation_mode")
+    if mode is not None and mode not in ("from_idea", "from_brief"):
+        raise ToolError("creation_mode must be from_idea or from_brief")
+    body: dict[str, Any] = {"action": "generate"}
+    for name in ("creation_mode", "dit_profile", "seed", "lora_id"):
+        if name in arguments and arguments[name] is not None:
+            body[name] = arguments[name]
+    return project_id, body
+
+
 def _check_wait(timeout_sec: float | None) -> None:
     if timeout_sec is None:
         return
@@ -131,6 +148,55 @@ async def transform_take(
         if wait_timeout_sec is None:
             return job, False
         return await _wait(client, job, wait_timeout_sec)
+
+
+async def generate_take(
+    arguments: Mapping[str, Any],
+    *,
+    idempotency_key: str | None,
+    wait_timeout_sec: float | None,
+) -> tuple[dict[str, Any], bool]:
+    project_id, body = generate_body(arguments)
+    _check_wait(wait_timeout_sec)
+    key = resolve_idempotency_key(idempotency_key)
+    async with _session() as client:
+        job = await _call(client.create_job(project_id, body, idempotency_key=key))
+        if wait_timeout_sec is None:
+            return job, False
+        return await _wait(client, job, wait_timeout_sec)
+
+
+async def get_capabilities() -> dict[str, Any]:
+    async with _session() as client:
+        return await _call(client.get_capabilities())
+
+
+async def set_active_take(project_id: str, take_id: str) -> dict[str, Any]:
+    async with _session() as client:
+        return await _call(
+            client.set_active_take(project_id, take_id, idempotency_key=str(uuid.uuid4()))
+        )
+
+
+async def get_export(
+    project_id: str, *, take_id: str | None, include_stems: bool
+) -> dict[str, Any]:
+    """The export manifest and the ZIP's URL. Never the archive bytes."""
+    try:
+        base = public_base_url()
+    except LyreApiError as exc:
+        raise ToolError(_detail(exc)) from exc
+    async with _session() as client:
+        manifest = await _call(
+            client.export_manifest(project_id, take_id=take_id, include_stems=include_stems)
+        )
+    url = manifest.pop("export_url", None)
+    return {
+        "project_id": project_id,
+        "url": url,
+        "absolute_url": f"{base}{url}" if url else None,
+        "manifest": manifest,
+    }
 
 
 async def get_job(job_id: str) -> dict[str, Any]:

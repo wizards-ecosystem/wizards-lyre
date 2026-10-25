@@ -26,6 +26,7 @@ from server.v1.models import (
     ActiveTake,
     Capabilities,
     Error,
+    ExportManifest,
     Health,
     Job,
     JobCreate,
@@ -347,7 +348,10 @@ def list_loras(
 
 _ZIP: dict[int | str, dict[str, Any]] = {
     200: {
-        "description": "Zip of project.json, plan.json, the active mix, and optional stems.",
+        "description": (
+            "Zip of the selected take's mix (the active take unless take_id names one), its "
+            "LRC, optional stems, project.json, plan.json, and manifest.json."
+        ),
         "content": {"application/zip": {"schema": {"type": "string", "format": "binary"}}},
     },
     **_ERRORS,
@@ -359,15 +363,41 @@ def export_project(
     project_id: str,
     _auth: Annotated[Any, Depends(require_scope("read"))],
     include_stems: bool = True,
+    take_id: str | None = None,
 ) -> Response:
     project = storage.load_project(project_id)
-    zip_bytes = storage.build_export_zip(project_id, include_stems=include_stems)
+    zip_bytes = storage.build_export_zip(project_id, include_stems=include_stems, take_id=take_id)
     filename = f"{storage.sanitize_filename(project['title'])}-export.zip"
     return Response(
         content=zip_bytes,
         media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+@router.get(
+    "/projects/{project_id}/export/manifest",
+    response_model=ExportManifest,
+    response_model_by_alias=True,
+    responses=_ERRORS,
+)
+def export_manifest(
+    project_id: str,
+    _auth: Annotated[Any, Depends(require_scope("read"))],
+    include_stems: bool = True,
+    take_id: str | None = None,
+) -> dict[str, Any]:
+    """The export's `manifest.json` without the archive (SPEC.md sec 16.6):
+    which take, its provenance, and every file's size and sha256. Fetch the
+    ZIP from `export_url`."""
+    manifest = storage.build_export_manifest(
+        project_id, include_stems=include_stems, take_id=take_id
+    )
+    query = f"include_stems={str(include_stems).lower()}"
+    if take_id:
+        query += f"&take_id={take_id}"
+    manifest["export_url"] = f"/v1/projects/{project_id}/export?{query}"
+    return manifest
 
 
 _JOB_CREATED: dict[int | str, dict[str, Any]] = {

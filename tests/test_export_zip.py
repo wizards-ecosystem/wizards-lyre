@@ -33,7 +33,14 @@ def test_export_with_no_takes_still_200s_with_minimal_zip(client: TestClient) ->
 
     zf = zipfile.ZipFile(io.BytesIO(resp.content))
     names = set(zf.namelist())
-    assert names == {"project.json", "plan.json"}
+    # SPEC.md sec 16.6: the manifest says the mix is absent and why, rather
+    # than the archive silently lacking one.
+    assert names == {"project.json", "plan.json", "manifest.json"}
+    manifest = json.loads(zf.read("manifest.json"))
+    assert manifest["take"] is None
+    assert {"role": "mix", "reason": manifest["unavailable"][0]["reason"]} in manifest[
+        "unavailable"
+    ]
 
     project_json = json.loads(zf.read("project.json"))
     assert project_json["id"] == project_id

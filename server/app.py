@@ -258,6 +258,11 @@ def _preset_not_found_handler(request, exc: PresetNotFound):
     )
 
 
+@app.exception_handler(storage.ExportError)
+def _export_error_handler(request, exc: storage.ExportError):
+    return _error_body(request, 400, str(exc), code="invalid_request", param=exc.param)
+
+
 @app.exception_handler(storage.LoraNotFound)
 def _lora_not_found_handler(request, exc: storage.LoraNotFound):
     return _error_body(request, 404, f"lora not found: {exc}", code="not_found")
@@ -473,11 +478,14 @@ def get_take_lrc(project_id: str, take_id: str) -> FileResponse:
 
 
 @app.get("/api/projects/{project_id}/export")
-def export_project(project_id: str, include_stems: bool = True) -> Response:
-    # SPEC.md sec 12 Phase 5 / sec 9.2: project.json + plan.json + active
-    # mix + optional stems, built in memory by storage.build_export_zip.
+def export_project(
+    project_id: str, include_stems: bool = True, take_id: str | None = None
+) -> Response:
+    # SPEC.md sec 16.6: the selected take's full-resolution mix (the active
+    # take unless take_id names one), its LRC, optional stems, project.json,
+    # plan.json, and manifest.json, built by storage.build_export_zip.
     project = storage.load_project(project_id)
-    zip_bytes = storage.build_export_zip(project_id, include_stems=include_stems)
+    zip_bytes = storage.build_export_zip(project_id, include_stems=include_stems, take_id=take_id)
     filename = f"{storage.sanitize_filename(project['title'])}-export.zip"
     return Response(
         content=zip_bytes,

@@ -30,7 +30,13 @@ from server.storage.errors import (
     ProjectNotFound,
     TakeNotFound,
 )
-from server.storage.export import STEM_TASK_TYPES, build_export_zip
+from server.storage.export import (
+    MANIFEST_SCHEMA,
+    STEM_TASK_TYPES,
+    ExportError,
+    build_export_manifest,
+    build_export_zip,
+)
 
 # The private IO/jail helpers are part of the historical surface: tests
 # and scripts reach them as storage.<name>. Internal callers deliberately
@@ -101,6 +107,9 @@ from server.storage.uploads import (
 )
 
 __all__ = [
+    "build_export_manifest",
+    "ExportError",
+    "MANIFEST_SCHEMA",
     "write_staged_meta",
     "write_staged_lrc",
     "write_error_take",

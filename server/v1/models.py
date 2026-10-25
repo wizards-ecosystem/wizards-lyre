@@ -361,3 +361,20 @@ class PresetResult(BaseModel):
     warnings: list[str]
     preset: dict[str, Any]
     applied: bool
+
+
+class ExportManifest(BaseModel):
+    """`lyre.export-manifest/1` (SPEC.md sec 16.6). `take` is null when the
+    project has no kept take; `unavailable` names every optional file that
+    is not in the archive and why."""
+
+    model_config = ConfigDict(extra="allow")
+
+    schema_: str = Field(alias="schema")
+    created_at: str
+    project: dict[str, Any]
+    take: dict[str, Any] | None
+    files: list[dict[str, Any]]
+    unavailable: list[dict[str, Any]]
+    notes: dict[str, str]
+    export_url: str | None = None

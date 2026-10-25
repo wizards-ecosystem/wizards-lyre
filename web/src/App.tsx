@@ -1312,6 +1312,7 @@ export default function App() {
                     className="export-link"
                     href={`${api.exportUrl(detail.project.id)}?include_stems=${includeStems}`}
                     download={`${detail.project.title}-export.zip`}
+                    title="The active take's full-resolution mix, its LRC and stems when available, project.json, plan.json, and a manifest with every file's hash. A delivery bundle, not a backup."
                   >
                     Export project (.zip)
                   </a>

@@ -45,7 +45,7 @@ This page is the orientation; the schema is the specification.
 | `PATCH` | `/api/projects/{id}/takes/{take_id}` | Update `favorite` / `notes` only. |
 | `GET` | `/api/projects/{id}/takes/{take_id}/audio` | Stream `mix.wav` or `mix.mp3`. |
 | `GET` | `/api/projects/{id}/takes/{take_id}/lrc` | Timestamped lyrics. `404` when the take has none. |
-| `GET` | `/api/projects/{id}/export` | Zip: `project.json`, `plan.json`, active mix, optional stems. |
+| `GET` | `/api/projects/{id}/export` | Zip: the selected take's mix (`take_id`, else the active take), LRC, optional stems, `project.json`, `plan.json`, `manifest.json`. |
 | `POST` | `/api/projects/{id}/uploads` | Upload a WAV/MP3 as a cover/repaint source. |
 | `GET` | `/api/projects/{id}/loras` | Trained style packs for this project. |
 | `POST` | `/api/projects/{id}/jobs` | Enqueue a job. Returns the `queued` row. |
@@ -74,7 +74,8 @@ This page is the orientation; the schema is the specification.
 | `PATCH` | `/v1/projects/{id}/takes/{take_id}` | Update `favorite` / `notes` only. |
 | `POST` | `/v1/projects/{id}/uploads` | Upload a WAV/MP3 as a cover/repaint source. |
 | `GET` | `/v1/projects/{id}/loras` | Trained style packs for this project. |
-| `GET` | `/v1/projects/{id}/export` | Zip: `project.json`, `plan.json`, active mix, optional stems. |
+| `GET` | `/v1/projects/{id}/export` | Zip: the selected take's mix (`take_id`, else the active take), LRC, optional stems, `project.json`, `plan.json`, `manifest.json`. |
+| `GET` | `/v1/projects/{id}/export/manifest` | The export's `manifest.json` and `export_url`, without the archive. |
 | `POST` | `/v1/projects/{id}/jobs` | Enqueue a job. `202`, `Location: /v1/jobs/{job_id}`, and the job object. |
 | `POST` | `/v1/jobs/{job_id}/cancel` | Cancel a queued job, or ask a running job to drop its audio. |
 | `POST` | `/v1/jobs/{job_id}/retry` | Retry a failed, cancelled, or held job: `202` and the new job, whose `retry_of` names this one. |

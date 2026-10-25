@@ -180,6 +180,26 @@ class LyreClient:
         path = f"/v1/projects/{_segment(project_id)}/takes"
         return await self._json("GET", path, params=_page(limit, cursor))
 
+    async def get_capabilities(self) -> dict[str, Any]:
+        return await self._json("GET", "/v1/capabilities")
+
+    async def set_active_take(
+        self, project_id: str, take_id: str, *, idempotency_key: str
+    ) -> dict[str, Any]:
+        path = f"/v1/projects/{_segment(project_id)}/active_take"
+        return await self._json(
+            "POST", path, json_body={"take_id": take_id}, idempotency_key=idempotency_key
+        )
+
+    async def export_manifest(
+        self, project_id: str, *, take_id: str | None, include_stems: bool
+    ) -> dict[str, Any]:
+        params: dict[str, Any] = {"include_stems": "true" if include_stems else "false"}
+        if take_id:
+            params["take_id"] = take_id
+        path = f"/v1/projects/{_segment(project_id)}/export/manifest"
+        return await self._json("GET", path, params=params)
+
     async def artifact_head(
         self, project_id: str, take_id: str, name: str
     ) -> tuple[int, int | None]:
