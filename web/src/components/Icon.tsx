@@ -1,7 +1,8 @@
+import type { ReactElement } from "react";
 import { IconName } from "../types";
 
 export function Icon({ name }: { name: IconName }) {
-  const paths: Record<IconName, JSX.Element> = {
+  const paths: Record<IconName, ReactElement> = {
     add: <path d="M12 5v14M5 12h14" />,
     back: <path d="m15 18-6-6 6-6" />,
     close: <path d="m6 6 12 12M18 6 6 18" />,
