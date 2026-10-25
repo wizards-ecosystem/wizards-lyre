@@ -64,6 +64,12 @@ def describe_failure(exc: BaseException, *, job_id: str, stage: str | None) -> s
             "The GPU ran out of memory. Close other GPU programs, or use a shorter "
             "duration or the iterate profile, then retry."
         )
+    elif "insufficient free vram" in lowered:
+        advice = (
+            "ACE-Step refused to start: the loaded models leave too little GPU memory free. "
+            "Another program is probably using the GPU; close it, or use a shorter duration, "
+            "then retry."
+        )
     elif "checkpoint" in lowered and ("not found" in lowered or "missing" in lowered):
         advice = "Model files are missing. Run the model download step, then retry."
     else:

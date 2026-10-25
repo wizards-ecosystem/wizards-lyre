@@ -794,7 +794,8 @@ kbd {
 .stage-transport {
   display: grid;
   flex: 0 0 auto;
-  grid-template-columns: 34px 38px minmax(80px, 1fr) 38px 52px;
+  /* play, elapsed, scrubber, total, volume, repeat, meter */
+  grid-template-columns: 34px 38px minmax(80px, 1fr) 38px 72px auto 52px;
   align-items: center;
   gap: 9px;
   border-bottom: 1px solid var(--rule);
@@ -1441,10 +1442,11 @@ button.take-lora-badge:hover {
     min-height: 180px;
   }
   .stage-transport {
-    grid-template-columns: 38px 34px minmax(60px, 1fr) 34px;
+    grid-template-columns: 38px 34px minmax(60px, 1fr) 34px auto;
     min-height: 58px;
   }
-  .stage-transport .loudness-meter {
+  .stage-transport .loudness-meter,
+  .stage-transport .transport-volume {
     display: none;
   }
   .region-bar {
@@ -1699,8 +1701,13 @@ button.take-lora-badge:hover {
   align-items: center;
   gap: 6px;
 }
+.transport-volume {
+  display: flex;
+  align-items: center;
+}
 .transport-volume input {
-  width: 72px;
+  width: 100%;
+  min-width: 0;
 }
 .transport-repeat {
   display: inline-flex;

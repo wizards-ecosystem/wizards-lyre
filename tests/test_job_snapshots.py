@@ -369,3 +369,18 @@ def test_a_reclaimed_remote_render_is_not_resubmitted(api_client: TestClient) ->
     assert "remote-token-1" in row["error"]
     assert "repeat paid compute" in row["error"]
     assert jobs.claim_next_queued_job() is None
+
+
+def test_a_vram_preflight_refusal_gets_actionable_advice() -> None:
+    from server.jobs.runner import describe_failure
+
+    message = describe_failure(
+        RuntimeError(
+            "ACE-Step generation failed: Insufficient free VRAM: need ~0.8 GB, only 0.3 GB "
+            "available."
+        ),
+        job_id="j1",
+        stage="rendering",
+    )
+    assert "Another program is probably using the GPU" in message
+    assert message.endswith("[job j1, stage rendering]")
