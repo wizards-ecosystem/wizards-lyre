@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-25
+
 ### Added
 
 - **Bounded completion (SPEC.md section 16).** One creation contract for the
@@ -331,6 +333,7 @@ are recorded because they shaped the code a contributor will read.
 - GitHub Actions dependencies are pinned to verified full commit SHAs and kept
   current by Dependabot.
 
-[Unreleased]: https://github.com/wizards-ecosystem/wizards-lyre/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/wizards-ecosystem/wizards-lyre/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/wizards-ecosystem/wizards-lyre/releases/tag/v0.3.0
 [0.2.0]: https://github.com/wizards-ecosystem/wizards-lyre/releases/tag/v0.2.0
 [0.1.0]: https://github.com/wizards-ecosystem/wizards-lyre/releases/tag/v0.1.0

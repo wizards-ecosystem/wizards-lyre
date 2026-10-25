@@ -45,12 +45,27 @@ studio marks it "host runs an older build". Rebuild it with
 `./scripts/lyre remote-image` (see [remote-gpu.md](remote-gpu.md)). Nothing in
 the upgrade starts, stops, or rents a machine.
 
-## Back up before you upgrade
+## Back up, then upgrade
+
+The `backup` command arrives with this release, and the migration runs only
+when the server or worker starts. So update the code first, back up before
+the first start, then start:
 
 1. Stop the server and the worker (Ctrl+C in their terminals). Backup and
    restore refuse to run while a worker holds its lease, while a job is
    marked running, or while something listens on the Lyre port.
-2. Run:
+2. Update without starting anything:
+
+   ```sh
+   git pull --ff-only
+   ./scripts/lyre install
+   ```
+
+   For a release bundle, extract it into a new directory instead, install
+   there, and copy your stopped install's `projects/` into it (see
+   [INSTALLATION.md](INSTALLATION.md#updating)). The old directory is then
+   a backup as well.
+3. Back up:
 
    ```sh
    ./scripts/lyre backup ~/lyre-backups/2026-10-25
@@ -61,19 +76,16 @@ the upgrade starts, stops, or rents a machine.
    `api-keys.json` (mode `0600`) when you have keys, `projects/` without
    staged renders or lock files, and `backup.json` listing every file with
    its size and sha256.
+4. Start. The first start migrates:
+
+   ```sh
+   ./scripts/lyre server
+   ./scripts/lyre worker
+   ```
 
 Copying the `projects/` directory by hand while Lyre runs is not a backup:
 the database inside it may be mid-transaction, and a take may be half
 promoted. Use the command, with the writers stopped.
-
-## Upgrade
-
-```sh
-git pull                # or unpack the new release
-./scripts/lyre install
-./scripts/lyre server   # migrates on start
-./scripts/lyre worker
-```
 
 If the first start is interrupted part-way through the migration, start it
 again: each step checks what is already there, so a half-finished migration

@@ -56,7 +56,7 @@ def _server() -> MCPServer:
         built = MCPServer(
             name="lyre",
             title="The Wizard's Lyre",
-            version="0.2.0",
+            version="0.3.0",
             instructions=_INSTRUCTIONS,
             log_level="WARNING",
             subscriptions=False,
