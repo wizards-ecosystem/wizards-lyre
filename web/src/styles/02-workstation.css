@@ -1589,3 +1589,76 @@ button.take-lora-badge:hover {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* Creation contract (SPEC.md sec 16.3/16.6) */
+.song-kind {
+  display: inline-flex;
+  margin-top: 10px;
+  border: 1px solid var(--rule-strong);
+}
+.song-kind label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.song-kind label.selected {
+  background: var(--surface-raised);
+  color: var(--text);
+}
+.song-kind input {
+  margin: 0;
+}
+.creation-conflict {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  border-left: 2px solid var(--danger);
+  padding: 6px 10px;
+  background: var(--danger-bg);
+  font-size: 12px;
+}
+.creation-conflict > span {
+  flex: 1 1 220px;
+}
+.brief-source {
+  margin-top: 8px;
+}
+.field-origin {
+  margin-left: 6px;
+  border: 1px solid var(--rule);
+  padding: 0 4px;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 9px;
+  font-weight: 400;
+  text-transform: lowercase;
+}
+.field-origin.origin-user {
+  border-color: var(--signal);
+  color: var(--signal);
+}
+.field-origin.origin-planner,
+.field-origin.origin-preset {
+  border-color: var(--success);
+  color: var(--success);
+}
+.generate-intent {
+  display: flex;
+  flex: 1 1 100%;
+  flex-direction: column;
+  gap: 3px;
+  border-left: 2px solid var(--signal);
+  padding: 4px 10px;
+  font-size: 12px;
+}
+.generate-intent small {
+  color: var(--muted);
+}
+.generate-intent .text-button {
+  align-self: flex-start;
+}

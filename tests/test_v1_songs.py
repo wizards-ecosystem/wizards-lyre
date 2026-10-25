@@ -534,3 +534,29 @@ def test_song_openapi_schema() -> None:
         assert body
     job = operation["responses"]["202"]["content"]["application/json"]["schema"]
     assert job
+
+
+def test_another_take_after_a_song_reuses_its_brief(client: TestClient) -> None:
+    """SPEC.md sec 16.3: a one-shot song plans from its prompt; the next
+    generate on that project renders the planned brief with a new seed and
+    does not plan again. Supplied lyrics stay verbatim throughout."""
+    song = client.post(
+        "/v1/songs", json={"prompt": "harbour lights", "lyrics": "[Verse]\nmine", "bpm": 88}
+    ).json()
+    first = wait_for_job(client, song["id"])
+    assert first["status"] == "done", first.get("error")
+    project_id = song["project_id"]
+
+    again = client.post(f"/v1/projects/{project_id}/jobs", json={"action": "generate"})
+    assert again.status_code == 202
+    second = wait_for_job(client, again.json()["id"])
+    takes = {
+        take["id"]: take for take in client.get(f"/v1/projects/{project_id}/takes").json()["data"]
+    }
+    one, two = takes[first["take_id"]], takes[second["take_id"]]
+    for take in (one, two):
+        assert take["lyrics"] == "[Verse]\nmine"
+        assert take["bpm"] == 88
+        assert take["provenance"]["brief"]["planner"] is None
+    assert one["provenance"]["brief"]["content_hash"] == two["provenance"]["brief"]["content_hash"]
+    assert one["seed"] != two["seed"]

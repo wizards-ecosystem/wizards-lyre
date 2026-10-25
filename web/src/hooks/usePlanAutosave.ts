@@ -67,6 +67,7 @@ export function usePlanAutosave({
   getContext,
   onPlanChange,
   onError,
+  onSaved,
 }: {
   /** The open project and its current plan, or null when none is open. Read
    *  at call time rather than captured, so this never holds a stale plan. */
@@ -74,6 +75,9 @@ export function usePlanAutosave({
   /** Applies the optimistic local update; the caller owns the plan state. */
   onPlanChange: (plan: Plan) => void;
   onError: (message: string) => void;
+  /** The latest edit saved; `saved` is the server's copy, with the fields it
+   *  derives. Not called while a newer edit is still waiting. */
+  onSaved?: (projectId: string, saved: Plan) => void;
 }) {
   const [saveState, setSaveState] = useState<SaveState>("idle");
   // Whether a failed save will be retried on its own. Only a lost response
@@ -141,6 +145,7 @@ export function usePlanAutosave({
         if (newer === null) {
           clearLocalDraft(pending.projectId);
           setSaveState("saved");
+          onSaved?.(pending.projectId, saved);
         } else {
           // A newer edit is waiting; keep its draft current with the new base.
           writeLocalDraft({

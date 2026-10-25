@@ -20,7 +20,13 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import App from "../App";
-import { createMockLyreServer, makeLora, makeTakes, PROJECT_ID } from "../test/mockServer";
+import {
+  createMockLyreServer,
+  makeDefaultPlan,
+  makeLora,
+  makeTakes,
+  PROJECT_ID,
+} from "../test/mockServer";
 import { renderOpenedProject, type OpenedProject } from "../test/renderApp";
 
 interface FakeRegion {
@@ -321,5 +327,123 @@ describe("DiT profile picker (SPEC.md sec 4.1)", () => {
     // picker or PATCHes it to studio_ops.
     expect(isSelected(ditButton("iterate"))).toBe(true);
     expect(projectPatchRequests()).toHaveLength(0);
+  });
+});
+
+describe("Creation screen (SPEC.md sec 16.3/16.6)", () => {
+  async function openWithPlan(plan: Partial<ReturnType<typeof makeDefaultPlan>>) {
+    app = await renderOpenedProject();
+    // Reopen against a plan in the given state.
+    app.cleanup();
+    const server = createMockLyreServer();
+    server.state.detail = {
+      ...server.state.detail,
+      plan: { ...makeDefaultPlan(), ...plan },
+    };
+    server.install();
+    const rendered = render(<App />);
+    app = {
+      server,
+      confirm: vi.fn(),
+      cleanup: () => {
+        rendered.unmount();
+        server.uninstall();
+      },
+    };
+    fireEvent.click(await screen.findByRole("button", { name: "Open Test Song" }));
+    await screen.findByLabelText("Caption");
+    return server;
+  }
+
+  it("starts a new project from an empty brief that plans from the idea", async () => {
+    app = await renderOpenedProject();
+    fireEvent.click(screen.getByRole("button", { name: "Projects" }));
+    fireEvent.click(screen.getAllByRole("button", { name: /New project/ })[0]);
+    fireEvent.change(await screen.findByLabelText(/Title/), { target: { value: "Fresh" } });
+    fireEvent.click(screen.getByRole("button", { name: /^Create/ }));
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "Fresh" })).toBeTruthy());
+    expect((screen.getByLabelText("Caption") as HTMLInputElement).value).toBe("");
+    expect((screen.getByLabelText("Lyrics") as HTMLTextAreaElement).value).toBe("");
+    expect(screen.getByText("Nothing is locked yet.")).toBeTruthy();
+    expect(screen.getByText("Generate lets ACE-Step choose everything")).toBeTruthy();
+    fireEvent.change(screen.getByPlaceholderText(/Describe the song/), {
+      target: { value: "rain on a tin roof" },
+    });
+    expect(screen.getByText("Generate plans from your idea")).toBeTruthy();
+  });
+
+  it("makes another take of a planned brief without re-planning, and re-plans on request", async () => {
+    const server = await openWithPlan({
+      query: "rain",
+      caption: "auto: rain",
+      lyrics: "[Verse]\nrain",
+      creation_mode: "from_brief",
+      field_origins: { ...makeDefaultPlan().field_origins, caption: "planner", lyrics: "planner" },
+      brief: { source_query: "rain", job_id: "job-0", content_hash: "sha256:x" },
+    });
+    expect(screen.getByText("Generate makes another take of this brief")).toBeTruthy();
+    expect(screen.getAllByText("planned").length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole("button", { name: "Generate" }));
+    await waitFor(() => expect(server.jobRequests("generate")).toHaveLength(1));
+    expect(server.jobRequests("generate")[0].body).toEqual({ action: "generate", seed: -1 });
+    await screen.findByText("Complete: generate");
+
+    fireEvent.click(screen.getByRole("button", { name: "Re-plan from idea" }));
+    await waitFor(() => expect(server.jobRequests("generate")).toHaveLength(2));
+    expect(server.jobRequests("generate")[1].body).toEqual({
+      action: "generate",
+      seed: -1,
+      creation_mode: "from_idea",
+    });
+  });
+
+  it("re-plans a changed idea and keeps text the user wrote", async () => {
+    await openWithPlan({
+      query: "rain",
+      caption: "auto: rain",
+      lyrics: "[Verse]\nmy own words",
+      creation_mode: "from_brief",
+      field_origins: { ...makeDefaultPlan().field_origins, caption: "planner", lyrics: "user" },
+      brief: { source_query: "rain", job_id: "job-0", content_hash: "sha256:x" },
+    });
+    fireEvent.change(screen.getByPlaceholderText(/Describe the song/), {
+      target: { value: "snow" },
+    });
+    expect(await screen.findByText(/You changed the idea since it was planned/)).toBeTruthy();
+    await waitFor(() => expect(screen.getByText("Generate plans from your idea")).toBeTruthy());
+    expect(screen.getByText("Yours, kept as set: lyrics.")).toBeTruthy();
+  });
+
+  it("marks an explicit field as yours", async () => {
+    await openWithPlan({ query: "rain" });
+    fireEvent.change(screen.getByLabelText("BPM"), { target: { value: "92" } });
+    await screen.findByText("Saved");
+    expect(await screen.findByText("Yours, kept as set: BPM.")).toBeTruthy();
+    const bpmLabel = screen.getByLabelText("BPM").closest("label")!;
+    expect(within(bpmLabel).getByText("yours")).toBeTruthy();
+  });
+
+  it("asks for a deliberate choice when Instrumental conflicts with lyrics", async () => {
+    const server = await openWithPlan({
+      query: "rain",
+      lyrics: "[Verse]\nwords I wrote",
+      field_origins: { ...makeDefaultPlan().field_origins, lyrics: "user" },
+    });
+    fireEvent.click(screen.getByLabelText("Instrumental"));
+    expect(await screen.findByText(/Lyre will not delete them for you/)).toBeTruthy();
+    const generate = screen.getByRole("button", { name: "Generate" }) as HTMLButtonElement;
+    expect(generate.disabled).toBe(true);
+    expect(generate.title).toMatch(/conflict/);
+    // The words are still there.
+    expect((screen.getByLabelText("Lyrics") as HTMLTextAreaElement).value).toBe(
+      "[Verse]\nwords I wrote",
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Keep vocals" }));
+    await waitFor(() => expect(generate.disabled).toBe(false));
+    await waitFor(() => expect(server.state.detail.plan.instrumental).toBe(false));
+    expect(server.state.detail.plan.lyrics).toBe("[Verse]\nwords I wrote");
   });
 });

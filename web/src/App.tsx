@@ -9,6 +9,7 @@ import {
 import { api, Job, JobRequest, Lora, Plan, ProjectDetail, ProjectSummary, Section } from "./api";
 import { ConfirmationDialog } from "./components/ConfirmationDialog";
 import { Icon } from "./components/Icon";
+import { FieldOrigin } from "./components/FieldOrigin";
 import { LibraryPane } from "./components/LibraryPane";
 import { StylePackPanel } from "./components/StylePackPanel";
 import { LoudnessMeter } from "./components/LoudnessMeter";
@@ -22,6 +23,7 @@ import {
   TakesRail,
 } from "./components/Workbench";
 import { DIT_PROFILE_OPTIONS, MIN_LORA_SOURCE_TAKES, STRUCTURE_TAGS } from "./constants";
+import { generateIntent, hasInstrumentalConflict, INTENT_COPY, originOf } from "./lib/creation";
 import { formatClock, parseSeed } from "./lib/format";
 import { jobBodies } from "./lib/jobBodies";
 import { describeJob, errorSummary, submitJob } from "./lib/jobs";
@@ -132,6 +134,23 @@ export default function App() {
     getContext: () => (activeId && detail ? { projectId: activeId, plan: detail.plan } : null),
     onPlanChange: (plan) => setDetail((current) => (current ? { ...current, plan } : current)),
     onError: (message) => setErrorMsg(message),
+    // The server derives origins, mode, and revision on every write (sec
+    // 16.3). Take those from the saved plan; keep the text on screen.
+    onSaved: (projectId, saved) =>
+      setDetail((current) =>
+        current?.project.id === projectId
+          ? {
+              ...current,
+              plan: {
+                ...current.plan,
+                creation_mode: saved.creation_mode,
+                field_origins: saved.field_origins,
+                revision: saved.revision,
+                brief: saved.brief,
+              },
+            }
+          : current,
+      ),
   });
 
   const {
@@ -1255,6 +1274,64 @@ export default function App() {
                         A scene, a sound, and a feeling is plenty. You can refine it after the first
                         take.
                       </p>
+                      <div
+                        className="song-kind"
+                        role="radiogroup"
+                        aria-label="Song or instrumental"
+                      >
+                        <label className={detail.plan.instrumental ? "" : "selected"}>
+                          <input
+                            type="radio"
+                            name="song-kind"
+                            checked={!detail.plan.instrumental}
+                            onChange={() => savePlanField("instrumental", false)}
+                          />
+                          Song
+                        </label>
+                        <label className={detail.plan.instrumental ? "selected" : ""}>
+                          <input
+                            type="radio"
+                            name="song-kind"
+                            aria-label="Instrumental"
+                            checked={detail.plan.instrumental}
+                            onChange={() => savePlanField("instrumental", true)}
+                          />
+                          Instrumental
+                        </label>
+                      </div>
+                      {hasInstrumentalConflict(detail.plan) && (
+                        <div className="creation-conflict" role="alert">
+                          <span>
+                            Instrumental asks for no vocals, but the plan has lyrics. Lyre will not
+                            delete them for you.
+                          </span>
+                          <button
+                            type="button"
+                            className="button-secondary"
+                            onClick={() => savePlanField("lyrics", "")}
+                          >
+                            Clear lyrics
+                          </button>
+                          <button
+                            type="button"
+                            className="text-button"
+                            onClick={() => savePlanField("instrumental", false)}
+                          >
+                            Keep vocals
+                          </button>
+                        </div>
+                      )}
+                      {detail.plan.brief?.source_query &&
+                        (detail.plan.brief.source_query === detail.plan.query ? (
+                          <p className="builder-tip brief-source">
+                            The caption and lyrics marked “planned” came from this idea.
+                          </p>
+                        ) : (
+                          <p className="builder-tip brief-source">
+                            You changed the idea since it was planned. Generate will plan the new
+                            one; text you wrote yourself is kept.
+                          </p>
+                        ))}
                     </section>
 
                     <button
@@ -1291,16 +1368,18 @@ export default function App() {
                           </div>
                         </div>
                         <label className="field-label">
-                          Caption
+                          Caption <FieldOrigin plan={detail.plan} field="caption" />
                           <input
+                            aria-label="Caption"
                             value={detail.plan.caption}
                             onChange={(event) => savePlanField("caption", event.target.value)}
                           />
                         </label>
                         <div className="plan-grid builder-settings-grid">
                           <label>
-                            BPM
+                            BPM <FieldOrigin plan={detail.plan} field="bpm" />
                             <input
+                              aria-label="BPM"
                               type="number"
                               value={detail.plan.bpm ?? ""}
                               onChange={(event) =>
@@ -1312,8 +1391,9 @@ export default function App() {
                             />
                           </label>
                           <label>
-                            Key
+                            Key <FieldOrigin plan={detail.plan} field="keyscale" />
                             <input
+                              aria-label="Key"
                               value={detail.plan.keyscale ?? ""}
                               onChange={(event) =>
                                 savePlanField(
@@ -1324,8 +1404,9 @@ export default function App() {
                             />
                           </label>
                           <label>
-                            Time signature
+                            Time signature <FieldOrigin plan={detail.plan} field="timesignature" />
                             <input
+                              aria-label="Time signature"
                               value={detail.plan.timesignature}
                               onChange={(event) =>
                                 savePlanField("timesignature", event.target.value)
@@ -1333,8 +1414,9 @@ export default function App() {
                             />
                           </label>
                           <label>
-                            Duration (sec)
+                            Duration (sec) <FieldOrigin plan={detail.plan} field="duration_sec" />
                             <input
+                              aria-label="Duration (sec)"
                               type="number"
                               value={detail.plan.duration_sec ?? ""}
                               placeholder="auto"
@@ -1347,8 +1429,9 @@ export default function App() {
                             />
                           </label>
                           <label>
-                            Language
+                            Language <FieldOrigin plan={detail.plan} field="vocal_language" />
                             <input
+                              aria-label="Language"
                               value={detail.plan.vocal_language}
                               onChange={(event) =>
                                 savePlanField("vocal_language", event.target.value)
@@ -1360,20 +1443,6 @@ export default function App() {
                           <label className="checkbox">
                             <input
                               type="checkbox"
-                              aria-label="Instrumental"
-                              checked={detail.plan.instrumental}
-                              onChange={(event) =>
-                                savePlanField("instrumental", event.target.checked)
-                              }
-                            />
-                            <span>
-                              <strong>Instrumental</strong>
-                              <small>Do not generate vocals or lyrics.</small>
-                            </span>
-                          </label>
-                          <label className="checkbox">
-                            <input
-                              type="checkbox"
                               aria-label="Allow caption rewrite (Custom mode LM thinking)"
                               checked={detail.plan.caption_rewrite}
                               onChange={(event) =>
@@ -1382,7 +1451,10 @@ export default function App() {
                             />
                             <span>
                               <strong>Allow caption rewrite</strong>
-                              <small>Let Custom mode rethink the direction.</small>
+                              <small>
+                                Off keeps the caption you wrote exactly. On lets the language model
+                                rework it; the take records what it used.
+                              </small>
                             </span>
                           </label>
                         </div>
@@ -1402,6 +1474,7 @@ export default function App() {
                         <div className="field-label lyrics-field">
                           <div className="lyrics-label-row">
                             <label htmlFor="plan-lyrics">Lyrics</label>
+                            <FieldOrigin plan={detail.plan} field="lyrics" />
                             <span>Optional</span>
                           </div>
                           <div
@@ -1611,12 +1684,61 @@ export default function App() {
                               </button>
                             ))}
                           </div>
+                          {(() => {
+                            const intent = generateIntent(detail.plan);
+                            const copy = INTENT_COPY[intent];
+                            const locked = (
+                              [
+                                ["caption", "caption"],
+                                ["lyrics", "lyrics"],
+                                ["bpm", "BPM"],
+                                ["keyscale", "key"],
+                                ["timesignature", "time signature"],
+                                ["duration_sec", "duration"],
+                                ["vocal_language", "language"],
+                              ] as const
+                            )
+                              .filter(([field]) => originOf(detail.plan, field) === "user")
+                              .map(([, name]) => name);
+                            return (
+                              <div className="generate-intent" aria-live="polite">
+                                <strong>{copy.title}</strong>
+                                <small>{copy.detail}</small>
+                                <small>
+                                  {locked.length > 0
+                                    ? `Yours, kept as set: ${locked.join(", ")}.`
+                                    : "Nothing is locked yet."}
+                                </small>
+                                {intent === "another-take" && detail.plan.query.trim() && (
+                                  <button
+                                    type="button"
+                                    className="text-button"
+                                    disabled={busy}
+                                    onClick={() => generate("from_idea")}
+                                    title="Run the planner again from the idea. Text you wrote yourself is kept."
+                                  >
+                                    Re-plan from idea
+                                  </button>
+                                )}
+                                {busy && activeJobs.length > 0 && (
+                                  <small>
+                                    A take is queued with the plan as it was when you clicked. Edits
+                                    now apply to the next take.
+                                  </small>
+                                )}
+                              </div>
+                            );
+                          })()}
                           <button
                             type="button"
                             className="generate-button"
                             onClick={() => generate()}
-                            disabled={busy}
-                            title="Shortcuts: G generate; Space play/pause; Up/Down previous/next take; Ctrl/Cmd+S save plan"
+                            disabled={busy || hasInstrumentalConflict(detail.plan)}
+                            title={
+                              hasInstrumentalConflict(detail.plan)
+                                ? "Resolve the Instrumental and lyrics conflict first"
+                                : "Shortcuts: G generate; Space play/pause; Up/Down previous/next take; Ctrl/Cmd+S save plan"
+                            }
                           >
                             <Icon name="spark" /> Generate
                           </button>

@@ -9,7 +9,16 @@
 // Math.random, and jobs complete on the first /api/jobs/{id} poll unless a
 // test explicitly scripts a different sequence via scriptNextJob().
 import { vi } from "vitest";
-import type { Job, Lora, Plan, Project, ProjectDetail, ProjectSummary, Take } from "../api";
+import type {
+  Job,
+  Lora,
+  Plan,
+  Project,
+  ProjectDetail,
+  ProjectSummary,
+  Take,
+  TrackedField,
+} from "../api";
 
 export const PROJECT_ID = "proj-1";
 
@@ -122,6 +131,38 @@ export function makePlan(): Plan {
   };
 }
 
+// What server.storage.default_plan() writes for a brand-new project: an
+// empty brief that resolves its idea on the first Generate (SPEC.md sec
+// 16.3). New-project fixtures must start from this, not from makePlan().
+export function makeDefaultPlan(): Plan {
+  return {
+    query: "",
+    caption: "",
+    negative: [],
+    lyrics: "",
+    instrumental: false,
+    vocal_language: "en",
+    bpm: null,
+    keyscale: null,
+    timesignature: "4/4",
+    duration_sec: 120,
+    sections: [],
+    caption_rewrite: false,
+    creation_mode: "from_idea",
+    field_origins: {
+      caption: "default",
+      lyrics: "default",
+      vocal_language: "default",
+      bpm: "default",
+      keyscale: "default",
+      timesignature: "default",
+      duration_sec: "default",
+    },
+    revision: 0,
+    brief: null,
+  };
+}
+
 export function makeProjectSummary(overrides: Partial<ProjectSummary> = {}): ProjectSummary {
   return {
     id: PROJECT_ID,
@@ -148,6 +189,40 @@ export function makeProjectDetail(takes: Take[]): ProjectDetail {
     plan: makePlan(),
     takes,
   };
+}
+
+const TRACKED: TrackedField[] = [
+  "caption",
+  "lyrics",
+  "vocal_language",
+  "bpm",
+  "keyscale",
+  "timesignature",
+  "duration_sec",
+];
+
+// The server's write rule (server/generation/brief.apply_write_semantics):
+// a tracked field whose value changed becomes `user`, or `default` when
+// cleared, unless the body names another origin; a changed idea switches
+// to `from_idea` unless the body sets the mode.
+function deriveWrite(current: Plan, next: Plan): Plan {
+  const origins = { ...(current.field_origins ?? {}) };
+  for (const field of TRACKED) {
+    const claimed = next.field_origins?.[field];
+    if (claimed && claimed !== current.field_origins?.[field]) {
+      origins[field] = claimed;
+    } else if (next[field] !== current[field]) {
+      const value = next[field];
+      origins[field] = value === null || String(value).trim() === "" ? "default" : "user";
+    }
+  }
+  let mode = current.creation_mode;
+  if (next.creation_mode && next.creation_mode !== current.creation_mode) {
+    mode = next.creation_mode;
+  } else if (next.query !== current.query) {
+    mode = "from_idea";
+  }
+  return { ...next, field_origins: origins, creation_mode: mode, brief: current.brief ?? null };
 }
 
 // ---------------------------------------------------------------------------
@@ -367,7 +442,7 @@ export function createMockLyreServer() {
         favorite: false,
       };
       state.projects = [...state.projects, makeProjectSummary({ id, title })];
-      const plan = makePlan();
+      const plan = makeDefaultPlan();
       if (payload.query) plan.query = payload.query;
       state.createdDetails.set(id, { project, plan, takes: [] });
       return Promise.resolve(jsonResponse(project));
@@ -452,7 +527,10 @@ export function createMockLyreServer() {
       if (expected != null && expected !== current) {
         return Promise.resolve(jsonResponse({ detail: "plan revision changed" }, 409));
       }
-      state.detail = { ...state.detail, plan: { ...plan, revision: current + 1 } as Plan };
+      state.detail = {
+        ...state.detail,
+        plan: { ...deriveWrite(state.detail.plan, plan as Plan), revision: current + 1 },
+      };
       return Promise.resolve(jsonResponse(state.detail.plan));
     }
 
