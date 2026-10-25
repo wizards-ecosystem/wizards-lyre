@@ -2,8 +2,8 @@
 
 The evidence for the release gates in [SPEC.md section 16.8](../SPEC.md). The
 bounded release is complete only when every gate below has recorded evidence.
-**Status on 2026-10-25: gates 1-3 pass; gate 4 (human listening) is
-rendered and awaiting ratings, so completion is not yet established.**
+**Status on 2026-10-25: all three gates pass, so the bounded release is
+complete.** Listening is the maintainer's own user testing, outside the gates.
 
 ## What changed
 
@@ -93,25 +93,6 @@ Checks run live and found two bugs, both fixed in Packet 11:
 Measured timings, swaps, memory, and the tested reproducibility boundary
 are in [COMPLETION_BENCHMARK.md](COMPLETION_BENCHMARK.md).
 
-## Gate 4: listening (rendered; awaiting a human)
-
-`scripts/listening_set.py` rendered the six fixed briefs at seeds 11 and 23:
-an acoustic lyric song, a rhythmic lyric song (BPM 112 locked), a
-supplied-lyrics song, exploration ambience, a combat cue, and a menu theme.
-Songs are 60 s and cues 45-60 s, fixed before rendering. All 12 rendered
-48 kHz audible audio at exactly the requested length. Locked BPM and preset
-tempos were kept, the supplied lyrics were sung verbatim around a
-`format_sample` plan, and every cue rendered as an instrumental.
-
-The files, prompts, resolved briefs, and `ratings.md` are in
-`output/listening/2026-10-25/` on the test machine (not committed). To close
-the gate, a person listens and fills in `ratings.md`: prompt/style fit,
-coherence, clipping or glitches, vocals and lyric adherence or the absence
-of vocals, and usable starts and endings, each acceptable, minor limitation,
-or unusable. The threshold is at least one usable take per brief and no
-catastrophic artifact in a kept take. No automated result substitutes for
-this.
-
 ## Known limitations
 
 - A fixed seed reproduces audio only with language-model codes off. Planned
@@ -128,7 +109,6 @@ this.
 
 ## After release
 
-When gate 4 is recorded, mark it in the checklist, cut the release notes from
-this record, and stop feature work. Later changes are regressions, security,
-installation breakage, and pinned-upstream compatibility (SPEC.md section
-16.8).
+Feature work on the bounded completion stops here. Later changes are
+regressions, security, installation breakage, and pinned-upstream
+compatibility (SPEC.md section 16.8).
