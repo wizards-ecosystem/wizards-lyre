@@ -9,6 +9,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Bounded completion (SPEC.md section 16).** One creation contract for the
+  studio, `/v1`, and MCP: `creation_mode` `from_idea` or `from_brief`,
+  per-field origins (user, planner, preset, default), and explicit fields
+  always win over the planner. Captions are not rewritten unless asked.
+  Supplied lyrics are kept verbatim and planned with `format_sample`.
+- **Frozen jobs and provenance.** Every job freezes what it will render
+  when it is queued and records the resolved brief before the first render.
+  Each take records its job, brief, actual parameters, stage timestamps, and
+  runtime. A retry is a new job (`POST /v1/jobs/{id}/retry`).
+- **Safe recovery and edits.** Renders are staged and committed under the
+  project lock, so a crash never leaves a half-written take. Plan saves send
+  `expected_revision`; a stale save is `409`, and the studio offers "Keep my
+  edits" or "Use saved plan" and keeps a local draft. A finished take never
+  replaces the kept take.
+- **Studio jobs survive a reload.** The studio reattaches to every running
+  job in the open project, and only that project's jobs appear in it.
+- **Readiness and presets.** `GET /v1/capabilities` reports what this
+  machine can render now. Six curated presets (songs and game cues) preview
+  before they apply.
+- **Audition.** One player owns playback: A/B switching keeps the position,
+  and Space plays and pauses outside text fields.
+- **Export manifest.** The export ZIP carries `manifest.json`
+  (`lyre.export-manifest/1`). New MCP tools: `get_capabilities`,
+  `generate_take`, `set_active_take`, `get_export`.
+- **Backup and restore.** `./scripts/lyre backup` and `restore`. Jobs queued
+  before the upgrade, with no snapshot, wait as "Needs confirmation" instead
+  of rendering from a guessed plan. See `docs/COMPLETION_MIGRATION.md`.
+- **Benchmark.** `./scripts/lyre live-check --benchmark` times each stage
+  from take provenance; results in `docs/COMPLETION_BENCHMARK.md`.
 - **Declared playback ffmpeg.** The worker runtime depends on `imageio-ffmpeg`
   0.6.0 (no published PyPI, OSV, or GitHub advisories; wheels for Linux x86_64
   and Windows, including `libmp3lame`). `./scripts/lyre install` installs it
@@ -79,6 +108,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A hand-written brief with one planner-filled field rendered with LM codes
+  on, which broke same-seed reproducibility.
+- Instrumental takes ran lyric alignment on the `[Instrumental]`
+  placeholder: about 11 s per take on the `quality` profile.
+- At window widths of 1360 px and up, the takes drawer had no button to
+  open it.
+- A planned brief now merges into the draft before its job reads `done`.
+- A VRAM pre-flight refusal says another program is probably using the GPU.
 - **Quality profile on a 16 GB card.** A `quality` job that followed
   `iterate` or `polish` kept the previous DiT and the 1.7B LM on the GPU,
   and passed `offload_to_cpu` without `offload_dit_to_cpu`. Upstream then
