@@ -32,6 +32,7 @@ _BUILD_FILES = (
     "ACE_STEP_REVISION",
     "requirements/ace-step-security.txt",
     "docker/remote-gpu/Dockerfile",
+    "worker/playback.py",
 )
 
 

@@ -85,6 +85,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- Bump the web devDependency `zod` to clear GHSA-mrhx-c7xc-m3w5. The
+  studio bundle does not ship it.
 - `POST /mcp` rejects a present `Origin` that is not loopback (`localhost`,
   `127.0.0.1`, or `[::1]`, any port) and not listed in `LYRE_ALLOWED_ORIGINS`.
   The response is `403` in the `/v1` error shape. A missing `Origin` stays
@@ -116,6 +118,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   open it.
 - A planned brief now merges into the draft before its job reads `done`.
 - A VRAM pre-flight refusal says another program is probably using the GPU.
+- The Remote GPU host image now builds and starts. `.dockerignore` kept
+  `server/generation` out of the build context, and the image never copied
+  `worker/playback.py`, so a host built after the MP3 fix reported
+  "startup failed". The image workflow now also checks that the host is
+  ready and imports the adapter.
 - **Quality profile on a 16 GB card.** A `quality` job that followed
   `iterate` or `polish` kept the previous DiT and the 1.7B LM on the GPU,
   and passed `offload_to_cpu` without `offload_dit_to_cpu`. Upstream then

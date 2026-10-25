@@ -7,5 +7,8 @@
 !docker/remote-gpu/Dockerfile
 !worker/__init__.py
 !worker/mock_worker.py
+!worker/playback.py
 !worker/acestep_worker/*.py
 !worker/remote_host/*.py
+!server/__init__.py
+!server/generation/*.py

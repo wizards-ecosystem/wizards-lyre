@@ -73,7 +73,7 @@ WORKDIR /app
 COPY ACE_STEP_REVISION /app/
 COPY requirements/ace-step-security.txt /app/requirements/
 COPY docker/remote-gpu/Dockerfile /app/docker/remote-gpu/
-COPY worker/__init__.py worker/mock_worker.py /app/worker/
+COPY worker/__init__.py worker/mock_worker.py worker/playback.py /app/worker/
 COPY worker/acestep_worker /app/worker/acestep_worker
 COPY worker/remote_host /app/worker/remote_host
 COPY server/__init__.py /app/server/
