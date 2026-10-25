@@ -3,22 +3,23 @@
 Writes a tiny silent WAV plus a spec-shaped meta.json (SPEC.md sec 7.3).
 Never imports torch, CUDA, or acestep -- see SPEC.md sec 10 and 11.
 
-Also stands in for the 5Hz LM's simple-mode planning (SPEC.md sec 7.2):
-when a `generate` job's plan has a `query` but no caption/lyrics, this
-worker deterministically derives them (no real LM) and returns a plan
-patch for the caller to persist, exercising the same "query in, filled
-plan out" contract that `worker.acestep_worker` implements for real.
+Also stands in for the 5 Hz LM planner (SPEC.md sec 16.3): a `from_idea`
+generate gets a deterministic `create_sample` / `format_sample` result,
+merged by the same `server.generation.brief` resolver the real adapter
+uses, so precedence and the GenerationParams creative fields are identical
+between the two backends.
 """
 
 from __future__ import annotations
 
-import random
 import wave
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from server.generation import brief as creation
+from worker.acestep_worker.settings import GENERATION_GUIDANCE_SCALE, GENERATION_STEPS
 from worker.playback import write_mix_mp3
 
 SAMPLE_RATE = 8000
@@ -88,26 +89,44 @@ def get_loaded_dit_profile() -> str | None:
     return _simulated_loaded_dit_profile
 
 
-def _is_simple_mode(plan: dict[str, Any]) -> bool:
-    return bool(plan.get("query")) and not plan.get("caption") and not plan.get("lyrics")
+# What the stand-in planner suggests for every metadata field, whatever the
+# request. Fixed on purpose: a test that sets an explicit value can see the
+# suggestion lose to it (SPEC.md sec 16.3 precedence rule 1).
+MOCK_PLANNER_SUGGESTIONS = {
+    "bpm": 120,
+    "keyscale": "C major",
+    "duration": 30.0,
+    "timesignature": "4",
+}
+# What the stand-in CoT fills for metas a brief leaves unset, mirroring
+# upstream writing `cot_*` onto the per-audio params.
+MOCK_COT_FILL = {
+    "cot_bpm": 96,
+    "cot_keyscale": "A minor",
+    "cot_timesignature": "4",
+    "cot_duration": 42.0,
+    "cot_vocal_language": "en",
+}
 
 
-def _plan_from_query(plan: dict[str, Any]) -> dict[str, Any]:
-    """Deterministic stand-in for the 5Hz LM filling caption/lyrics/metas
-    from a simple-mode query (SPEC.md sec 7.2: "Worker sets thinking=true.
-    LM fills caption, lyrics, metas. Persist the filled plan.").
-
-    Returns only the fields the LM filled in -- a patch, not a full plan --
-    so the caller (server.jobs) can merge it onto whatever plan is current
-    on disk when the job finishes, instead of overwriting concurrent edits
-    to unrelated fields with this stale snapshot."""
-    query = plan["query"]
-    instrumental = bool(plan.get("instrumental"))
+def _mock_planner(request: dict[str, Any]) -> dict[str, Any]:
+    """Deterministic stand-in for upstream `create_sample` / `format_sample`,
+    returning upstream's field names. Precedence is applied afterwards by the
+    same `brief.apply_planner` the real adapter uses."""
+    if request["planner"] == "format_sample":
+        user_metadata = request.get("user_metadata") or {}
+        return {
+            "caption": f"auto: {request['caption']}",
+            "lyrics": request["lyrics"],
+            "language": user_metadata.get("language") or "en",
+            **MOCK_PLANNER_SUGGESTIONS,
+        }
+    query = request["query"]
     return {
         "caption": f"auto: {query}",
-        "lyrics": "[Instrumental]" if instrumental else f"[Verse]\n{query}",
-        "bpm": plan.get("bpm") or 120,
-        "keyscale": plan.get("keyscale") or "C Major",
+        "lyrics": "[Instrumental]" if request["instrumental"] else f"[Verse]\n{query}",
+        "language": request.get("vocal_language") or "en",
+        **MOCK_PLANNER_SUGGESTIONS,
     }
 
 
@@ -132,6 +151,7 @@ def run_job(
     on_dit_loaded: Callable[[str], None] | None = None,
     on_stage: Callable[[str], None] | None = None,
     cancel_check: Callable[[], bool] | None = None,
+    on_resolved: Callable[[dict], None] | None = None,
 ) -> tuple[dict, dict | None, str | None]:
     """Run one mocked job. Returns `(take_meta, plan_patch, lrc_text)`;
     `plan_patch` is a delta of the fields to persist when this job filled the
@@ -171,19 +191,33 @@ def run_job(
 
     take_dir.mkdir(parents=True, exist_ok=True)
 
-    plan_patch: dict[str, Any] | None = None
-    effective_plan = plan
-    if job.get("action") == "generate" and _is_simple_mode(plan):
+    action = job["action"]
+    intent = job.get("creation") or creation.validate_creation(
+        creation.creation_input(plan, action=action)
+    )
+    resolved = job.get("resolved")
+    request = None if resolved else creation.planner_request(intent)
+    if resolved:
+        brief = resolved["brief"]
+    elif request is not None:
         _note_stage(on_stage, "planning")
-        plan_patch = _plan_from_query(plan)
-        effective_plan = {**plan, **plan_patch}
+        brief = creation.apply_planner(
+            intent,
+            _mock_planner(request),
+            {"name": request["planner"], "lm_model": "mock", "deterministic": True},
+        )
         _abort_if_cancelled(cancel_check)
+    else:
+        brief = creation.brief_without_planning(intent)
+    if on_resolved is not None:
+        on_resolved(brief)
+    fields = creation.generation_fields(brief, action)
 
     _note_stage(on_stage, "rendering")
     _abort_if_cancelled(cancel_check)
     seed = job.get("seed", -1)
     if seed is None or seed == -1:
-        seed = random.randint(1, 2**31 - 1)
+        seed = creation.draw_seed()
 
     audio_path = take_dir / "mix.wav"
     duration = _write_silent_wav(audio_path)
@@ -195,17 +229,22 @@ def run_job(
     write_mix_mp3(audio_path)
     _abort_if_cancelled(cancel_check)
 
+    cot_fill = MOCK_COT_FILL if fields["use_cot_metas"] else {}
+    lm_metadata = {"caption": f"cot: {brief['caption']}", "vocal_language": "en"}
+    actual, actual_origins = creation.actual_values(brief, fields, cot_fill, lm_metadata)
+    plan_patch = creation.plan_patch_from_brief(brief, job.get("job_id") or "")
+
     meta = {
         "id": take_id,
         "parent_take_id": job.get("source_take_id"),
-        "task_type": TASK_TYPE_BY_ACTION[job["action"]],
+        "task_type": TASK_TYPE_BY_ACTION[action],
         "dit_profile": job["dit_profile"],
         "seed": seed,
         "duration_sec": duration,
-        "caption": effective_plan.get("caption", ""),
-        "lyrics": effective_plan.get("lyrics", ""),
-        "bpm": effective_plan.get("bpm"),
-        "keyscale": effective_plan.get("keyscale"),
+        "caption": actual["caption"],
+        "lyrics": actual["lyrics"],
+        "bpm": actual["bpm"],
+        "keyscale": actual["keyscale"],
         "created_at": datetime.now(UTC).isoformat(),
         "score": None,
         "has_lrc": False,
@@ -221,6 +260,19 @@ def run_job(
         "lora_id": job.get("lora_id"),
         "favorite": False,
         "notes": "",
+        # Same backend half of the take provenance as the real adapter.
+        "provenance": {
+            "brief": brief,
+            "request": {
+                "task_type": TASK_TYPE_BY_ACTION[action],
+                **fields,
+                "seed": job.get("seed", -1),
+                "inference_steps": GENERATION_STEPS[job["dit_profile"]],
+                "guidance_scale": GENERATION_GUIDANCE_SCALE[job["dit_profile"]],
+            },
+            "actual": {**actual, "seed": seed},
+            "actual_origins": actual_origins,
+        },
     }
     return meta, plan_patch, None
 

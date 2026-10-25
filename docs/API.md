@@ -101,7 +101,8 @@ object below. `/api` answers `200` with the queue row.
   "lora_id": null,
   "audio_cover_strength": 0.7,
   "seed": -1,
-  "batch_size": 1
+  "batch_size": 1,
+  "creation_mode": null
 }
 ```
 
@@ -121,6 +122,24 @@ What is validated at enqueue time, before anything reaches the GPU:
 - `batch_size` is forced to 1.
 - `audio_cover_strength` must be within `0.0`-`1.0` (which also rejects NaN
   and infinities).
+- `generate` resolves the plan by the creation contract (SPEC.md section
+  16.3). `creation_mode` (`from_idea` re-plans from `query`, `from_brief`
+  renders the stored brief) overrides the plan's own mode for this job.
+  Unsupported metas fail here with `param` naming the field: BPM 30-300,
+  duration 10-600 seconds, a key such as `C major` or `F#m`, a meter of `2`,
+  `3`, `4`, `6`, `2/4`, `3/4`, `4/4`, or `6/8`, and an ACE-Step language code.
+  Instrumental with real lyrics is `instrumental_lyrics_conflict`.
+
+### Plan writes
+
+`PUT .../plan` replaces the plan. The server adds `creation_mode`,
+`field_origins` (`user`, `planner`, `preset`, `default`, or `unknown` for
+`caption`, `lyrics`, `vocal_language`, `bpm`, `keyscale`, `timesignature`,
+and `duration_sec`), `revision`, and the server-managed `brief`. A field
+whose value changed becomes `user` unless the body names another origin; a
+changed `query` switches to `from_idea`. An optional `expected_revision`
+makes the write conditional (`409` when the plan has moved on). A null
+`duration_sec` lets the planner or ACE-Step choose the length.
 
 ## Job lifecycle
 

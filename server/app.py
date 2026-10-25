@@ -12,7 +12,7 @@ import os
 import secrets
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.exception_handlers import request_validation_exception_handler
@@ -222,6 +222,9 @@ class JobBody(BaseModel):
     audio_cover_strength: float = Field(0.7, ge=0.0, le=1.0)
     seed: int = -1
     batch_size: int = 1
+    # SPEC.md sec 16.3: `from_idea` re-plans from the idea, `from_brief`
+    # renders the stored brief. Omitted: the plan's own creation_mode.
+    creation_mode: Literal["from_idea", "from_brief"] | None = None
 
 
 @app.exception_handler(storage.PathJailError)
@@ -239,6 +242,11 @@ def _take_not_found_handler(request, exc: storage.TakeNotFound):
     return _error_body(request, 404, f"take not found: {exc}", code="not_found")
 
 
+@app.exception_handler(storage.PlanRevisionConflict)
+def _plan_revision_handler(request, exc: storage.PlanRevisionConflict):
+    return _error_body(request, 409, str(exc), code="conflict", param="expected_revision")
+
+
 @app.exception_handler(storage.LoraNotFound)
 def _lora_not_found_handler(request, exc: storage.LoraNotFound):
     return _error_body(request, 404, f"lora not found: {exc}", code="not_found")
@@ -251,7 +259,13 @@ def _job_not_found_handler(request, exc: jobs.JobNotFound):
 
 @app.exception_handler(jobs.JobError)
 def _job_error_handler(request, exc: jobs.JobError):
-    return _error_body(request, 400, str(exc), code="invalid_request")
+    return _error_body(
+        request,
+        400,
+        str(exc),
+        code=getattr(exc, "code", "invalid_request"),
+        param=getattr(exc, "param", None),
+    )
 
 
 @app.exception_handler(ProvisionerError)
@@ -369,7 +383,12 @@ def delete_project(project_id: str) -> Response:
 
 @app.put("/api/projects/{project_id}/plan")
 def put_plan(project_id: str, body: dict[str, Any]) -> dict:
-    return storage.save_plan(project_id, body)
+    # SPEC.md sec 16.3: an optional `expected_revision` makes the replace
+    # conditional. It is a request field, not part of plan.json.
+    expected = body.pop("expected_revision", None)
+    if expected is not None and (isinstance(expected, bool) or not isinstance(expected, int)):
+        raise ValueError("expected_revision must be an integer")
+    return storage.save_plan(project_id, body, expected_revision=expected)
 
 
 @app.get("/api/projects/{project_id}/takes")

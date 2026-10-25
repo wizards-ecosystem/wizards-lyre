@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import math
 
+from server.generation import brief as creation
 from server.storage import jsonio
 from server.storage.paths import plan_json_path
 
@@ -22,6 +23,13 @@ def _normalize_plan(plan: dict) -> dict:
     checkbox) would otherwise have to special-case a missing key at every
     read site instead of once here."""
     plan.setdefault("caption_rewrite", False)
+    # SPEC.md sec 16.3: an old plan has no creation contract fields. Its mode
+    # is derived by the old Simple/Custom rule and every origin is
+    # `unknown` -- presented as such, never invented.
+    plan.setdefault("creation_mode", creation.legacy_mode(plan))
+    plan["field_origins"] = creation.plan_origins(plan)
+    plan.setdefault("revision", 0)
+    plan.setdefault("brief", None)
     return plan
 
 
@@ -45,12 +53,17 @@ def default_plan() -> dict:
         "timesignature": "4/4",
         "duration_sec": 120,
         "sections": [],
-        # SPEC.md sec 9.2/7.2: Custom-mode checkbox controlling whether
-        # ACE-Step's LM ("thinking") is allowed to rewrite the user's caption.
-        # New plans allow rewriting until the user disables it, as required
-        # by SPEC.md sec 7.2. _normalize_plan separately keeps legacy plans
-        # without this field on their historical False behavior.
-        "caption_rewrite": True,
+        # SPEC.md sec 16.3 rule 5: rewriting a user-authored caption is
+        # opt-in, so new plans start with it off. (Section 7.2 used to
+        # default it on; section 16 supersedes that.) _normalize_plan keeps
+        # legacy plans without this field on False too.
+        "caption_rewrite": False,
+        # SPEC.md sec 16.3 creation contract. A new plan resolves its idea
+        # on the first Generate; nothing is an explicit user lock yet.
+        "creation_mode": "from_idea",
+        "field_origins": creation.default_origins(),
+        "revision": 0,
+        "brief": None,
     }
 
 
@@ -109,9 +122,10 @@ def validate_plan(plan: object) -> dict:
     - field types are enforced -- `query`/`caption`/`lyrics`/
       `vocal_language`/`timesignature` strings, `negative` a list of strings,
       `instrumental`/`caption_rewrite` booleans, `bpm` int-or-null,
-      `keyscale` string-or-null, `duration_sec` a number, `sections` a list
+      `keyscale` string-or-null, `duration_sec` a number or null, `sections` a list
       of dicts each with `name` (str), `start_sec`/`end_sec` (numbers) and an
-      optional `lyrics` (str). Any invalid value raises `ValueError` (->
+      optional `lyrics` (str), and the section 16.3 contract fields
+      (`creation_mode`, `field_origins`, `revision`). Any invalid value raises `ValueError` (->
       HTTP 400 via server/app.py) naming the offending field;
     - unknown top-level keys (and unknown keys inside a section) are dropped
       rather than persisted.
@@ -139,6 +153,29 @@ def validate_plan(plan: object) -> dict:
     for i, item in enumerate(negative):
         _plan_string(f"negative[{i}]", item)
 
+    if normalized["creation_mode"] not in creation.MODES:
+        raise ValueError(
+            f"invalid plan field 'creation_mode': expected one of {list(creation.MODES)}, "
+            f"got {normalized['creation_mode']!r}"
+        )
+    origins = normalized["field_origins"]
+    if not isinstance(origins, dict):
+        raise _plan_type_error("field_origins", "an object", origins)
+    for key, origin in origins.items():
+        if key in creation.TRACKED_FIELDS and origin not in creation.ORIGINS:
+            raise ValueError(
+                f"invalid plan field 'field_origins.{key}': expected one of "
+                f"{list(creation.ORIGINS)}, got {origin!r}"
+            )
+    normalized["field_origins"] = {
+        key: origins.get(key, defaults["field_origins"][key]) for key in creation.TRACKED_FIELDS
+    }
+    revision = normalized["revision"]
+    if isinstance(revision, bool) or not isinstance(revision, int) or revision < 0:
+        raise _plan_type_error("revision", "a non-negative integer", revision)
+    # Server-managed (SPEC.md sec 16.3); a client cannot write it.
+    normalized["brief"] = None
+
     bpm = normalized["bpm"]
     if bpm is not None and (isinstance(bpm, bool) or not isinstance(bpm, int)):
         raise _plan_type_error("bpm", "an integer or null", bpm)
@@ -147,7 +184,9 @@ def validate_plan(plan: object) -> dict:
     if keyscale is not None and not isinstance(keyscale, str):
         raise _plan_type_error("keyscale", "a string or null", keyscale)
 
-    _plan_number("duration_sec", normalized["duration_sec"])
+    # Null lets the planner or ACE-Step's CoT choose (SPEC.md sec 7.2/16.3).
+    if normalized["duration_sec"] is not None:
+        _plan_number("duration_sec", normalized["duration_sec"])
 
     sections = normalized["sections"]
     if not isinstance(sections, list):

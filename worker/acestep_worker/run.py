@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from server.generation import brief as creation
 from worker.acestep_worker.api import _api_call, _import_acestep
 from worker.acestep_worker.errors import WorkerUnavailable
 from worker.acestep_worker.loading import (
@@ -20,15 +21,15 @@ from worker.acestep_worker.loading import (
     _ensure_lora_adapter,
 )
 from worker.acestep_worker.results import (
-    _is_simple_mode,
     _lyric_timestamps,
-    _plan_from_query,
     _quality_score,
     _repaint_meta,
     _result_field,
+    _run_planner,
 )
 from worker.acestep_worker.settings import (
     _LOCK,
+    DEFAULT_LM,
     GENERATION_GUIDANCE_SCALE,
     GENERATION_STEPS,
     LORA_BASE_DIT_PROFILE,
@@ -62,6 +63,7 @@ def run_job(
     on_dit_loaded: Callable[[str], None] | None = None,
     on_stage: Callable[[str], None] | None = None,
     cancel_check: Callable[[], bool] | None = None,
+    on_resolved: Callable[[dict], None] | None = None,
 ) -> tuple[dict, dict | None, str | None]:
     """Run one real ACE-Step job. Returns `(take_meta, plan_patch, lrc_text)`;
     `plan_patch` is a delta of the LM-filled fields to persist when this was
@@ -99,19 +101,40 @@ def run_job(
     longer matches this adapter; `server.jobs` catches that and marks the
     job `error` without crashing the HTTP process.
 
-    `on_stage` records `loading_model`, `planning` (simple-mode generate
-    only), `rendering`, and `writing_take`. `cancel_check` is consulted
-    before the swap, before `generate_music`, and after it returns
-    (SPEC.md sec 15.7). The `generate_music` arguments themselves are
-    unchanged.
+    `on_stage` records `loading_model`, `planning` (only when the creation
+    input needs the planner), `rendering`, and `writing_take`.
+    `cancel_check` is consulted before the swap, before `generate_music`,
+    and after it returns (SPEC.md sec 15.7).
+
+    What renders comes from `server.generation.brief` (SPEC.md sec 16.3):
+    `job["creation"]` is the creation input frozen at enqueue (derived from
+    `plan` only for a caller that predates it), and `job["resolved"]`, when
+    present, is a brief an earlier attempt already resolved, which is
+    rendered as is with no replanning. `on_resolved(brief)` is called once
+    the brief is final and before `generate_music`, so the caller can
+    persist it; it may raise `JobCancelled` when this attempt no longer owns
+    the job.
     """
     _abort_if_cancelled(cancel_check)
     _note_stage(on_stage, "loading_model")
     _abort_if_cancelled(cancel_check)
-    _, GenerationParams, GenerationConfig, _, generate_music, create_sample = _import_acestep()
+    (
+        _,
+        GenerationParams,
+        GenerationConfig,
+        _,
+        generate_music,
+        create_sample,
+        format_sample,
+    ) = _import_acestep()
     take_dir.mkdir(parents=True, exist_ok=True)
 
-    simple_mode = _is_simple_mode(job, plan)
+    action = job["action"]
+    intent = job.get("creation") or creation.validate_creation(
+        creation.creation_input(plan, action=action)
+    )
+    resolved = job.get("resolved")
+    request = None if resolved else creation.planner_request(intent)
 
     with _LOCK:
         handler, lm, dit_profile = _ensure_loaded(job["dit_profile"])
@@ -135,38 +158,34 @@ def run_job(
             )
         _ensure_lora_adapter(handler, lora_id, lora_adapter_path)
 
-        if simple_mode:
+        if resolved:
+            brief = resolved["brief"]
+        elif request is not None:
             _note_stage(on_stage, "planning")
             _abort_if_cancelled(cancel_check)
-            effective_plan = _plan_from_query(create_sample, lm, plan)
+            sample = _run_planner(request, create_sample, format_sample, lm)
+            brief = creation.apply_planner(
+                intent,
+                sample,
+                {"name": request["planner"], "lm_model": DEFAULT_LM, "deterministic": False},
+            )
         else:
-            effective_plan = plan
-        # Null/omitted bpm, key, or duration: let ACE-Step's CoT fill them in
-        # (SPEC.md sec 7.2, use_cot_metas).
-        use_cot_metas = simple_mode or any(
-            effective_plan.get(k) is None for k in ("bpm", "keyscale", "duration_sec")
-        )
+            brief = creation.brief_without_planning(intent)
+        if on_resolved is not None:
+            on_resolved(brief)
 
-        # SPEC.md sec 7.2/9.2: Simple mode always runs with thinking=true (the
-        # LM fills the whole plan from `query`). Custom mode leaves thinking
-        # off by default -- unlike simple mode, the caption here is
-        # human-written, so ACE-Step's LM must not silently rewrite it unless
-        # the user opted in via the plan's `caption_rewrite` checkbox. Gated
-        # on `job["action"] == "generate"` (equivalently: whenever
-        # `simple_mode` could be true) rather than plan.get(...) alone, so a
-        # `caption_rewrite: true` left over from an earlier Custom generate
-        # can never leak into a cover/repaint/extract/lego/complete job on
-        # the same plan -- those actions' thinking must stay exactly as
-        # before this field existed (SPEC.md sec 4.2: "thinking=false is
-        # allowed for cover/repaint/extract... upstream ignores LM for those
-        # anyway").
-        thinking = simple_mode or (
-            job["action"] == "generate" and bool(plan.get("caption_rewrite", False))
-        )
+        # The creative kwargs (caption, lyrics, metas, and every LM flag)
+        # come from the shared resolver so the mock builds the same request.
+        # All four LM flags are explicit: upstream defaults use_cot_caption
+        # and use_cot_language to True and runs the LM whenever any CoT
+        # flag is set, which used to rewrite a caption and language even
+        # with caption rewrite off.
+        fields = creation.generation_fields(brief, action)
 
         # SPEC.md sec 7.3: "-1 from the user means worker picks and records
         # it" -- any other value is a fixed seed the user expects to be able
-        # to reproduce.
+        # to reproduce. `server.jobs` concretizes -1 before calling this, so
+        # -1 only reaches here from a caller that predates that.
         #
         # Reaching that takes all three of the settings below, and getting two
         # of them right is indistinguishable from getting none right. Upstream
@@ -189,20 +208,8 @@ def run_job(
         params = _api_call(
             "GenerationParams",
             GenerationParams,
-            task_type=TASK_TYPE_BY_ACTION[job["action"]],
-            caption=effective_plan.get("caption") or "",
-            lyrics=effective_plan.get("lyrics") or "",
-            bpm=effective_plan.get("bpm"),
-            keyscale=effective_plan.get("keyscale") or "",
-            duration=effective_plan.get("duration_sec"),
-            instrumental=effective_plan.get("instrumental", False),
-            vocal_language=effective_plan.get("vocal_language") or "unknown",
-            # ACE-Step calls .strip() on timesignature; None crashes inside
-            # generate_music (AttributeError), so never forward a missing
-            # plan field as None -- empty string is the upstream default.
-            timesignature=effective_plan.get("timesignature") or "",
-            thinking=thinking,
-            use_cot_metas=use_cot_metas,
+            task_type=TASK_TYPE_BY_ACTION[action],
+            **fields,
             seed=seed,
             src_audio=job.get("src_audio"),
             audio_cover_strength=(
@@ -220,7 +227,7 @@ def run_job(
             # TypeError on every real call, converted to WorkerUnavailable).
             instruction=(
                 job.get("track_name")
-                if job["action"] in TRACK_INSTRUCTION_ACTIONS
+                if action in TRACK_INSTRUCTION_ACTIONS
                 else "Fill the audio semantic mask based on the given conditions:"
             ),
             inference_steps=GENERATION_STEPS[dit_profile],
@@ -322,13 +329,24 @@ def run_job(
             return extra.get(name, fallback)
         return getattr(extra, name, fallback)
 
-    caption = _extra("caption", effective_plan.get("caption", ""))
-    lyrics = _extra("lyrics", effective_plan.get("lyrics", ""))
-    bpm = _extra("bpm", effective_plan.get("bpm"))
-    keyscale = _extra("keyscale", effective_plan.get("keyscale"))
-    duration_sec = _extra("duration", effective_plan.get("duration_sec"))
-    vocal_language = _extra("vocal_language", effective_plan.get("vocal_language"))
-    timesignature = _extra("timesignature", effective_plan.get("timesignature"))
+    # Upstream's extra_outputs carries no caption or metas of its own: what
+    # the DiT rendered is the brief, plus whatever CoT filled into
+    # audio["params"]["cot_*"], plus a caption or language the LM rewrote
+    # (extra_outputs["lm_metadata"]) when those flags were on.
+    audio_params = _result_field(audio, "params", None)
+    lm_metadata = _extra("lm_metadata", None)
+    actual, actual_origins = creation.actual_values(
+        brief,
+        fields,
+        audio_params if isinstance(audio_params, dict) else None,
+        lm_metadata if isinstance(lm_metadata, dict) else None,
+    )
+    caption = actual["caption"]
+    lyrics = actual["lyrics"]
+    bpm = actual["bpm"]
+    keyscale = actual["keyscale"]
+    duration_sec = actual["duration_sec"]
+    vocal_language = actual["vocal_language"]
     score = _quality_score(
         handler,
         extra_lookup=_extra,
@@ -350,7 +368,6 @@ def run_job(
     # fallbacks for other upstream versions. Falling through to the
     # requested seed would silently record -1 for random generation instead
     # of the seed ACE-Step actually used (SPEC.md sec 7.3).
-    audio_params = _result_field(audio, "params", None)
     seed = _result_field(audio_params, "seed", None)
     if seed is None:
         seed = _result_field(audio, "seed", None)
@@ -359,26 +376,10 @@ def run_job(
     if seed is None:
         seed = job.get("seed", -1)
 
-    plan_patch = None
-    if simple_mode:
-        # The LM filled caption/lyrics/metas from `query` -- persist them
-        # onto plan.json instead of discarding them (SPEC.md sec 7.2),
-        # including duration and any other metadata ACE-Step filled in.
-        #
-        # This is a patch, not a full plan: `plan` here was loaded before
-        # this (possibly long-running) generation started, so spreading it
-        # into the patch would let a stale snapshot clobber any edits saved
-        # while the job was running. server.jobs merges this onto whatever
-        # plan is current on disk when the job finishes instead.
-        plan_patch = {
-            "caption": caption,
-            "lyrics": lyrics,
-            "bpm": bpm,
-            "keyscale": keyscale,
-            "duration_sec": duration_sec,
-            "vocal_language": vocal_language,
-            "timesignature": timesignature,
-        }
+    # A planned brief's fields are merged into the editable draft by
+    # server.jobs, and only if the draft has not moved on since submission
+    # (SPEC.md sec 16.3 "After a planned render").
+    plan_patch = creation.plan_patch_from_brief(brief, job.get("job_id") or "")
 
     meta = {
         "id": take_id,
@@ -415,5 +416,19 @@ def run_job(
         "lora_id": job.get("lora_id"),
         "favorite": False,
         "notes": "",
+        # SPEC.md sec 16.4: the backend's half of the take provenance.
+        # server.jobs adds job identity, timestamps, and audio details.
+        "provenance": {
+            "brief": brief,
+            "request": {
+                "task_type": TASK_TYPE_BY_ACTION[action],
+                **fields,
+                "seed": job.get("seed", -1),
+                "inference_steps": GENERATION_STEPS[dit_profile],
+                "guidance_scale": GENERATION_GUIDANCE_SCALE[dit_profile],
+            },
+            "actual": {**actual, "seed": seed},
+            "actual_origins": actual_origins,
+        },
     }
     return meta, plan_patch, lrc_text

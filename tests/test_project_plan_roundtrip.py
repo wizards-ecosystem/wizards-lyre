@@ -37,25 +37,30 @@ def test_project_plan_roundtrip(api_client: TestClient) -> None:
     }
     resp = api_client.put(f"/api/projects/{project_id}/plan", json=plan)
     assert resp.status_code == 200
-    assert resp.json() == plan
+    saved = resp.json()
+    assert {key: saved[key] for key in plan} == plan
 
     resp = api_client.get(f"/api/projects/{project_id}")
     assert resp.status_code == 200
     body = resp.json()
-    assert body["plan"] == plan
+    assert body["plan"] == saved
     assert body["project"]["id"] == project_id
 
 
-def test_default_plan_has_caption_rewrite_true(api_client: TestClient) -> None:
-    """SPEC.md sec 9.2/7.2: a brand-new project's plan defaults `caption_rewrite`
-    to True -- Custom-mode generation may rewrite the user's caption unless
-    they explicitly disable it."""
+def test_default_plan_has_caption_rewrite_false(api_client: TestClient) -> None:
+    """SPEC.md sec 16.3 rule 5: caption rewriting is opt-in for a
+    user-authored caption, so a brand-new project's plan starts with
+    `caption_rewrite` off (this supersedes section 7.2's old default)."""
     project = api_client.post("/api/projects", json={"title": "Defaults"}).json()
     project_id = project["id"]
 
     resp = api_client.get(f"/api/projects/{project_id}")
     assert resp.status_code == 200
-    assert resp.json()["plan"]["caption_rewrite"] is True
+    plan = resp.json()["plan"]
+    assert plan["caption_rewrite"] is False
+    assert plan["creation_mode"] == "from_idea"
+    assert plan["revision"] == 0
+    assert set(plan["field_origins"].values()) == {"default"}
 
 
 def test_plan_missing_caption_rewrite_loads_as_false(

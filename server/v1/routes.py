@@ -70,6 +70,11 @@ _ERRORS: dict[int | str, dict[str, Any]] = {
     404: {"model": Error, "description": "Unknown project, take, or job"},
 }
 
+_PLAN_ERRORS: dict[int | str, dict[str, Any]] = {
+    **_ERRORS,
+    409: {"model": Error, "description": "expected_revision no longer matches the plan"},
+}
+
 _POST_ERRORS: dict[int | str, dict[str, Any]] = {
     **_ERRORS,
     409: {
@@ -219,14 +224,16 @@ def delete_project(
 @router.put(
     "/projects/{project_id}/plan",
     response_model=Plan,
-    responses=_ERRORS,
+    responses=_PLAN_ERRORS,
 )
 def put_plan(
     project_id: str,
     body: PlanWrite,
     _auth: Annotated[Any, Depends(require_scope("write"))],
 ) -> dict[str, Any]:
-    return storage.save_plan(project_id, body.model_dump(exclude_unset=True))
+    sent = body.model_dump(exclude_unset=True)
+    expected = sent.pop("expected_revision", None)
+    return storage.save_plan(project_id, sent, expected_revision=expected)
 
 
 @router.get("/projects/{project_id}/takes", response_model=TakePage, responses=_ERRORS)

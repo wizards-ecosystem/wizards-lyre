@@ -26,6 +26,7 @@ from server import config
 from server.storage.errors import (
     LoraNotFound,
     PathJailError,
+    PlanRevisionConflict,
     ProjectNotFound,
     TakeNotFound,
 )
@@ -97,6 +98,7 @@ __all__ = [
     "VALID_DIT_PROFILES",
     "LoraNotFound",
     "PathJailError",
+    "PlanRevisionConflict",
     "ProjectNotFound",
     "TakeNotFound",
     "_jail",

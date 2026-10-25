@@ -99,6 +99,8 @@ class FakeGenerationParams:
         timesignature: Any,
         thinking: bool,
         use_cot_metas: bool,
+        use_cot_caption: bool,
+        use_cot_language: bool,
         seed: int,
         src_audio: Any,
         audio_cover_strength: Any,
@@ -120,6 +122,16 @@ class FakeGenerationParams:
         self.timesignature = timesignature
         self.thinking = thinking
         self.use_cot_metas = use_cot_metas
+        self.use_cot_caption = use_cot_caption
+        self.use_cot_language = use_cot_language
+        # Upstream's CoT writes what it filled back onto params as cot_*;
+        # generate_music below simulates that for unset metas.
+        self.cot_bpm: Any = None
+        self.cot_keyscale = ""
+        self.cot_timesignature = ""
+        self.cot_duration: Any = None
+        self.cot_vocal_language = "unknown"
+
         self.seed = seed
         self.src_audio = src_audio
         self.audio_cover_strength = audio_cover_strength
@@ -129,6 +141,9 @@ class FakeGenerationParams:
         self.inference_steps = inference_steps
         self.guidance_scale = guidance_scale
         self.enable_normalization = enable_normalization
+
+    def to_dict(self) -> dict[str, Any]:
+        return dict(vars(self))
 
 
 class FakeGenerationConfig:
@@ -173,6 +188,8 @@ def _install_fake_acestep(
     handler_init_result: tuple[str, bool] = ("dit ready", True),
     audio_path_override: Path | None = None,
     create_sample_result: dict | None = None,
+    format_sample_result: dict | None = None,
+    lm_metadata: dict | None = None,
     lyric_score_tensors: dict[str, Any] | None = None,
     lyric_score_result: dict[str, Any] | None = None,
     lyric_timestamp_result: dict[str, Any] | None = None,
@@ -375,6 +392,25 @@ def _install_fake_acestep(
             "language": "ja",
         }
 
+    def format_sample(
+        llm_handler: Any,
+        caption: str,
+        lyrics: str,
+        user_metadata: Any = None,
+    ) -> dict:
+        log.append(("format_sample", llm_handler, caption, lyrics, user_metadata))
+        if format_sample_result is not None:
+            return format_sample_result
+        return {
+            "caption": f"formatted: {caption}",
+            "lyrics": f"REFORMATTED {lyrics}",
+            "bpm": 140,
+            "keyscale": "G major",
+            "duration": 75,
+            "language": "ja",
+            "timesignature": "3",
+        }
+
     def generate_music(
         *, dit_handler: Any, llm_handler: Any, params: Any, config: Any, save_dir: str
     ) -> FakeResult:
@@ -386,18 +422,28 @@ def _install_fake_acestep(
         else:
             out_path = Path(save_dir) / f"output_0{returned_audio_suffix}"
         _write_tiny_wav(out_path)  # fine as fixture bytes regardless of extension
-        # Real ACE-Step audio entries are dicts, and the actual seed used is
-        # nested under "params", not top-level -- exactly what the reviewer
-        # flagged as misread.
-        audio = {"path": str(out_path), "params": {"seed": 999}}
-        extra_outputs = {
-            "caption": params.caption,
-            "lyrics": params.lyrics,
-            "bpm": params.bpm,
-            "keyscale": params.keyscale,
-            "duration": params.duration,
-            "vocal_language": "en",
-            "timesignature": "4/4",
+        # Upstream's CoT only fills what the request left unset, and records
+        # the fill on params as cot_* (acestep/inference.py
+        # _update_metadata_from_lm).
+        if params.use_cot_metas:
+            if params.bpm is None:
+                params.cot_bpm = 101
+            if not params.keyscale:
+                params.cot_keyscale = "E minor"
+            if not params.timesignature:
+                params.cot_timesignature = "4"
+            if params.duration is None:
+                params.cot_duration = 33.0
+        # Real ACE-Step audio entries are dicts: "params" is the full
+        # GenerationParams dict plus the actual seed -- exactly what the
+        # reviewer flagged as misread when it was looked for top-level.
+        audio = {"path": str(out_path), "params": {**params.to_dict(), "seed": 999}}
+        # extra_outputs carries no caption or metas of its own, only the
+        # LM's metadata (and tensors / time costs).
+        extra_outputs: dict[str, Any] = {
+            "lm_metadata": lm_metadata
+            if lm_metadata is not None
+            else {"caption": f"lm rewrote: {params.caption}", "vocal_language": "de"},
         }
         if lyric_score_tensors is not None:
             extra_outputs.update(lyric_score_tensors)
@@ -414,6 +460,7 @@ def _install_fake_acestep(
     inference_mod.GenerationConfig = FakeGenerationConfig
     inference_mod.generate_music = generate_music
     inference_mod.create_sample = create_sample
+    inference_mod.format_sample = format_sample
 
     monkeypatch.setitem(sys.modules, "acestep", acestep_pkg)
     monkeypatch.setitem(sys.modules, "acestep.handler", handler_mod)
@@ -846,22 +893,30 @@ def test_simple_mode_uses_module_level_create_sample_and_persists_full_plan(
     assert plan_patch is not None
     assert "dreamy synthwave drive" in plan_patch["caption"]
     assert meta["caption"] == plan_patch["caption"]
-    # SPEC.md sec 7.2: persist everything the LM/ACE-Step filled in, not
-    # just caption/lyrics/bpm/keyscale -- duration and other plan metadata
-    # (language, time signature) must round-trip too.
+    # SPEC.md sec 16.3: every field the planner filled is persisted with
+    # origin `planner`. This plan has no origins (legacy, all `unknown`), so
+    # the planner may fill its language the way Simple mode always did;
+    # create_sample's result names it "language", mapped onto Lyre's
+    # vocal_language.
     assert plan_patch["duration_sec"] == 30
-    assert plan_patch["vocal_language"] == "en"
-    assert plan_patch["timesignature"] == "4/4"
+    assert plan_patch["vocal_language"] == "ja"
+    assert plan_patch["field_origins"]["caption"] == "planner"
+    assert plan_patch["creation_mode"] == "from_brief"
+    # The planner left the meter unset, so it is not in the patch...
+    assert "timesignature" not in plan_patch
     assert meta["duration_sec"] == 30
 
     generate_call = next(e for e in log if e[0] == "generate_music")
     params = generate_call[3]
     assert params.thinking is True
     assert params.use_cot_metas is True
-    # create_sample's result carries the language under "language", not
-    # "vocal_language" (Lyre's own plan.json field name) -- confirms
-    # _plan_from_query maps it correctly before generation even runs.
+    # The planner wrote this caption; CoT must not rewrite it a second time.
+    assert params.use_cot_caption is False
+    assert params.use_cot_language is False
     assert params.vocal_language == "ja"
+    # ...and the CoT fill is what the take records, as origin `model`.
+    assert meta["provenance"]["actual"]["timesignature"] == "4"
+    assert meta["provenance"]["actual_origins"]["timesignature"] == "model"
 
 
 def test_custom_mode_caption_rewrite_enabled_sets_thinking_true(
@@ -894,12 +949,18 @@ def test_custom_mode_caption_rewrite_enabled_sets_thinking_true(
         job=job, plan=plan, take_id="t-rewrite-on", take_dir=tmp_path / "take-rewrite-on"
     )
 
-    assert plan_patch is None  # still not simple mode -- nothing to persist onto plan.json
-    assert meta["caption"] == plan["caption"]  # the fake echoes params.caption back unchanged
+    assert plan_patch is None  # nothing was planned -- nothing to persist onto plan.json
 
     generate_call = next(e for e in log if e[0] == "generate_music")
     params = generate_call[3]
     assert params.thinking is True
+    assert params.use_cot_caption is True
+    # Explicit language: CoT must not detect a different one.
+    assert params.use_cot_language is False
+    # The take records the caption the LM actually rendered, not the input.
+    assert meta["caption"] == "lm rewrote: anthemic pop chorus"
+    assert meta["provenance"]["actual_origins"]["caption"] == "model"
+    assert meta["provenance"]["brief"]["caption"] == "anthemic pop chorus"
 
 
 def test_custom_mode_caption_rewrite_disabled_sets_thinking_false(
@@ -933,6 +994,11 @@ def test_custom_mode_caption_rewrite_disabled_sets_thinking_false(
     generate_call = next(e for e in log if e[0] == "generate_music")
     params = generate_call[3]
     assert params.thinking is False
+    # Upstream defaults both of these to True and then runs the LM anyway,
+    # which used to rewrite a caption the user had locked.
+    assert params.use_cot_caption is False
+    assert params.use_cot_language is False
+    assert params.use_cot_metas is False
 
 
 def test_caption_rewrite_does_not_leak_into_cover_repaint_extract(

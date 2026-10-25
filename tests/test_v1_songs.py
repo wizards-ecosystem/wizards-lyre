@@ -78,7 +78,7 @@ def test_prompt_only_instrumental_is_filled_by_the_worker(client: TestClient) ->
     # The mock's plan patch fills bpm and key and leaves a provided duration.
     assert plan["duration_sec"] == 10
     assert plan["bpm"] == 120
-    assert plan["keyscale"] == "C Major"
+    assert plan["keyscale"] == "C major"
 
 
 def test_caller_caption_is_kept_unless_rewrite_is_requested(client: TestClient) -> None:
@@ -185,12 +185,22 @@ def test_song_plan_is_written_before_the_worker_runs(api_client: TestClient) -> 
     assert empty["plan"]["query"] == "solo piano"
     assert empty["plan"]["duration_sec"] is None
 
+    conflict = api_client.post(
+        "/v1/songs",
+        json={"prompt": "solo piano", "instrumental": True, "lyrics": "[Verse]\nkeep me"},
+    )
+    # SPEC.md sec 16.3: Instrumental with real lyrics is a conflict the
+    # caller resolves; Lyre neither drops the words nor ignores the flag.
+    assert conflict.status_code == 400, conflict.text
+    assert conflict.json()["error"]["code"] == "instrumental_lyrics_conflict"
+    assert conflict.json()["error"]["param"] == "lyrics"
+
     custom = api_client.post(
         "/v1/songs",
         json={
             "prompt": "solo piano",
             "caption": "felt piano",
-            "instrumental": True,
+            "instrumental": False,
             "timesignature": "3/4",
             "vocal_language": " es ",
             "bpm": 72,
@@ -210,8 +220,10 @@ def test_song_plan_is_written_before_the_worker_runs(api_client: TestClient) -> 
     detail = api_client.get(f"/v1/projects/{body['project_id']}").json()
     assert detail["project"]["title"] == "Night"
     assert detail["project"]["dit_profile"] == "polish"
-    # Caller-supplied lyrics win over the instrumental placeholder.
     assert detail["plan"]["lyrics"] == "[Verse]\nkeep me"
+    assert detail["plan"]["creation_mode"] == "from_brief"
+    assert detail["plan"]["field_origins"]["bpm"] == "user"
+    assert detail["plan"]["field_origins"]["vocal_language"] == "user"
     assert detail["plan"]["caption"] == "felt piano"
     assert detail["plan"]["caption_rewrite"] is False
     assert detail["plan"]["timesignature"] == "3/4"
@@ -219,7 +231,7 @@ def test_song_plan_is_written_before_the_worker_runs(api_client: TestClient) -> 
     assert detail["plan"]["bpm"] == 72
     assert detail["plan"]["keyscale"] == "D Minor"
     assert detail["plan"]["duration_sec"] == 10
-    assert detail["plan"]["instrumental"] is True
+    assert detail["plan"]["instrumental"] is False
 
     placeholder = api_client.post(
         "/v1/songs",

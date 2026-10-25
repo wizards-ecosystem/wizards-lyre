@@ -8,7 +8,15 @@ from __future__ import annotations
 
 
 class JobError(ValueError):
-    pass
+    """`param` names the offending request field and `code` is the `/v1`
+    error code, when the validator knows them (SPEC.md sec 16.3)."""
+
+    def __init__(
+        self, message: str = "", *, param: str | None = None, code: str = "invalid_request"
+    ) -> None:
+        super().__init__(message)
+        self.param = param
+        self.code = code
 
 
 class JobNotFound(LookupError):

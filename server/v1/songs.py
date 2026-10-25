@@ -11,18 +11,21 @@ from __future__ import annotations
 from typing import Any
 
 from server import jobs, storage
+from server.generation import brief as creation
 from server.v1.models import SongCreate
 
 
 def song_plan(body: SongCreate) -> dict[str, Any]:
     """The plan.json a song request stores before the worker runs.
 
-    Simple mode is a prompt with no caption and no lyrics. Lyrics stay
-    empty there so the worker still recognizes simple mode and fills them
-    (including `[Instrumental]` when that flag is set). Custom mode stores
-    the caller's text, and an instrumental with no lyrics becomes the
-    `[Instrumental]` placeholder. `caption_rewrite` defaults to false only
-    once the caller has supplied caption or lyrics.
+    Simple mode is a prompt with no caption and no lyrics: `from_idea`, so
+    the worker's planner fills the plan (including `[Instrumental]` when that
+    flag is set). Custom mode stores the caller's text as `from_brief`, and
+    an instrumental with no lyrics becomes the `[Instrumental]` placeholder.
+    `caption_rewrite` defaults to false only once the caller has supplied
+    caption or lyrics. Every field the caller sent is origin `user`, so the
+    planner cannot replace it (SPEC.md sec 16.3); omitted fields are
+    `default`.
     """
     caption = body.caption or ""
     lyrics = body.lyrics or ""
@@ -31,6 +34,17 @@ def song_plan(body: SongCreate) -> dict[str, Any]:
         lyrics = "[Instrumental]"
     # Simple mode keeps the studio default. Custom mode defaults to false.
     caption_rewrite = not custom if body.caption_rewrite is None else body.caption_rewrite
+    sent = body.model_fields_set
+    origins = creation.default_origins()
+    if body.caption:
+        origins["caption"] = "user"
+    if body.lyrics:
+        origins["lyrics"] = "user"
+    for field in ("bpm", "keyscale", "timesignature", "duration_sec"):
+        if getattr(body, field) is not None:
+            origins[field] = "user"
+    if "vocal_language" in sent:
+        origins["vocal_language"] = "user"
     return {
         "query": body.prompt,
         "caption": caption,
@@ -44,6 +58,8 @@ def song_plan(body: SongCreate) -> dict[str, Any]:
         "duration_sec": body.duration_sec,
         "sections": [],
         "caption_rewrite": caption_rewrite,
+        "creation_mode": "from_brief" if custom else "from_idea",
+        "field_origins": origins,
     }
 
 

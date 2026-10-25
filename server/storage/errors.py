@@ -21,3 +21,7 @@ class TakeNotFound(LookupError):
 
 class LoraNotFound(LookupError):
     pass
+
+
+class PlanRevisionConflict(Exception):
+    """A conditional plan write (`expected_revision`) lost to a newer write."""

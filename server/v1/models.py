@@ -6,7 +6,7 @@ so `app.openapi()` carries a response schema for each operation
 from __future__ import annotations
 
 import math
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -90,6 +90,10 @@ class Plan(BaseModel):
     duration_sec: float | None = None
     sections: list[PlanSection] = Field(default_factory=list)
     caption_rewrite: bool = False
+    creation_mode: Literal["from_idea", "from_brief"] = "from_brief"
+    field_origins: dict[str, str] = Field(default_factory=dict)
+    revision: int = 0
+    brief: dict[str, Any] | None = None
 
 
 class Take(BaseModel):
@@ -182,6 +186,12 @@ class PlanWrite(BaseModel):
     duration_sec: float | None = None
     sections: list[PlanSection] | None = None
     caption_rewrite: bool | None = None
+    creation_mode: Literal["from_idea", "from_brief"] | None = None
+    field_origins: dict[str, str] | None = None
+    expected_revision: int | None = Field(
+        default=None,
+        description="Write only if the plan is still at this revision; 409 otherwise.",
+    )
 
 
 class ActiveTake(BaseModel):
@@ -209,6 +219,9 @@ class JobCreate(BaseModel):
     audio_cover_strength: float = Field(0.7, ge=0.0, le=1.0)
     seed: int = -1
     batch_size: int = 1
+    # SPEC.md sec 16.3: `from_idea` re-plans from the idea, `from_brief`
+    # renders the stored brief. Omitted: the plan's own creation_mode.
+    creation_mode: Literal["from_idea", "from_brief"] | None = None
 
 
 class UploadCreated(BaseModel):

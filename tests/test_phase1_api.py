@@ -329,11 +329,10 @@ def test_simple_query_generation_fills_and_persists_plan(client: TestClient) -> 
 def test_plan_patch_merge_preserves_concurrent_edits(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """SPEC.md sec 7.2: a plan edit saved while a simple-mode generate job is
-    running (sections, negative prompts, instrumental, ...) must survive --
-    the job's plan_patch is a delta merged onto the *current* on-disk plan
-    when the job finishes, not a full-plan overwrite of the stale snapshot
-    loaded when the job started."""
+    """SPEC.md sec 16.3: a plan edit saved while a planned generate is
+    running must survive. The draft moved past the revision the job was
+    submitted from, so the planner's output is not merged into it at all --
+    the newer text wins -- while the take still records the planned brief."""
     monkeypatch.setenv("LYRE_PROJECTS_DIR", str(tmp_path / "projects"))
     monkeypatch.setenv("LYRE_DB_PATH", str(tmp_path / "lyre.db"))
     monkeypatch.setenv("LYRE_WORKER", "mock")
@@ -352,9 +351,7 @@ def test_plan_patch_merge_preserves_concurrent_edits(
         # Simulate a user's PUT /plan landing while this "long-running" job
         # is executing -- server.jobs loaded `plan` before this call.
         current = storage.load_plan(project_id)
-        storage.save_plan(
-            project_id, {**current, "negative": ["concurrent edit"], "instrumental": True}
-        )
+        storage.save_plan(project_id, {**current, "negative": ["concurrent edit"]})
         return real_run_job(job=job, plan=plan, take_id=take_id, take_dir=take_dir, **kwargs)
 
     monkeypatch.setattr(mock_worker_module, "run_job", _run_job_with_concurrent_edit)
@@ -367,11 +364,15 @@ def test_plan_patch_merge_preserves_concurrent_edits(
     assert final_job["status"] == "done", final_job.get("error")
 
     final_plan = storage.load_plan(project_id)
-    # the concurrent edit to unrelated fields survived ...
+    # the concurrent edit survived ...
     assert final_plan["negative"] == ["concurrent edit"]
-    assert final_plan["instrumental"] is True
-    # ... and the LM-filled fields from the job were still applied on top
-    assert "dreamy synthwave drive" in final_plan["caption"]
+    # ... the planner did not overwrite the newer draft ...
+    assert final_plan["caption"] == ""
+    assert final_plan["creation_mode"] == "from_idea"
+    # ... and the take kept the brief it was rendered from.
+    take = storage.get_take(project_id, final_job["take_id"])
+    assert "dreamy synthwave drive" in take["caption"]
+    assert take["provenance"]["brief"]["origins"]["caption"] == "planner"
 
 
 def test_project_json_updates_are_serialized_across_threads(

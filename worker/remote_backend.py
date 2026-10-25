@@ -190,9 +190,16 @@ def run_job(
     on_dit_loaded: Callable[[str], None] | None = None,
     on_stage: Callable[[str], None] | None = None,
     cancel_check: Callable[[], bool] | None = None,
+    on_resolved: Callable[[dict], None] | None = None,
 ) -> tuple[dict, dict | None, str | None]:
     """Render one job on the connected Remote GPU. Returns `(take_meta,
-    plan_patch, lrc_text)` exactly as the local backends do."""
+    plan_patch, lrc_text)` exactly as the local backends do.
+
+    The host resolves the brief inside its own `run_job`, so `on_resolved`
+    cannot run before the remote DiT call; the brief arrives with the
+    result, in `meta["provenance"]`. An interrupted remote render is
+    therefore never resubmitted automatically (SPEC.md sec 16.5)."""
+    del on_resolved
     if cancel_check is not None and cancel_check():
         from server.jobs.errors import JobCancelled
 

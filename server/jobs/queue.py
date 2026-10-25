@@ -22,6 +22,7 @@ from server.jobs.validation import (
     LORA_ELIGIBLE_ACTIONS,
     PHASE_GATED_ACTIONS,
     VALID_ACTIONS,
+    _resolve_creation,
     _resolve_dit_profile,
     _resolve_lora,
     _resolve_lora_sources,
@@ -97,6 +98,7 @@ def enqueue_job(project_id: str, body: dict[str, Any]) -> dict:
         _check_worker_capability(dit_profile)
     _resolve_source_audio(project_id, action, body)
     track_name = _resolve_track_name(action, body)
+    creation_record = _resolve_creation(storage.load_plan(project_id), action, body)
     if action == "train_lora":
         name = body.get("name")
         if not isinstance(name, str) or not name.strip():
@@ -121,6 +123,8 @@ def enqueue_job(project_id: str, body: dict[str, Any]) -> dict:
     # into the GPU backend (0, negative, or huge batches -> invalid calls or
     # avoidable OOMs), and phase 1 only ever consumes the first audio anyway.
     payload["batch_size"] = 1
+    if creation_record is not None:
+        payload["creation"] = creation_record
     if resolved_lora is not None:
         # worker/acestep_worker.py's train_lora already writes final adapter
         # weights to <lora_dir>/adapter/final/ (see its module docstring) --

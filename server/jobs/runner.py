@@ -244,7 +244,13 @@ def _run_generate_shaped_job(
         _on_stage("loading_model")
         take_id, tdir = storage.allocate_take_dir(project_id)
         meta, plan_patch, lrc_text = worker_fn(
-            job={**payload, "action": action, "dit_profile": dit_profile, "src_audio": src_audio},
+            job={
+                **payload,
+                "job_id": job_id,
+                "action": action,
+                "dit_profile": dit_profile,
+                "src_audio": src_audio,
+            },
             plan=plan,
             take_id=take_id,
             take_dir=tdir,
@@ -272,15 +278,17 @@ def _run_generate_shaped_job(
             storage.write_take_lrc(project_id, take_id, lrc_text)
         storage.write_take_meta(project_id, take_id, meta)
         if plan_patch is not None:
-            # `plan` above was loaded before this (possibly long-running)
-            # generation started. merge_plan_patch re-reads the plan and
-            # merges only the LM-filled fields onto whatever is current on
-            # disk -- atomically, under storage's per-project lock, so a
-            # PUT /plan landing between the read and the write can't be
-            # silently overwritten (SPEC.md sec 5/7.2). `plan_patch` is a
-            # delta, not a full plan replacement -- see worker.mock_worker
-            # / worker.acestep_worker.
-            storage.merge_plan_patch(project_id, plan_patch)
+            # A planned brief updates the editable draft only if the draft is
+            # still at the revision this job was submitted from: a newer edit
+            # wins, and the take keeps its own brief either way (SPEC.md sec
+            # 16.3). The merge itself re-reads and writes under storage's
+            # per-project lock, so a concurrent PUT cannot interleave.
+            creation_record = payload.get("creation") or {}
+            storage.merge_plan_patch(
+                project_id,
+                plan_patch,
+                expected_revision=creation_record.get("plan_revision"),
+            )
         if _cancel_check():
             storage.discard_unfinished_take(project_id, take_id)
             mark_cancelled(job_id)
