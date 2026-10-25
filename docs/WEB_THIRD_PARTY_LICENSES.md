@@ -6,11 +6,9 @@ bundling and tree-shaking:
 
 | Package | Version | License |
 |---|---:|---|
-| js-tokens | 4.0.0 | MIT |
-| loose-envify | 1.4.0 | MIT |
-| react | 18.3.1 | MIT |
-| react-dom | 18.3.1 | MIT |
-| scheduler | 0.23.2 | MIT |
+| react | 19.3.1 | MIT |
+| react-dom | 19.3.1 | MIT |
+| scheduler | 0.28.0 | MIT |
 | wavesurfer.js | 7.12.11 | BSD-3-Clause |
 
 The versions are resolved by `web/package-lock.json`. The required copyright
@@ -25,11 +23,7 @@ The compiled interface also embeds these open-source variable fonts:
 
 ## MIT-licensed packages
 
-Copyright (c) 2014, 2015, 2016, 2017, 2018 Simon Lydell (`js-tokens`)
-
-Copyright (c) 2015 Andres Suarez (`loose-envify`)
-
-Copyright (c) Facebook, Inc. and its affiliates. (React, React DOM, Scheduler)
+Copyright (c) Meta Platforms, Inc. and affiliates. (React, React DOM, Scheduler)
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
