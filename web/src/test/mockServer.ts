@@ -10,6 +10,7 @@
 // test explicitly scripts a different sequence via scriptNextJob().
 import { vi } from "vitest";
 import type {
+  Capabilities,
   Job,
   Lora,
   Plan,
@@ -163,6 +164,66 @@ export function makeDefaultPlan(): Plan {
   };
 }
 
+// Mirrors server/generation/presets.py closely enough for UI tests: two
+// entries, one song and one instrumental.
+export const MOCK_PRESETS = [
+  {
+    id: "lyric_song",
+    version: 1,
+    name: "Lyric song",
+    purpose: "A song built around a sung lead and a clear verse and chorus.",
+    caption: "song with a clear lead vocal",
+    instrumental: false,
+    fields: { timesignature: "4/4" },
+    example: "a hopeful song",
+  },
+  {
+    id: "combat_cue",
+    version: 1,
+    name: "Combat cue",
+    purpose: "Driving, tense music for a fight or a chase.",
+    caption: "intense combat music",
+    instrumental: true,
+    fields: { bpm: 150, duration_sec: 90 },
+    example: "a boss fight",
+  },
+];
+
+export function makeCapabilities(overrides: Partial<Capabilities> = {}): Capabilities {
+  const profile = (id: string, label: string): Capabilities["profiles"][number] => ({
+    id,
+    label,
+    summary: `${label} summary`,
+    checkpoint: `acestep-${id}`,
+    inference_steps: 8,
+    guidance_scale: 1,
+    cpu_offload: id === "quality",
+    files: "present",
+    validated: id === "iterate",
+    loaded: id === "iterate",
+    supported: true,
+    reason: null,
+  });
+  return {
+    worker: {
+      state: "ready",
+      reason: "worker: 'iterate' DiT + LM currently loaded",
+      backend: "mock",
+      dit_loaded: "iterate",
+      queue: { queued: 0, running: 0 },
+    },
+    profiles: [
+      profile("iterate", "Iterate"),
+      profile("polish", "Polish"),
+      profile("quality", "Quality"),
+    ],
+    lm: { model: "acestep-5Hz-lm-1.7B", selectable: false },
+    disk: { free_bytes: 100 * 1024 ** 3, low: false, blocked: false },
+    presets: MOCK_PRESETS,
+    ...overrides,
+  };
+}
+
 export function makeProjectSummary(overrides: Partial<ProjectSummary> = {}): ProjectSummary {
   return {
     id: PROJECT_ID,
@@ -240,6 +301,7 @@ export function createMockLyreServer() {
     // /api/projects/{id} has something to return for it afterward.
     createdDetails: new Map<string, ProjectDetail>(),
     loras: [] as Lora[],
+    capabilities: makeCapabilities(),
   };
 
   const jobEntries = new Map<
@@ -409,6 +471,9 @@ export function createMockLyreServer() {
         jsonResponse({ ok: true, gpu: "RTX 4070 Ti SUPER", dit_loaded: "iterate" }),
       );
     }
+    if (method === "GET" && url === "/api/capabilities") {
+      return Promise.resolve(jsonResponse(state.capabilities));
+    }
     if (method === "GET" && url === "/api/remote-gpu") {
       return Promise.resolve(
         jsonResponse({
@@ -532,6 +597,61 @@ export function createMockLyreServer() {
         plan: { ...deriveWrite(state.detail.plan, plan as Plan), revision: current + 1 },
       };
       return Promise.resolve(jsonResponse(state.detail.plan));
+    }
+
+    m = url.match(/^\/api\/projects\/([^/]+)\/preset$/);
+    if (method === "POST" && m) {
+      // server/generation/presets.apply_preset, reduced: user fields and
+      // lyrics are kept; changed fields become origin "preset".
+      const payload = (body ?? {}) as { preset_id: string; apply: boolean };
+      const preset = MOCK_PRESETS.find((p) => p.id === payload.preset_id);
+      if (!preset) return Promise.resolve(jsonResponse({ detail: "preset not found" }, 404));
+      const current = state.detail.plan;
+      const origins = { ...(current.field_origins ?? {}) };
+      const plan = { ...current } as Plan & Record<string, unknown>;
+      const changes: { field: string; from: unknown; to: unknown }[] = [];
+      const warnings: string[] = [];
+      const set = (field: string, to: unknown, tracked = true) => {
+        if (plan[field] === to) return;
+        changes.push({ field, from: plan[field], to });
+        plan[field] = to;
+        if (tracked) origins[field as TrackedField] = "preset";
+      };
+      if (origins.caption === "user" && current.caption.trim()) {
+        warnings.push("kept your caption; the preset's caption was not applied");
+      } else {
+        set("caption", preset.caption);
+      }
+      for (const [field, value] of Object.entries(preset.fields)) {
+        if (origins[field as TrackedField] === "user") warnings.push(`kept your ${field}`);
+        else set(field, value);
+      }
+      const hasWords =
+        current.lyrics.trim() !== "" && current.lyrics.trim().toLowerCase() !== "[instrumental]";
+      if (preset.instrumental && hasWords) {
+        warnings.push(
+          "the preset suggests an instrumental, but the plan has lyrics, so it stays a song",
+        );
+      } else {
+        set("instrumental", preset.instrumental, false);
+      }
+      plan.field_origins = origins;
+      plan.preset = { id: preset.id, version: preset.version };
+      if (payload.apply) {
+        state.detail = {
+          ...state.detail,
+          plan: { ...plan, revision: (current.revision ?? 0) + 1 },
+        };
+      }
+      return Promise.resolve(
+        jsonResponse({
+          plan: payload.apply ? state.detail.plan : plan,
+          changes,
+          warnings,
+          preset: { id: preset.id, version: preset.version },
+          applied: payload.apply,
+        }),
+      );
     }
 
     m = url.match(/^\/api\/projects\/([^/]+)\/loras$/);

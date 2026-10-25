@@ -30,6 +30,7 @@ def _normalize_plan(plan: dict) -> dict:
     plan["field_origins"] = creation.plan_origins(plan)
     plan.setdefault("revision", 0)
     plan.setdefault("brief", None)
+    plan.setdefault("preset", None)
     return plan
 
 
@@ -64,6 +65,8 @@ def default_plan() -> dict:
         "field_origins": creation.default_origins(),
         "revision": 0,
         "brief": None,
+        # SPEC.md sec 16.6: the preset last applied, `{"id", "version"}`.
+        "preset": None,
     }
 
 
@@ -175,6 +178,17 @@ def validate_plan(plan: object) -> dict:
         raise _plan_type_error("revision", "a non-negative integer", revision)
     # Server-managed (SPEC.md sec 16.3); a client cannot write it.
     normalized["brief"] = None
+
+    preset = normalized["preset"]
+    if preset is not None:
+        if (
+            not isinstance(preset, dict)
+            or not isinstance(preset.get("id"), str)
+            or isinstance(preset.get("version"), bool)
+            or not isinstance(preset.get("version"), int)
+        ):
+            raise _plan_type_error("preset", 'null or {"id": string, "version": integer}', preset)
+        normalized["preset"] = {"id": preset["id"], "version": preset["version"]}
 
     bpm = normalized["bpm"]
     if bpm is not None and (isinstance(bpm, bool) or not isinstance(bpm, int)):

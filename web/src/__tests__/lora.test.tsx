@@ -99,7 +99,7 @@ function nameInput(): HTMLInputElement {
 function loraSelect(): HTMLSelectElement {
   // The only <select> in the app is the "Style pack" picker in the
   // Waveform pane's action bar.
-  return screen.getByRole("combobox") as HTMLSelectElement;
+  return screen.getByRole("combobox", { name: /Style pack/ }) as HTMLSelectElement;
 }
 
 function takeRows(): HTMLElement[] {
@@ -246,7 +246,7 @@ describe("LoRA style packs (SPEC.md sec 4.4)", () => {
 
   it("lets only successful packs be selected for use", async () => {
     app = await renderOpenedProject({ loras: [GOOD_LORA, FAILED_LORA] });
-    const select = await screen.findByRole("combobox");
+    const select = await screen.findByRole("combobox", { name: /Style pack/ });
     const optionNames = Array.from((select as HTMLSelectElement).options).map((o) => o.textContent);
     // The failed pack is listed (with its error) but never offered for use.
     expect(optionNames).toEqual(["None", "good-style"]);

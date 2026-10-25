@@ -34,6 +34,8 @@ This page is the orientation; the schema is the specification.
 | `GET` | `/api/health` | Worker readiness, loaded DiT profile, GPU status. |
 | `GET` | `/api/projects` | Project list, newest-updated first. |
 | `POST` | `/api/projects` | Create from `{ title?, query? }`. |
+| `GET` | `/api/capabilities` | Worker state, profiles (files, validated, loaded, supported), fixed LM, disk, presets, limits. |
+| `POST` | `/api/projects/{id}/preset` | Preview a preset, or apply it with `apply: true` (keeps user fields and lyrics). |
 | `GET` | `/api/projects/{id}` | Project + plan + takes in one response. |
 | `PATCH` | `/api/projects/{id}` | Update `title`, `dit_profile`, or `favorite`. |
 | `DELETE` | `/api/projects/{id}` | Delete the project and cancel its queued jobs. `204`. |
@@ -58,6 +60,8 @@ This page is the orientation; the schema is the specification.
 | `DELETE` | `/api/remote-gpu/session` | Terminate the rental. Safe when nothing is running. |
 | `GET` | `/v1/health` | Typed health: backend, readiness, GPU, loaded DiT, queue counts. |
 | `GET` | `/v1/projects` | Page of project summaries. `limit` (default 50, max 100) and `cursor`. |
+| `GET` | `/v1/capabilities` | Same report as `/api/capabilities`. |
+| `POST` | `/v1/projects/{id}/preset` | Preview or apply a preset; `409` on a stale `expected_revision`. |
 | `GET` | `/v1/projects/{id}` | Project, plan, and takes. |
 | `GET` | `/v1/projects/{id}/takes` | Take metadata page. |
 | `GET` | `/v1/jobs` | Job page. Filters: `project_id`, `action`, `active`, `limit`, `cursor`. |

@@ -94,6 +94,7 @@ class Plan(BaseModel):
     field_origins: dict[str, str] = Field(default_factory=dict)
     revision: int = 0
     brief: dict[str, Any] | None = None
+    preset: dict[str, Any] | None = None
 
 
 class Take(BaseModel):
@@ -193,6 +194,7 @@ class PlanWrite(BaseModel):
     caption_rewrite: bool | None = None
     creation_mode: Literal["from_idea", "from_brief"] | None = None
     field_origins: dict[str, str] | None = None
+    preset: dict[str, Any] | None = None
     expected_revision: int | None = Field(
         default=None,
         description="Write only if the plan is still at this revision; 409 otherwise.",
@@ -306,3 +308,56 @@ class Lora(BaseModel):
     dit_profile: str | None = None
     status: str | None = None
     error: str | None = None
+
+
+class WorkerState(BaseModel):
+    state: Literal["stopped", "unavailable", "loading", "busy", "ready"]
+    reason: str | None = None
+    backend: str
+    dit_loaded: str | None = None
+    queue: QueueCounts
+
+
+class ProfileCapability(BaseModel):
+    id: str
+    label: str
+    summary: str
+    checkpoint: str
+    inference_steps: int
+    guidance_scale: float
+    cpu_offload: bool
+    files: Literal["present", "incomplete", "missing", "remote"]
+    validated: bool
+    loaded: bool
+    supported: bool | None = None
+    reason: str | None = None
+
+
+class Capabilities(BaseModel):
+    """SPEC.md sec 16.6: what this install can do right now. `files` is a
+    filesystem check only; `validated` means a job on that profile has
+    completed. The LM is fixed (`selectable: false`)."""
+
+    model_config = ConfigDict(extra="allow")
+
+    schema_: str = Field(alias="schema")
+    worker: WorkerState
+    profiles: list[ProfileCapability]
+    lm: dict[str, Any]
+    disk: dict[str, Any]
+    presets: list[dict[str, Any]]
+    limits: dict[str, Any]
+
+
+class PresetRequest(BaseModel):
+    preset_id: str
+    apply: bool = False
+    expected_revision: int | None = None
+
+
+class PresetResult(BaseModel):
+    plan: Plan
+    changes: list[dict[str, Any]]
+    warnings: list[str]
+    preset: dict[str, Any]
+    applied: bool

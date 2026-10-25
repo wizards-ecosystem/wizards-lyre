@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import threading
 import time
 import uuid
@@ -41,6 +42,28 @@ from worker.acestep_worker.settings import (
 )
 
 SUBMISSION_SCHEMA = "lyre.submission/1"
+# A new render is refused below this much free space under projects/
+# (SPEC.md sec 16.6), before any GPU work. A take is tens of megabytes.
+MIN_FREE_DISK_BYTES = 512 * 1024 * 1024
+
+
+def free_disk_bytes() -> int | None:
+    try:
+        return shutil.disk_usage(storage.config.projects_dir()).free
+    except OSError:
+        return None
+
+
+def _check_free_disk() -> None:
+    free = free_disk_bytes()
+    if free is not None and free < MIN_FREE_DISK_BYTES:
+        raise JobError(
+            f"only {free // (1024 * 1024)} MB free under projects/; free some space before "
+            "generating (a take needs tens of megabytes)",
+            code="disk_full",
+        )
+
+
 RESOLVED_SCHEMA = "lyre.resolved/1"
 
 HEARTBEAT_INTERVAL_SEC = 5.0
@@ -159,6 +182,8 @@ def enqueue_job(project_id: str, body: dict[str, Any], *, retry_of: str | None =
     _resolve_source_audio(project_id, action, body)
     track_name = _resolve_track_name(action, body)
     creation_record = _resolve_creation(storage.load_plan(project_id), action, body)
+    if creation_record is not None:
+        _check_free_disk()
     if action == "train_lora":
         name = body.get("name")
         if not isinstance(name, str) or not name.strip():

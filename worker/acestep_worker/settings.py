@@ -73,6 +73,63 @@ GENERATION_GUIDANCE_SCALE = {
     "studio_ops": 7.5,
 }
 
+# SPEC.md sec 16.2: how each profile is presented. Stable API ids; these
+# describe what the profile actually is, and promise nothing about quality.
+PROFILE_INFO = {
+    "iterate": {
+        "label": "Iterate",
+        "summary": "Turbo checkpoint, 8 steps. The fast default for trying ideas.",
+    },
+    "polish": {
+        "label": "Polish",
+        "summary": "SFT checkpoint, 50 steps with guidance. Slower; not always better.",
+    },
+    "quality": {
+        "label": "Quality",
+        "summary": (
+            "XL turbo checkpoint (4B), 8 steps, with CPU offload on a 16 GB card. "
+            "Larger and slower to load; needs more system memory."
+        ),
+    },
+    "studio_ops": {
+        "label": "Studio",
+        "summary": "Base checkpoint, 50 steps. Only for extract, lego, complete, and style packs.",
+    },
+}
+
+# What a checkpoint directory must hold before it is even worth trying to
+# load. Presence is not validation: only a successful load proves the files
+# are intact (SPEC.md sec 16.6).
+_WEIGHT_FILES = ("model.safetensors", "model.safetensors.index.json")
+
+
+def checkpoint_status(name: str, root: Path | None = None) -> dict[str, Any]:
+    """`present`, `incomplete` (a directory without config or weights), or
+    `missing`, from the filesystem alone. Never imports acestep or torch."""
+    directory = (root or CHECKPOINTS_ROOT) / name
+    if not directory.is_dir():
+        return {"name": name, "state": "missing", "path": str(directory)}
+    has_config = (directory / "config.json").is_file()
+    has_weights = any((directory / weight).is_file() for weight in _WEIGHT_FILES) or any(
+        directory.glob("*.safetensors")
+    )
+    state = "present" if has_config and has_weights else "incomplete"
+    return {"name": name, "state": state, "path": str(directory)}
+
+
+def profile_files(dit_profile: str, root: Path | None = None) -> dict[str, Any]:
+    """The worst state among everything a profile needs: its DiT, the 5 Hz
+    LM, and the shared VAE."""
+    parts = [
+        checkpoint_status(DIT_CHECKPOINTS[dit_profile], root),
+        checkpoint_status(DEFAULT_LM, root),
+        checkpoint_status("vae", root),
+    ]
+    order = {"missing": 0, "incomplete": 1, "present": 2}
+    worst = min(parts, key=lambda part: order[part["state"]])
+    return {"state": worst["state"], "parts": parts}
+
+
 TASK_TYPE_BY_ACTION = {
     "generate": "text2music",
     "cover": "cover",

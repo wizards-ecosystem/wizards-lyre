@@ -6,7 +6,18 @@ import {
   useRef,
   useState,
 } from "react";
-import { api, Job, JobRequest, Lora, Plan, ProjectDetail, ProjectSummary, Section } from "./api";
+import {
+  api,
+  Job,
+  JobRequest,
+  Lora,
+  Plan,
+  PresetResult,
+  ProfileCapability,
+  ProjectDetail,
+  ProjectSummary,
+  Section,
+} from "./api";
 import { ConfirmationDialog } from "./components/ConfirmationDialog";
 import { Icon } from "./components/Icon";
 import { FieldOrigin } from "./components/FieldOrigin";
@@ -40,6 +51,29 @@ import { useTakeNotes } from "./hooks/useTakeNotes";
 import { useWaveform } from "./hooks/useWaveform";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
 import { ConfirmationRequest, InspectorTab, OperationGroup } from "./types";
+
+const READINESS_LABEL: Record<string, string> = {
+  ready: "Ready",
+  busy: "Busy",
+  loading: "Loading model",
+  stopped: "Worker stopped",
+  unavailable: "Unavailable",
+};
+
+function profileTitle(profile: string, report: ProfileCapability | undefined): string {
+  if (!report) return profile;
+  const files =
+    report.files === "remote"
+      ? "models on the worker host"
+      : report.validated
+        ? "has rendered on this machine"
+        : report.files === "present"
+          ? "files present, not yet validated by a render"
+          : `files ${report.files}`;
+  const reason =
+    report.supported === false && report.reason ? ` Unavailable: ${report.reason}` : "";
+  return `${report.label}: ${report.summary} (${files}).${reason}`;
+}
 
 export default function App() {
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
@@ -89,7 +123,10 @@ export default function App() {
   const [seedInput, setSeedInput] = useState("");
   const [trackName, setTrackName] = useState("");
   const [includeStems, setIncludeStems] = useState(true);
-  const { health, error: healthError } = useHealth();
+  const { health, capabilities, error: healthError } = useHealth();
+  // A preset preview awaiting Apply or Cancel (SPEC.md sec 16.6). Nothing is
+  // written until the user applies it.
+  const [presetPreview, setPresetPreview] = useState<PresetResult | null>(null);
   const [loras, setLoras] = useState<Lora[]>([]);
   // Multi-select of takes to train a style pack from (SPEC.md sec 4.4 "8+
   // songs") -- deliberately separate from selectedTakeId/compareTakeId,
@@ -484,6 +521,7 @@ export default function App() {
     setLoraName("");
     setSelectedLoraId(null);
     setDraftOffer(null);
+    setPresetPreview(null);
     setEditingTitle(false);
     setTitleDraft("");
     if (activeId) {
@@ -667,6 +705,42 @@ export default function App() {
   function addSectionFromRegion(): void {
     if (!region) return;
     addSection({ name: "", start_sec: region.start, end_sec: region.end, lyrics: "" });
+  }
+
+  async function previewPreset(presetId: string): Promise<void> {
+    if (!activeId || !presetId) {
+      setPresetPreview(null);
+      return;
+    }
+    const projectId = activeId;
+    try {
+      // The preview is computed from the saved plan, so save first.
+      await flushPendingPlanSave();
+      const preview = await api.presetOnProject(projectId, presetId, { apply: false });
+      if (activeIdRef.current === projectId) setPresetPreview(preview);
+    } catch (err) {
+      setErrorMsg(String(err));
+    }
+  }
+
+  async function applyPresetPreview(): Promise<void> {
+    if (!activeId || !presetPreview) return;
+    const projectId = activeId;
+    try {
+      await flushPendingPlanSave();
+      const result = await api.presetOnProject(projectId, presetPreview.preset.id, {
+        apply: true,
+        expectedRevision: detail?.plan.revision ?? null,
+      });
+      if (activeIdRef.current !== projectId) return;
+      setServerRevision(projectId, result.plan.revision);
+      setDetail((current) =>
+        current?.project.id === projectId ? { ...current, plan: result.plan } : current,
+      );
+      setPresetPreview(null);
+    } catch (err) {
+      setErrorMsg(String(err));
+    }
   }
 
   // Submitting, observing, and collecting are separate (SPEC.md sec 16.5):
@@ -981,14 +1055,31 @@ export default function App() {
           </details>
           <RemoteGpuControl />
           <div
-            className={`health ${health?.ok ? "ok" : "down"}`}
+            className={`health ${
+              health?.ok &&
+              (!capabilities || ["ready", "busy", "loading"].includes(capabilities.worker.state))
+                ? "ok"
+                : "down"
+            }`}
             title={healthError ?? undefined}
             role="status"
           >
             <span className="dot" />
-            <span className="health-copy">
-              <strong>{health ? health.gpu : "Server offline"}</strong>
-              <small>{health?.dit_loaded ? `${health.dit_loaded} loaded` : "local engine"}</small>
+            <span className="health-copy" title={health?.gpu}>
+              <strong>
+                {!health
+                  ? "Server offline"
+                  : capabilities
+                    ? READINESS_LABEL[capabilities.worker.state]
+                    : health.gpu}
+              </strong>
+              <small>
+                {capabilities && capabilities.worker.state !== "ready"
+                  ? (capabilities.worker.reason ?? "")
+                  : health?.dit_loaded
+                    ? `${health.dit_loaded} loaded`
+                    : "local engine"}
+              </small>
             </span>
           </div>
         </div>
@@ -1032,6 +1123,14 @@ export default function App() {
               >
                 <Icon name="close" />
               </button>
+            </div>
+          )}
+
+          {capabilities?.disk.low && (
+            <div className="disk-warning" role="status">
+              {capabilities.disk.blocked
+                ? "The disk is nearly full: new takes are refused until space is freed under projects/."
+                : "Disk space is low under projects/. A take needs tens of megabytes."}
             </div>
           )}
 
@@ -1299,6 +1398,72 @@ export default function App() {
                           Instrumental
                         </label>
                       </div>
+                      {(capabilities?.presets.length ?? 0) > 0 && (
+                        <label className="field-label preset-field">
+                          Starting point
+                          <select
+                            aria-label="Preset"
+                            value={presetPreview?.preset.id ?? ""}
+                            disabled={busy}
+                            onChange={(event) => previewPreset(event.target.value)}
+                          >
+                            <option value="">
+                              {detail.plan.preset
+                                ? `Preset applied: ${
+                                    capabilities?.presets.find(
+                                      (preset) => preset.id === detail.plan.preset?.id,
+                                    )?.name ?? detail.plan.preset.id
+                                  }`
+                                : "No preset"}
+                            </option>
+                            {capabilities?.presets.map((preset) => (
+                              <option key={preset.id} value={preset.id} title={preset.purpose}>
+                                {preset.name}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      )}
+                      {presetPreview && (
+                        <div className="preset-preview" role="region" aria-label="Preset preview">
+                          <strong>
+                            {capabilities?.presets.find((p) => p.id === presetPreview.preset.id)
+                              ?.purpose ?? presetPreview.preset.id}
+                          </strong>
+                          {presetPreview.changes.length === 0 ? (
+                            <small>Nothing would change.</small>
+                          ) : (
+                            <ul>
+                              {presetPreview.changes.map((change) => (
+                                <li key={change.field}>
+                                  {change.field}: {String(change.from ?? "unset")} →{" "}
+                                  {String(change.to)}
+                                </li>
+                              ))}
+                            </ul>
+                          )}
+                          {presetPreview.warnings.map((warning) => (
+                            <small key={warning}>{warning}</small>
+                          ))}
+                          <small>Your own fields and lyrics are not changed.</small>
+                          <div>
+                            <button
+                              type="button"
+                              className="button-secondary"
+                              onClick={() => applyPresetPreview()}
+                            >
+                              Apply preset
+                            </button>
+                            <button
+                              type="button"
+                              className="text-button"
+                              onClick={() => setPresetPreview(null)}
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                      )}
                       {hasInstrumentalConflict(detail.plan) && (
                         <div className="creation-conflict" role="alert">
                           <span>
@@ -1665,24 +1830,22 @@ export default function App() {
                             title="Project default DiT checkpoint for Generate/Cover/Repaint (SPEC.md sec 4.1); a style pack always forces studio_ops"
                           >
                             <span className="dit-profile-caption">DiT</span>
-                            {DIT_PROFILE_OPTIONS.map((profile) => (
-                              <button
-                                key={profile}
-                                type="button"
-                                className={`dit-profile-option ${detail.project.dit_profile === profile ? "selected" : ""}`}
-                                disabled={busy}
-                                onClick={() => setDitProfile(profile)}
-                                title={
-                                  profile === "iterate"
-                                    ? "Fast daily generate/cover/repaint (turbo, 8 steps)"
-                                    : profile === "polish"
-                                      ? "More prompt adherence / detail (sft, 50 steps + CFG)"
-                                      : "XL turbo; the job is rejected if the worker cannot load XL"
-                                }
-                              >
-                                {profile}
-                              </button>
-                            ))}
+                            {DIT_PROFILE_OPTIONS.map((profile) => {
+                              const report = capabilities?.profiles.find((p) => p.id === profile);
+                              const unavailable = report?.supported === false;
+                              return (
+                                <button
+                                  key={profile}
+                                  type="button"
+                                  className={`dit-profile-option ${detail.project.dit_profile === profile ? "selected" : ""} ${unavailable ? "unavailable" : ""}`}
+                                  disabled={busy || unavailable}
+                                  onClick={() => setDitProfile(profile)}
+                                  title={profileTitle(profile, report)}
+                                >
+                                  {profile}
+                                </button>
+                              );
+                            })}
                           </div>
                           {(() => {
                             const intent = generateIntent(detail.plan);

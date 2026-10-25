@@ -22,6 +22,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import App from "../App";
 import {
   createMockLyreServer,
+  makeCapabilities,
   makeDefaultPlan,
   makeLora,
   makeTakes,
@@ -84,7 +85,7 @@ function seedField(): HTMLInputElement {
 }
 
 function loraSelect(): HTMLSelectElement {
-  return screen.getByRole("combobox") as HTMLSelectElement;
+  return screen.getByRole("combobox", { name: /Style pack/ }) as HTMLSelectElement;
 }
 
 function ditGroup(): HTMLElement {
@@ -330,31 +331,31 @@ describe("DiT profile picker (SPEC.md sec 4.1)", () => {
   });
 });
 
-describe("Creation screen (SPEC.md sec 16.3/16.6)", () => {
-  async function openWithPlan(plan: Partial<ReturnType<typeof makeDefaultPlan>>) {
-    app = await renderOpenedProject();
-    // Reopen against a plan in the given state.
-    app.cleanup();
-    const server = createMockLyreServer();
-    server.state.detail = {
-      ...server.state.detail,
-      plan: { ...makeDefaultPlan(), ...plan },
-    };
-    server.install();
-    const rendered = render(<App />);
-    app = {
-      server,
-      confirm: vi.fn(),
-      cleanup: () => {
-        rendered.unmount();
-        server.uninstall();
-      },
-    };
-    fireEvent.click(await screen.findByRole("button", { name: "Open Test Song" }));
-    await screen.findByLabelText("Caption");
-    return server;
-  }
+async function openWithPlan(plan: Partial<ReturnType<typeof makeDefaultPlan>>) {
+  app = await renderOpenedProject();
+  // Reopen against a plan in the given state.
+  app.cleanup();
+  const server = createMockLyreServer();
+  server.state.detail = {
+    ...server.state.detail,
+    plan: { ...makeDefaultPlan(), ...plan },
+  };
+  server.install();
+  const rendered = render(<App />);
+  app = {
+    server,
+    confirm: vi.fn(),
+    cleanup: () => {
+      rendered.unmount();
+      server.uninstall();
+    },
+  };
+  fireEvent.click(await screen.findByRole("button", { name: "Open Test Song" }));
+  await screen.findByLabelText("Caption");
+  return server;
+}
 
+describe("Creation screen (SPEC.md sec 16.3/16.6)", () => {
   it("starts a new project from an empty brief that plans from the idea", async () => {
     app = await renderOpenedProject();
     fireEvent.click(screen.getByRole("button", { name: "Projects" }));
@@ -445,5 +446,65 @@ describe("Creation screen (SPEC.md sec 16.3/16.6)", () => {
     await waitFor(() => expect(generate.disabled).toBe(false));
     await waitFor(() => expect(server.state.detail.plan.instrumental).toBe(false));
     expect(server.state.detail.plan.lyrics).toBe("[Verse]\nwords I wrote");
+  });
+});
+
+describe("Readiness and presets (SPEC.md sec 16.6)", () => {
+  it("says what each profile is and disables one that cannot load, with the reason", async () => {
+    app = await renderOpenedProject();
+    const caps = makeCapabilities();
+    caps.profiles = caps.profiles.map((profile) =>
+      profile.id === "quality"
+        ? {
+            ...profile,
+            files: "missing",
+            supported: false,
+            reason: "model files missing: acestep-v15-xl-turbo",
+          }
+        : profile,
+    );
+    app.server.state.capabilities = caps;
+    await waitFor(() => expect(ditButton("quality").disabled).toBe(true), { timeout: 7000 });
+    expect(ditButton("quality").title).toMatch(/Unavailable: model files missing/);
+    expect(ditButton("iterate").title).toMatch(/has rendered on this machine/);
+    expect(ditButton("polish").title).toMatch(/not yet validated/);
+  }, 10000);
+
+  it("tells a stopped worker apart from a ready one", async () => {
+    app = await renderOpenedProject();
+    expect(await screen.findByText("Ready")).toBeTruthy();
+    app.server.state.capabilities = makeCapabilities({
+      worker: {
+        state: "stopped",
+        reason: "No worker has reported in. Start it with ./scripts/lyre worker.",
+        backend: "acestep",
+        dit_loaded: null,
+        queue: { queued: 0, running: 0 },
+      },
+    });
+    expect(await screen.findByText("Worker stopped", {}, { timeout: 7000 })).toBeTruthy();
+    expect(screen.getByText(/Start it with .\/scripts\/lyre worker/)).toBeTruthy();
+  }, 10000);
+
+  it("previews a preset before applying it and keeps the user's lyrics", async () => {
+    await openWithPlan({
+      lyrics: "[Verse]\nmine",
+      revision: 2,
+      field_origins: { ...makeDefaultPlan().field_origins, lyrics: "user" },
+    });
+
+    fireEvent.change(await screen.findByLabelText("Preset"), { target: { value: "combat_cue" } });
+    const preview = await screen.findByRole("region", { name: "Preset preview" });
+    expect(within(preview).getByText(/bpm: unset → 150/)).toBeTruthy();
+    expect(within(preview).getByText(/stays a song/)).toBeTruthy();
+    // Nothing is written by a preview.
+    expect(app!.server.state.detail.plan.bpm).toBeNull();
+
+    fireEvent.click(within(preview).getByRole("button", { name: "Apply preset" }));
+    await waitFor(() => expect(app!.server.state.detail.plan.bpm).toBe(150));
+    expect(app!.server.state.detail.plan.lyrics).toBe("[Verse]\nmine");
+    expect(app!.server.state.detail.plan.instrumental).toBe(false);
+    expect((screen.getByLabelText("BPM") as HTMLInputElement).value).toBe("150");
+    expect(screen.queryByRole("region", { name: "Preset preview" })).toBeNull();
   });
 });

@@ -6,6 +6,58 @@ export interface Health {
   dit_loaded: string | null;
 }
 
+// SPEC.md sec 16.6: what this install can do right now. `files` is a
+// filesystem check only; `validated` means a job on that profile completed.
+export type WorkerReadiness = "stopped" | "unavailable" | "loading" | "busy" | "ready";
+
+export interface ProfileCapability {
+  id: string;
+  label: string;
+  summary: string;
+  checkpoint: string;
+  inference_steps: number;
+  guidance_scale: number;
+  cpu_offload: boolean;
+  files: "present" | "incomplete" | "missing" | "remote";
+  validated: boolean;
+  loaded: boolean;
+  supported: boolean | null;
+  reason: string | null;
+}
+
+export interface Preset {
+  id: string;
+  version: number;
+  name: string;
+  purpose: string;
+  caption: string;
+  instrumental: boolean;
+  fields: Record<string, unknown>;
+  example: string;
+}
+
+export interface Capabilities {
+  worker: {
+    state: WorkerReadiness;
+    reason: string | null;
+    backend: string;
+    dit_loaded: string | null;
+    queue: { queued: number; running: number };
+  };
+  profiles: ProfileCapability[];
+  lm: { model: string; selectable: boolean };
+  disk: { free_bytes: number | null; low: boolean; blocked: boolean };
+  presets: Preset[];
+}
+
+export interface PresetResult {
+  plan: Plan;
+  changes: { field: string; from: unknown; to: unknown }[];
+  warnings: string[];
+  preset: { id: string; version: number };
+  applied: boolean;
+}
+
 // Opt-in Remote GPU (docs/remote-gpu.md). Mirrors server/remote_gpu/service.py.
 export interface RemoteGpuQuote {
   gpu: string;
@@ -104,6 +156,7 @@ export interface Plan {
   field_origins?: Partial<Record<TrackedField, FieldOrigin>>;
   revision?: number;
   brief?: { source_query: string; job_id: string; content_hash: string } | null;
+  preset?: { id: string; version: number } | null;
 }
 
 export interface Take {
@@ -238,6 +291,21 @@ async function uploadAudio(projectId: string, file: File): Promise<{ upload_path
 
 export const api = {
   health: () => request<Health>("/api/health"),
+  capabilities: () => request<Capabilities>("/api/capabilities"),
+  // Preview (apply false) or apply a preset; applying is revision-checked.
+  presetOnProject: (
+    projectId: string,
+    presetId: string,
+    opts: { apply: boolean; expectedRevision?: number | null },
+  ) =>
+    request<PresetResult>(`/api/projects/${projectId}/preset`, {
+      method: "POST",
+      body: JSON.stringify({
+        preset_id: presetId,
+        apply: opts.apply,
+        expected_revision: opts.expectedRevision ?? null,
+      }),
+    }),
   remoteGpu: () => request<RemoteGpuStatus>("/api/remote-gpu"),
   connectRemoteGpu: (base_url: string, secret: string) =>
     request<RemoteGpuStatus>("/api/remote-gpu/connection", {

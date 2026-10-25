@@ -18,11 +18,13 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, File, Header, Response, UploadFile
 from fastapi.responses import FileResponse
 
-from server import jobs, storage
+from server import capabilities as capability_report
+from server import creation, jobs, storage
 from server.uploads import receive_audio_upload
 from server.v1.auth import require_scope
 from server.v1.models import (
     ActiveTake,
+    Capabilities,
     Error,
     Health,
     Job,
@@ -31,6 +33,8 @@ from server.v1.models import (
     Lora,
     Plan,
     PlanWrite,
+    PresetRequest,
+    PresetResult,
     Project,
     ProjectCreate,
     ProjectDetail,
@@ -152,6 +156,35 @@ def health(_auth: Annotated[Any, Depends(require_scope("read"))]) -> dict[str, A
         "dit_loaded": dit_loaded,
         "queue": counts,
     }
+
+
+@router.get(
+    "/capabilities",
+    response_model=Capabilities,
+    response_model_by_alias=True,
+    responses=_ERRORS,
+)
+def get_capabilities(_auth: Annotated[Any, Depends(require_scope("read"))]) -> dict[str, Any]:
+    """Readiness, profiles, presets, and request limits (SPEC.md sec 16.6)."""
+    return capability_report.capabilities()
+
+
+@router.post(
+    "/projects/{project_id}/preset",
+    response_model=PresetResult,
+    responses={**_PLAN_ERRORS, **_POST_ERRORS},
+    dependencies=_IDEMPOTENT,
+)
+def project_preset(
+    project_id: str,
+    body: PresetRequest,
+    _auth: Annotated[Any, Depends(require_scope("write"))],
+) -> dict[str, Any]:
+    """Preview a preset (`apply: false`, the default) or apply it. Applying
+    keeps every field the user set and never touches lyrics."""
+    return creation.preset_on_project(
+        project_id, body.preset_id, apply=body.apply, expected_revision=body.expected_revision
+    )
 
 
 @router.post(

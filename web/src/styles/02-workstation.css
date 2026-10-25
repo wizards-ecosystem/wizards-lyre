@@ -1662,3 +1662,32 @@ button.take-lora-badge:hover {
 .generate-intent .text-button {
   align-self: flex-start;
 }
+
+.dit-profile-option.unavailable {
+  text-decoration: line-through;
+}
+.disk-warning {
+  border-left: 2px solid var(--danger);
+  padding: 6px 10px;
+  background: var(--danger-bg);
+  font-size: 12px;
+}
+.preset-field {
+  margin-top: 10px;
+}
+.preset-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+  border-left: 2px solid var(--success);
+  padding: 6px 10px;
+  font-size: 12px;
+}
+.preset-preview ul {
+  margin: 0;
+  padding-left: 16px;
+}
+.preset-preview small {
+  color: var(--muted);
+}

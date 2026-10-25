@@ -23,7 +23,8 @@ from pydantic import BaseModel, Field
 from starlette.routing import Route
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from server import config, jobs, storage
+from server import capabilities, config, creation, jobs, storage
+from server.generation.presets import PresetNotFound
 from server.mcp.http import gateway as mcp_gateway
 from server.mcp.http import mcp_lifespan
 from server.remote_gpu import service as remote_gpu
@@ -250,6 +251,13 @@ def _plan_revision_handler(request, exc: storage.PlanRevisionConflict):
     return _error_body(request, 409, str(exc), code="conflict", param="expected_revision")
 
 
+@app.exception_handler(PresetNotFound)
+def _preset_not_found_handler(request, exc: PresetNotFound):
+    return _error_body(
+        request, 404, f"preset not found: {exc}", code="not_found", param="preset_id"
+    )
+
+
 @app.exception_handler(storage.LoraNotFound)
 def _lora_not_found_handler(request, exc: storage.LoraNotFound):
     return _error_body(request, 404, f"lora not found: {exc}", code="not_found")
@@ -355,6 +363,26 @@ def health() -> dict[str, Any]:
         "gpu": gpu,
         "dit_loaded": status["loaded_dit_profile"],
     }
+
+
+@app.get("/api/capabilities")
+def get_capabilities() -> dict[str, Any]:
+    # SPEC.md sec 16.6: readiness, profiles, presets, and limits in one read.
+    return capabilities.capabilities()
+
+
+class PresetBody(BaseModel):
+    preset_id: str
+    apply: bool = False
+    expected_revision: int | None = None
+
+
+@app.post("/api/projects/{project_id}/preset")
+def project_preset(project_id: str, body: PresetBody) -> dict[str, Any]:
+    # Preview by default; `apply: true` writes the plan (SPEC.md sec 16.6).
+    return creation.preset_on_project(
+        project_id, body.preset_id, apply=body.apply, expected_revision=body.expected_revision
+    )
 
 
 @app.get("/api/projects")

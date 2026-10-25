@@ -13,7 +13,7 @@ repository (tests, or a recorded report for the live gates).
 | 04 | Make recovery and edits safe together | P0 | 03 | done |
 | 05 | Restore and observe every core job (browser) | P0 | 03, 04 | done |
 | 06 | Make the creation screen coherent | P1 | 02, 05 | done |
-| 07 | Truthful readiness and curated presets | P1 | 02, 06 | open |
+| 07 | Truthful readiness and curated presets | P1 | 02, 06 | done |
 | 08 | Finish audition, keep, and reuse | P1 | 03, 06 | open |
 | 09 | Export manifest and narrow agent parity | P1 | 03, 05, 08 | open |
 | 10 | Preserve existing lanes and migrate safely | P0 gate | 04–09 | open |
