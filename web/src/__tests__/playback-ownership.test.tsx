@@ -179,6 +179,8 @@ describe("Playback ownership (SPEC.md sec 16.6)", () => {
             instrumental: false,
           },
           actual: { caption: "what it rendered", bpm: 101, keyscale: "E minor", duration_sec: 33 },
+          requested: {},
+          ...({ request: { thinking: true } } as object),
         },
       }),
     ];
@@ -187,6 +189,8 @@ describe("Playback ownership (SPEC.md sec 16.6)", () => {
     fireEvent.click(within(row).getByRole("button", { name: "Replay settings" }));
 
     expect(await screen.findByText(/holds Take 01's settings and seed as a draft/)).toBeTruthy();
+    // Measured on the target: LM audio codes do not reproduce from a seed.
+    expect(screen.getByText(/its seed does not reproduce/)).toBeTruthy();
     expect((screen.getByLabelText("Caption") as HTMLInputElement).value).toBe("what it rendered");
     expect((screen.getByLabelText("BPM") as HTMLInputElement).value).toBe("101");
     expect((screen.getByLabelText("Seed") as HTMLInputElement).value).toBe("4242");

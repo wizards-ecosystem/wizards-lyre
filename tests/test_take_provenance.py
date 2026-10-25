@@ -54,6 +54,11 @@ def test_a_take_records_requested_and_actual_values(client: TestClient) -> None:
     assert prov["app"]["version"] == artifacts.app_version()
     stamps = prov["timestamps"]
     assert stamps["submitted_at"] <= stamps["started_at"] <= stamps["committed_at"]
+    # Each stage the worker went through has its start time (SPEC.md sec 16.8).
+    assert list(stamps["stages"]) == ["loading_model", "planning", "rendering", "writing_take"]
+    assert stamps["started_at"] <= stamps["stages"]["loading_model"]
+    assert stamps["stages"]["writing_take"] <= stamps["committed_at"]
+    assert prov["runtime"]["device"] == "mock"
 
 
 def test_audio_details_are_read_from_the_file(client: TestClient) -> None:

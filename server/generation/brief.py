@@ -505,7 +505,14 @@ def render_flags(brief: Mapping[str, Any], action: str) -> dict[str, bool]:
             "use_cot_metas": False,
         }
     origins = brief["origins"]
-    planned = brief.get("planner") is not None or "planner" in origins.values()
+    # A planned brief is one whose words came from the planner. A meta field
+    # the planner once filled (a BPM, a meter) does not make a hand-written
+    # brief "planned": that used to turn LM codes on for it, which also made
+    # a fixed seed stop reproducing the audio.
+    planned = brief.get("planner") is not None or "planner" in (
+        origins["caption"],
+        origins["lyrics"],
+    )
     caption_empty = not str(brief["caption"] or "").strip()
     return {
         "thinking": brief["mode"] == "from_idea" or planned or bool(brief["caption_rewrite"]),

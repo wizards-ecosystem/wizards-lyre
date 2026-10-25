@@ -11,6 +11,7 @@ import errno
 import inspect
 import os
 import shutil
+import sys
 import threading
 from contextlib import closing
 from pathlib import Path
@@ -356,6 +357,7 @@ def _complete_provenance(
             "committed_at": None,
         },
         "files": files,
+        "runtime": backend_half.get("runtime"),
     }
     if mix is not None and mix.get("duration_sec") is not None:
         # The measured length of the file, not the requested one.
@@ -388,11 +390,17 @@ def _run_generate_shaped_job(
             True, f"worker: '{loaded_profile}' DiT + LM currently loaded", loaded_profile
         )
 
+    # When each stage began, for provenance and the benchmark (SPEC.md sec
+    # 16.8): queue wait, model load or swap, planning, rendering (including
+    # decode), and writing the take each get their own measured interval.
+    stage_times: dict[str, str] = {}
+
     def _on_stage(stage: str) -> None:
         # `writing_take` is the worker's signal that generate_music returned.
         # Lift the watchdog before the MP3 encode and the file move.
         if stage == "writing_take" and generation_done is not None:
             generation_done.set()
+        stage_times.setdefault(stage, _now())
         set_stage(job_id, stage)
 
     def _cancel_check() -> bool:
@@ -496,6 +504,12 @@ def _run_generate_shaped_job(
         )
         if not meta["provenance"]["files"]:
             raise RuntimeError("the backend reported success but wrote no audio")
+        meta["provenance"]["timestamps"]["stages"] = stage_times
+        meta["provenance"]["runtime"] = {
+            **(meta["provenance"].get("runtime") or {}),
+            # Lifetime peak of this worker process, not this job alone.
+            "worker_peak_rss_bytes": _peak_rss_bytes(),
+        }
         meta["provenance"]["timestamps"]["committed_at"] = _now()
         storage.write_staged_meta(project_id, take_id, meta)
 
@@ -671,6 +685,16 @@ def cleanup_staging() -> list[str]:
             storage.discard_staged_take(project_id, take_id)
             removed.append(take_id)
     return removed
+
+
+def _peak_rss_bytes() -> int | None:
+    try:
+        import resource
+    except ImportError:  # not on Windows
+        return None
+    peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    # Linux reports kilobytes, macOS bytes.
+    return peak if sys.platform == "darwin" else peak * 1024
 
 
 def _parameters(fn: Any) -> set[str]:

@@ -50,6 +50,44 @@ def _abort_if_cancelled(cancel_check: Callable[[], bool] | None) -> None:
     raise JobCancelled()
 
 
+def _reset_peak_memory() -> None:
+    """Start this job's GPU memory peak from zero. Best effort: a metric
+    must never fail a render."""
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            torch.cuda.reset_peak_memory_stats()
+    except Exception:
+        pass
+
+
+def _runtime_report() -> dict[str, Any]:
+    """What the render ran on, for provenance and the benchmark (SPEC.md sec
+    16.4/16.8). Unknown values are None, never guessed."""
+    report: dict[str, Any] = {
+        "device": None,
+        "cuda_peak_allocated_bytes": None,
+        "cuda_peak_reserved_bytes": None,
+        "torch_version": None,
+        "cuda_version": None,
+    }
+    try:
+        import torch
+
+        report["torch_version"] = torch.__version__
+        report["cuda_version"] = torch.version.cuda
+        if torch.cuda.is_available():
+            report["device"] = torch.cuda.get_device_name(0)
+            report["cuda_peak_allocated_bytes"] = int(torch.cuda.max_memory_allocated())
+            report["cuda_peak_reserved_bytes"] = int(torch.cuda.max_memory_reserved())
+        else:
+            report["device"] = "cpu"
+    except Exception:
+        pass
+    return report
+
+
 def _note_stage(on_stage: Callable[[str], None] | None, stage: str) -> None:
     if on_stage is not None:
         on_stage(stage)
@@ -257,6 +295,7 @@ def run_job(
         # Re-applied here because model load can initialize OpenMP at 1 thread.
         # generate_music's arguments below are unchanged.
         _configure_torch_threads()
+        _reset_peak_memory()
         result = _api_call(
             "generate_music",
             generate_music,
@@ -267,6 +306,7 @@ def run_job(
             save_dir=str(take_dir),
         )
         _abort_if_cancelled(cancel_check)
+        runtime = _runtime_report()
 
     success = getattr(result, "success", True)
     audios = getattr(result, "audios", None) or []
@@ -429,6 +469,7 @@ def run_job(
             },
             "actual": {**actual, "seed": seed},
             "actual_origins": actual_origins,
+            "runtime": runtime,
         },
     }
     return meta, plan_patch, lrc_text

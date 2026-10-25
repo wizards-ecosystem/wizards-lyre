@@ -243,16 +243,20 @@ class Run:
         path = self.projects_dir / self.project_id
         return path if path.exists() else None
 
-    def wait_for_job(self, job_id: str, timeout: float = JOB_TIMEOUT_SEC) -> dict:
+    def wait_for_job(
+        self, job_id: str, timeout: float = JOB_TIMEOUT_SEC, *, allow_cancelled: bool = False
+    ) -> dict:
         deadline = time.monotonic() + timeout
         last = ""
         while time.monotonic() < deadline:
             job = self.api.get(f"/api/jobs/{job_id}")
-            if job["status"] in ("done", "error"):
+            if job["status"] in ("done", "error", "cancelled"):
                 if job["status"] == "error":
                     raise CheckFailed(f"job {job['action']} failed: {job['error']}")
+                if job["status"] == "cancelled" and not allow_cancelled:
+                    raise CheckFailed(f"job {job['action']} was cancelled unexpectedly")
                 return job
-            status = f"{job['action']}:{job['status']}"
+            status = f"{job['action']}:{job['status']}:{job.get('stage') or '-'}"
             if status != last:
                 print(f"      {status} ...", flush=True)
                 last = status
@@ -371,11 +375,14 @@ def stage_simple_generate(run: Run, notes: list[str]) -> None:
     # What must hold is that its choice is recorded consistently -- the plan on
     # disk, the take's metadata, and the audio itself all have to agree, or the
     # UI shows one number while the file is another.
-    if plan.get("duration_sec") != take.get("duration_sec"):
+    # SPEC.md sec 16.4: the take's duration_sec is the measured file length;
+    # what was asked for is in provenance. The draft holds the planned value.
+    actual = (take.get("provenance") or {}).get("actual") or {}
+    if plan.get("duration_sec") != actual.get("duration_sec"):
         raise CheckFailed(
-            f"the LM chose a duration but plan.json says {plan.get('duration_sec')} while the "
-            f"take says {take.get('duration_sec')} -- the filled plan was not persisted "
-            "consistently"
+            f"the planner chose a duration but plan.json says {plan.get('duration_sec')} while "
+            f"the take rendered with {actual.get('duration_sec')} -- the filled plan was not "
+            "persisted consistently"
         )
     for meta_field in ("bpm", "keyscale"):
         if not plan.get(meta_field):
@@ -391,7 +398,7 @@ def stage_simple_generate(run: Run, notes: list[str]) -> None:
     if take.get("has_lrc"):
         lrc = run.api.get_bytes(f"/api/projects/{run.project_id}/takes/{take['id']}/lrc")
         notes.append(f"lrc {len(lrc)} bytes")
-    run.check_audio(take["id"], take.get("duration_sec"), notes)
+    run.check_audio(take["id"], actual.get("duration_sec"), notes)
 
 
 def stage_custom_generate(run: Run, notes: list[str]) -> None:
@@ -513,6 +520,161 @@ def stage_optional_profiles(run: Run, notes: list[str]) -> None:
             )
         run.check_audio(take["id"], 15, notes)
         notes.append(f"{profile} loaded and generated audible audio")
+
+
+def _locked_plan(**fields: object) -> dict:
+    """A plan whose given fields are the user's own (SPEC.md sec 16.3)."""
+    origins = {name: "user" for name in fields if name in TRACKED_FIELDS}
+    return {**fields, "field_origins": origins}
+
+
+TRACKED_FIELDS = (
+    "caption",
+    "lyrics",
+    "vocal_language",
+    "bpm",
+    "keyscale",
+    "timesignature",
+    "duration_sec",
+)
+
+
+def stage_creation_contract(run: Run, notes: list[str]) -> None:
+    """SPEC.md sec 16.3 on real weights: an idea is planned, and the fields the
+    user locked survive planning and reach the renderer."""
+    run.api.put(
+        f"/api/projects/{run.project_id}/plan",
+        {
+            "query": "a brisk folk tune on fiddle and guitar",
+            "instrumental": True,
+            "caption_rewrite": False,
+            **_locked_plan(bpm=132, keyscale="E minor", timesignature="3/4", duration_sec=20),
+        },
+    )
+    job = run.enqueue({"action": "generate", "creation_mode": "from_idea", "seed": 7311})
+    take = run.take(job["take_id"])
+    run.takes["contract"] = take
+    provenance = take.get("provenance") or {}
+    actual, origins = provenance.get("actual") or {}, provenance.get("actual_origins") or {}
+    expected = {"bpm": 132, "keyscale": "E minor", "timesignature": "3/4", "duration_sec": 20}
+    for name, value in expected.items():
+        if actual.get(name) != value or origins.get(name) != "user":
+            raise CheckFailed(
+                f"locked {name}={value!r} came back as {actual.get(name)!r} "
+                f"(origin {origins.get(name)!r}); the planner overrode an explicit field"
+            )
+    brief = provenance.get("brief") or {}
+    if not (brief.get("planner") or {}).get("name"):
+        raise CheckFailed("from_idea rendered without running the planner")
+    if (brief.get("origins") or {}).get("caption") != "planner":
+        raise CheckFailed("the planner did not write the caption for a from_idea render")
+    notes.append(f"planner {brief['planner']['name']}; locks kept: {expected}")
+    notes.append(f"caption {actual.get('caption', '')[:60]!r}")
+    run.check_audio(take["id"], 20, notes)
+
+
+def stage_supplied_lyrics(run: Run, notes: list[str]) -> None:
+    """User lyrics with an idea: the planner writes the caption and metas
+    around them, and the sung words are rendered exactly as written."""
+    lyrics = "[Verse]\nlanterns on the water\nwe are walking home\n[Chorus]\nhome, home"
+    run.api.put(
+        f"/api/projects/{run.project_id}/plan",
+        {
+            "query": "a gentle harbour song",
+            "instrumental": False,
+            "vocal_language": "en",
+            "caption_rewrite": False,
+            **_locked_plan(lyrics=lyrics, duration_sec=30),
+        },
+    )
+    take = run.take(run.enqueue({"action": "generate", "seed": 2468})["take_id"])
+    provenance = take.get("provenance") or {}
+    if take.get("lyrics") != lyrics:
+        raise CheckFailed(f"supplied lyrics were changed: {take.get('lyrics')!r}")
+    planner = ((provenance.get("brief") or {}).get("planner") or {}).get("name")
+    if planner != "format_sample":
+        raise CheckFailed(f"expected the format_sample planner around user lyrics, got {planner}")
+    notes.append("lyrics rendered verbatim; caption and metas planned around them")
+    run.check_audio(take["id"], 30, notes)
+
+
+def stage_cancel(run: Run, notes: list[str]) -> None:
+    """SPEC.md sec 15.5/16.5: a queued cancel never renders; a running cancel
+    lets the current call finish and keeps no take. Prior takes stay."""
+    before = {take["id"] for take in run.api.get(f"/api/projects/{run.project_id}/takes")}
+    active_before = run.api.get(f"/api/projects/{run.project_id}")["project"]["active_take_id"]
+    run.api.put(
+        f"/api/projects/{run.project_id}/plan",
+        {"caption": "cancel me", "instrumental": True, "duration_sec": 30, "query": ""},
+    )
+    first = run.api.post(f"/api/projects/{run.project_id}/jobs", {"action": "generate"})
+    second = run.api.post(f"/api/projects/{run.project_id}/jobs", {"action": "generate"})
+    run.api.post(f"/api/jobs/{second['id']}/cancel", {})
+    deadline = time.monotonic() + JOB_TIMEOUT_SEC
+    mid_render = True
+    while time.monotonic() < deadline:
+        job = run.api.get(f"/api/jobs/{first['id']}")
+        if job["status"] == "running" and job.get("stage") == "rendering":
+            break
+        if job["status"] in ("done", "error", "cancelled"):
+            if not run.allow_mock:
+                raise CheckFailed(
+                    f"the job finished ({job['status']}) before it could be cancelled"
+                )
+            # The mock renders instantly; only the queued cancel is checkable.
+            mid_render = False
+            if job.get("take_id"):
+                before.add(job["take_id"])
+            notes.append("mid-render cancel not observable on the mock backend")
+            break
+        time.sleep(0.5)
+    if mid_render:
+        run.api.post(f"/api/jobs/{first['id']}/cancel", {})
+        running = run.wait_for_job(first["id"], allow_cancelled=True)
+        if running["status"] != "cancelled":
+            raise CheckFailed(f"the mid-render cancel left the job {running['status']}")
+    queued = run.wait_for_job(second["id"], allow_cancelled=True)
+    if queued["status"] != "cancelled":
+        raise CheckFailed(f"the queued cancel left the job {queued['status']}")
+    after = {take["id"] for take in run.api.get(f"/api/projects/{run.project_id}/takes")}
+    if after != before:
+        raise CheckFailed(f"a cancelled job left takes behind: {sorted(after - before)}")
+    if run.api.get(f"/api/projects/{run.project_id}")["project"]["active_take_id"] != active_before:
+        raise CheckFailed("cancelling changed the active take")
+    notes.append("queued and mid-render cancels both ended cancelled with no take")
+
+
+def stage_download_and_manifest(run: Run, notes: list[str]) -> None:
+    """The kept take's full-resolution file, its provenance hash, and the
+    export manifest all agree (SPEC.md sec 16.6)."""
+    take = run.takes.get("contract") or run.takes.get("custom") or run.takes["simple"]
+    run.api.post(f"/api/projects/{run.project_id}/active_take", {"take_id": take["id"]})
+    take = run.take(take["id"])
+    files = (take.get("provenance") or {}).get("files") or {}
+    if "mix.wav" not in files:
+        raise CheckFailed(f"the take recorded no mix.wav: {sorted(files)}")
+    data = run.audio(take["id"])
+    digest = "sha256:" + hashlib.sha256(data).hexdigest()
+    if digest != files["mix.wav"]["sha256"]:
+        raise CheckFailed("the downloaded audio does not match the take's recorded sha256")
+    duration, _rms, rate = wav_stats(data)
+    if not run.allow_mock and rate < 44100:
+        raise CheckFailed(f"the download is {rate} Hz; expected the full-resolution archive")
+    manifest = run.api.get(f"/v1/projects/{run.project_id}/export/manifest")
+    mix = next((entry for entry in manifest["files"] if entry["role"] == "mix"), None)
+    if mix is None or mix["sha256"] != digest:
+        raise CheckFailed("the export manifest's mix does not match the kept take's audio")
+    payload = run.api.get_bytes(manifest["export_url"])
+    with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+        inside = json.loads(archive.read("manifest.json"))
+        if "sha256:" + hashlib.sha256(archive.read(mix["path"])).hexdigest() != digest:
+            raise CheckFailed("the archived mix differs from the take's audio")
+        if inside["take"]["id"] != take["id"]:
+            raise CheckFailed("the archive's manifest names a different take")
+    notes.append(
+        f"{rate} Hz, {files['mix.wav']['channels']} ch, {duration:.1f}s; take, download, "
+        "manifest, and archive agree"
+    )
 
 
 def stage_cover(run: Run, notes: list[str]) -> None:
@@ -830,9 +992,9 @@ def stage_one_shot_song(run: Run, notes: list[str]) -> None:
     if take is None:
         raise CheckFailed(f"take {job['take_id']} is missing after the song job finished")
     plan_duration = plan.get("duration_sec")
-    take_duration = take.get("duration_sec")
+    take_duration = ((take.get("provenance") or {}).get("actual") or {}).get("duration_sec")
     if not run.allow_mock and plan_duration != take_duration:
-        raise CheckFailed(f"plan.json says {plan_duration} but the take says {take_duration}")
+        raise CheckFailed(f"plan.json says {plan_duration} but the take rendered {take_duration}")
 
     wavs = [url for url in job.get("artifacts") or [] if str(url).endswith("/mix.wav")]
     if not wavs:
@@ -963,7 +1125,185 @@ STAGES: list[tuple[str, str, object]] = [
     ),
     ("lora", "train a style pack and generate with it (~1 hour)", stage_lora),
 ]
+# SPEC.md sec 16.8: the completion gate stages, run right after the custom
+# generate so they can reuse its project.
+_COMPLETION_STAGES = [
+    ("contract", "from_idea keeps locked BPM, key, meter, duration", stage_creation_contract),
+    ("lyrics", "supplied lyrics rendered verbatim around a planned brief", stage_supplied_lyrics),
+    ("cancel", "queued and mid-render cancels keep no take", stage_cancel),
+    (
+        "download",
+        "full-res download, provenance, manifest, and ZIP agree",
+        stage_download_and_manifest,
+    ),
+]
+_AT = next(i for i, (name, _, _) in enumerate(STAGES) if name == "custom") + 1
+STAGES[_AT:_AT] = _COMPLETION_STAGES
 DEFAULT_STAGES = [name for name, _, _ in STAGES if name != "lora"]
+
+
+# SPEC.md sec 16.8 benchmark: the same inputs on the same machine, with
+# profile changes placed so that model swaps are measured separately from
+# warm repeats. Each case is (label, profile, plan). Every plan locks its
+# duration so cases are comparable; the first case also runs the planner.
+BENCHMARK_DURATION_SEC = 30
+BENCHMARK_CASES: list[tuple[str, str, dict]] = [
+    (
+        "idea-song",
+        "iterate",
+        {
+            "query": "a hopeful folk song about leaving home at dawn",
+            "instrumental": False,
+            "vocal_language": "en",
+            "caption_rewrite": False,
+            **_locked_plan(duration_sec=BENCHMARK_DURATION_SEC),
+        },
+    ),
+    (
+        "brief-instrumental",
+        "iterate",
+        {
+            "query": "",
+            "instrumental": True,
+            "caption_rewrite": False,
+            **_locked_plan(
+                caption="ambient exploration music, evolving pads, sparse plucks, calm",
+                bpm=70,
+                keyscale="D minor",
+                duration_sec=BENCHMARK_DURATION_SEC,
+            ),
+        },
+    ),
+]
+# (case label, profile, repeats). The first iterate run after the worker's
+# startup preload is warm for the DiT but cold for planning caches.
+BENCHMARK_PLAN: list[tuple[str, str, int]] = [
+    ("idea-song", "iterate", 2),
+    ("brief-instrumental", "iterate", 2),
+    ("brief-instrumental", "polish", 2),
+    ("brief-instrumental", "iterate", 1),
+    ("brief-instrumental", "quality", 2),
+    ("brief-instrumental", "iterate", 1),
+]
+
+
+def _seconds_between(start: str | None, end: str | None) -> float | None:
+    from datetime import datetime
+
+    if not start or not end:
+        return None
+    return round((datetime.fromisoformat(end) - datetime.fromisoformat(start)).total_seconds(), 3)
+
+
+def _job_metrics(take: dict, observed_done: float, fetched: float, data: bytes) -> dict:
+    provenance = take.get("provenance") or {}
+    stamps = provenance.get("timestamps") or {}
+    stages = stamps.get("stages") or {}
+    runtime = provenance.get("runtime") or {}
+    after_load = stages.get("planning") or stages.get("rendering")
+    after_planning = stages.get("rendering")
+    duration, _rms, rate = wav_stats(data)
+    return {
+        "queue_wait_sec": _seconds_between(stamps.get("submitted_at"), stamps.get("started_at")),
+        "model_load_sec": _seconds_between(stages.get("loading_model"), after_load),
+        "planning_sec": _seconds_between(stages.get("planning"), after_planning)
+        if stages.get("planning")
+        else None,
+        "render_and_decode_sec": _seconds_between(
+            stages.get("rendering"), stages.get("writing_take")
+        ),
+        "write_take_sec": _seconds_between(stages.get("writing_take"), stamps.get("committed_at")),
+        "submit_to_commit_sec": _seconds_between(
+            stamps.get("submitted_at"), stamps.get("committed_at")
+        ),
+        "done_to_audio_fetched_sec": round(fetched - observed_done, 3),
+        "cuda_peak_allocated_gb": _gb(runtime.get("cuda_peak_allocated_bytes")),
+        "cuda_peak_reserved_gb": _gb(runtime.get("cuda_peak_reserved_bytes")),
+        "worker_peak_rss_gb": _gb(runtime.get("worker_peak_rss_bytes")),
+        "output_sec": round(duration, 2),
+        "sample_rate": rate,
+        "bytes": len(data),
+        "device": runtime.get("device"),
+        "torch": runtime.get("torch_version"),
+        "cuda": runtime.get("cuda_version"),
+    }
+
+
+def _gb(value: object) -> float | None:
+    return round(float(value) / 1024**3, 2) if isinstance(value, (int, float)) else None
+
+
+def run_benchmark(api: Api, out_dir: Path, allow_mock: bool) -> int:
+    """Run BENCHMARK_PLAN once and write a JSON and a Markdown report."""
+    project = api.post("/api/projects", {"title": f"Benchmark {time.strftime('%Y-%m-%d %H:%M')}"})
+    run = Run(api, project["id"], None, allow_mock=allow_mock)
+    cases = {label: (profile, plan) for label, profile, plan in BENCHMARK_CASES}
+    rows: list[dict] = []
+    previous_profile = api.get("/api/health").get("dit_loaded")
+    for label, profile, repeats in BENCHMARK_PLAN:
+        _default_profile, plan = cases[label]
+        for repeat in range(repeats):
+            api.put(f"/api/projects/{run.project_id}/plan", plan)
+            body = {"action": "generate", "dit_profile": profile, "seed": 1000 + len(rows)}
+            if plan.get("query"):
+                body["creation_mode"] = "from_idea"
+            started = time.monotonic()
+            job = run.enqueue(body, timeout=PROFILE_TIMEOUT_SEC)
+            observed_done = time.monotonic()
+            take = run.take(job["take_id"])
+            data = run.audio(take["id"])
+            fetched = time.monotonic()
+            row = {
+                "case": label,
+                "profile": profile,
+                "repeat": repeat + 1,
+                "swap": previous_profile != profile,
+                "client_wall_sec": round(observed_done - started, 2),
+                **_job_metrics(take, observed_done, fetched, data),
+            }
+            rows.append(row)
+            previous_profile = profile
+            print(
+                f"  {label:<20} {profile:<8} #{repeat + 1} swap={row['swap']!s:<5} "
+                f"load {row['model_load_sec']}s render {row['render_and_decode_sec']}s "
+                f"write {row['write_take_sec']}s peak {row['cuda_peak_reserved_gb']} GB",
+                flush=True,
+            )
+    health = api.get("/api/health")
+    report = {
+        "schema": "lyre.benchmark/1",
+        "created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "worker": health.get("gpu"),
+        "project_id": run.project_id,
+        "duration_sec": BENCHMARK_DURATION_SEC,
+        "rows": rows,
+    }
+    out_dir.mkdir(parents=True, exist_ok=True)
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    (out_dir / f"benchmark-{stamp}.json").write_text(json.dumps(report, indent=2))
+    columns = (
+        "case",
+        "profile",
+        "repeat",
+        "swap",
+        "queue_wait_sec",
+        "model_load_sec",
+        "planning_sec",
+        "render_and_decode_sec",
+        "write_take_sec",
+        "submit_to_commit_sec",
+        "done_to_audio_fetched_sec",
+        "cuda_peak_reserved_gb",
+        "worker_peak_rss_gb",
+        "output_sec",
+        "sample_rate",
+    )
+    lines = ["| " + " | ".join(columns) + " |", "|" + "---|" * len(columns)]
+    for row in rows:
+        lines.append("| " + " | ".join(str(row.get(name, "")) for name in columns) + " |")
+    (out_dir / f"benchmark-{stamp}.md").write_text("\n".join(lines) + "\n")
+    print(f"\n  wrote {out_dir}/benchmark-{stamp}.json and .md (project {run.project_id} kept)")
+    return 0
 
 
 def main() -> int:
@@ -1005,6 +1345,14 @@ def main() -> int:
     )
     parser.add_argument("--list", action="store_true", help="list the stages and exit")
     parser.add_argument(
+        "--benchmark",
+        action="store_true",
+        help=(
+            "instead of the stages, run the benchmark matrix (SPEC.md sec 16.8) and write "
+            "a report under output/benchmarks/"
+        ),
+    )
+    parser.add_argument(
         "--keep",
         action="store_true",
         help="keep the project afterwards so its takes can be listened to",
@@ -1028,6 +1376,9 @@ def main() -> int:
 
     projects_dir = Path(args.projects_dir)
     api = Api(args.base_url)
+    if args.benchmark:
+        print(f"Benchmark against {args.base_url}\n")
+        return run_benchmark(api, REPO_ROOT / "output" / "benchmarks", args.allow_mock)
     print(f"Live stack check against {args.base_url}")
     print(f"Stages: {', '.join(selected)}\n")
 

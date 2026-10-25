@@ -2341,3 +2341,44 @@ def test_cpu_thread_pool_follows_the_machine_or_the_override(
     assert torch_mod.cuda.synced is True
     assert torch_mod.cuda.emptied is True
     assert torch_mod.cuda.ipc is True
+
+
+def test_instrumental_takes_skip_alignment_scoring_and_lrc(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The `[Instrumental]` placeholder has no words to align, so no second
+    forward pass runs for it (measured at ~11 s per take on the offloaded
+    quality profile)."""
+    log: list[tuple] = []
+    tensors = {
+        name: object()
+        for name in (
+            "pred_latents",
+            "encoder_hidden_states",
+            "encoder_attention_mask",
+            "context_latents",
+            "lyric_token_idss",
+        )
+    }
+    _install_fake_acestep(monkeypatch, log, lyric_score_tensors=tensors)
+    plan = {
+        "query": "",
+        "caption": "ambient pads",
+        "lyrics": "[Instrumental]",
+        "instrumental": True,
+        "bpm": 70,
+        "keyscale": "D minor",
+        "duration_sec": 20,
+        "vocal_language": "en",
+        "timesignature": "4/4",
+    }
+    meta, _patch, lrc = acestep_worker.run_job(
+        job={"action": "generate", "dit_profile": "iterate", "seed": 3, "src_audio": None},
+        plan=plan,
+        take_id="t-inst",
+        take_dir=tmp_path / "take-inst",
+    )
+    names = [entry[0] for entry in log]
+    assert "handler.get_lyric_score" not in names
+    assert "handler.get_lyric_timestamp" not in names
+    assert meta["score"] is None and lrc is None

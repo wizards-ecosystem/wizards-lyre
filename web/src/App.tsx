@@ -112,6 +112,7 @@ export default function App() {
     takeLabel: string;
     legacy: boolean;
     withSeed: boolean;
+    lmCodes: boolean;
   } | null>(null);
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>("takes");
   const [operationGroup, setOperationGroup] = useState<OperationGroup>("create");
@@ -515,7 +516,13 @@ export default function App() {
     };
     savePlanDraft(plan);
     if (withSeed) setSeedInput(String(take.seed));
-    setSettingsSource({ takeLabel: takeLabel(take.id), legacy: !brief, withSeed });
+    const request = (provenance as { request?: Record<string, unknown> } | null)?.request;
+    setSettingsSource({
+      takeLabel: takeLabel(take.id),
+      legacy: !brief,
+      withSeed,
+      lmCodes: request?.thinking === true,
+    });
   }
 
   async function refreshDetail(id: string) {
@@ -1364,7 +1371,9 @@ export default function App() {
                     {settingsSource.legacy &&
                       " That take predates full provenance: only its caption, lyrics, BPM, and key were recorded."}
                     {settingsSource.withSeed &&
-                      " The same seed is not a promise of identical audio on other hardware or versions."}
+                      (settingsSource.lmCodes
+                        ? " That take used language-model audio codes, which its seed does not reproduce: expect a different render of the same brief."
+                        : " The same seed is not a promise of identical audio on other hardware or versions.")}
                   </span>
                   <button
                     type="button"

@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
+from server.generation import brief as creation
 from worker.acestep_worker.api import _api_call
 from worker.acestep_worker.settings import _LOCK, GENERATION_STEPS
 
@@ -78,6 +79,15 @@ def _result_field(container: Any, name: str, fallback: Any) -> Any:
     return getattr(container, name, fallback)
 
 
+def _has_sung_words(lyrics: Any) -> bool:
+    """Alignment scoring and LRC timestamps need words to align. The
+    `[Instrumental]` placeholder has none, and scoring it cost a second
+    forward pass per take -- about 11 s on the CPU-offloaded quality profile,
+    measured on the 16 GB target (docs/COMPLETION_BENCHMARK.md)."""
+    text = str(lyrics or "").strip()
+    return bool(text) and not creation.is_instrumental_placeholder(text)
+
+
 def _quality_score(
     handler: Any,
     extra_lookup: Callable[[str, Any], Any],
@@ -110,7 +120,7 @@ def _quality_score(
     model (SPEC.md sec 4.3: "one GPU occupant... jobs serialize"), same as
     the `generate_music` call above.
     """
-    if not lyrics or not str(lyrics).strip():
+    if not _has_sung_words(lyrics):
         return None
     pred_latents = extra_lookup("pred_latents", None)
     encoder_hidden_states = extra_lookup("encoder_hidden_states", None)
@@ -177,7 +187,7 @@ def _lyric_timestamps(
     `_quality_score`: a timestamp failure must never fail an otherwise-
     successful take, so this never raises -- it only ever falls back to
     `None`, meaning no `lyrics.lrc` is written for the take."""
-    if not lyrics or not str(lyrics).strip():
+    if not _has_sung_words(lyrics):
         return None
     if not duration_sec:
         return None

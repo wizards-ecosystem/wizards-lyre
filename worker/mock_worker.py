@@ -272,6 +272,7 @@ def run_job(
             },
             "actual": {**actual, "seed": seed},
             "actual_origins": actual_origins,
+            "runtime": {"device": "mock"},
         },
     }
     return meta, plan_patch, None

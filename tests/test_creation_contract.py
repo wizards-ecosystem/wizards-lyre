@@ -367,3 +367,36 @@ def test_language_list_matches_upstream() -> None:
     )
     for key in constants.VALID_KEYSCALES:
         assert creation.parse_keyscale(key) == key
+
+
+def test_a_planner_filled_meta_does_not_turn_on_lm_codes() -> None:
+    """A hand-written caption with one planner-filled field (here the meter)
+    renders with LM codes off, as written: only planner-written words make a
+    brief "planned". LM codes are where the live check found a fixed seed
+    stops reproducing audio (docs/COMPLETION_BENCHMARK.md)."""
+    plan = _plan(
+        caption="sparse ambient drone",
+        lyrics="[Instrumental]",
+        instrumental=True,
+        bpm=70,
+        keyscale="A minor",
+        caption_rewrite=False,
+        creation_mode="from_brief",
+        field_origins={
+            **creation.default_origins(),
+            "caption": "user",
+            "bpm": "user",
+            "keyscale": "user",
+            "timesignature": "planner",
+        },
+    )
+    flags = creation.render_flags(creation.brief_without_planning(_intent(plan)), "generate")
+    assert flags["thinking"] is False
+
+    planned = _plan(
+        caption="auto: rain",
+        creation_mode="from_brief",
+        field_origins={**creation.default_origins(), "caption": "planner"},
+    )
+    flags = creation.render_flags(creation.brief_without_planning(_intent(planned)), "generate")
+    assert flags["thinking"] is True

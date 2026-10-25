@@ -46,6 +46,10 @@ information.
 | `preflight` | The server is up but no worker has reported in, or the worker failed to load models. |
 | `generate` | Simple mode is broken: either the 5 Hz LM did not fill a caption, or the server did not persist the filled plan that makes simple mode reusable. Also checks that the worker replaces the `-1` seed with the value it used. |
 | `custom` | An explicit plan was not honored: a fixed seed was not recorded, or the LM rewrote a caption the user locked with `caption_rewrite: false`. |
+| `contract` | SPEC.md section 16.3 on real weights: a `from_idea` render ran the planner, yet the BPM, key, meter, and duration the user locked came back unchanged with origin `user`. A failure means a planner suggestion overrode an explicit field. |
+| `lyrics` | Supplied lyrics with an idea: the `format_sample` planner wrote the caption around them and the take's lyrics are the user's text exactly. |
+| `cancel` | A queued cancel and a mid-render cancel both ended `cancelled`, left no take behind, and did not move the active take. |
+| `download` | The kept take's full-resolution WAV, its recorded sha256, the export manifest, and the archived mix are the same bytes. |
 | `profiles` | The 50-step `polish` profile or the 4B `quality` profile failed to load and generate. On the 16 GB target, a successful `quality` run also proves the required CPU-offload API is available. |
 | `cover` | A cover overwrote its source instead of creating a new take, or did not set `parent_take_id`. Takes are immutable (SPEC.md section 7.3); the history depends on this. |
 | `repaint` | The requested region was not recorded, which is what the waveform drag-selection feeds. |
@@ -89,3 +93,18 @@ almost always a crash or a model still downloading.
 
 Run it against real weights on the target hardware. `pytest` and CI verify the
 surrounding plumbing but cannot prove that generation works.
+
+## Benchmark
+
+`./scripts/lyre live-check --benchmark` runs a fixed matrix instead of the
+stages: two 30-second cases (a planned song, a written instrumental brief)
+across iterate, polish, and quality, with profile changes placed so that model
+swaps are measured apart from warm repeats. Each row comes from the take's own
+provenance timestamps: queue wait, model load or swap, planning, render and
+decode, writing the take, submit to commit, and the client's time to fetch the
+audio after it saw `done`, plus the job's peak GPU memory and the worker's peak
+RSS. The report lands in `output/benchmarks/` as JSON and Markdown. Results for
+the release are in [COMPLETION_BENCHMARK.md](COMPLETION_BENCHMARK.md).
+
+Compare runs only on the same machine with the same inputs, and keep cold and
+warm numbers apart. A handful of samples is a sample, not a percentile.

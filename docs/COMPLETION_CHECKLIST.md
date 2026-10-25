@@ -17,7 +17,7 @@ repository (tests, or a recorded report for the live gates).
 | 08 | Finish audition, keep, and reuse | P1 | 03, 06 | done (real-browser media check is gate 2) |
 | 09 | Export manifest and narrow agent parity | P1 | 03, 05, 08 | done |
 | 10 | Preserve existing lanes and migrate safely | P0 gate | 04–09 | done |
-| 11 | Measure, optimize, simplify touched code | P1 | 10 | open |
+| 11 | Measure, optimize, simplify touched code | P1 | 10 | done |
 | 12 | Verify, freeze, release | P1 gate | 01–11 | open |
 
 ## Release gates (SPEC.md section 16.8)
