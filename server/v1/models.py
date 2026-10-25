@@ -11,7 +11,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 JobStatus = Literal["queued", "running", "done", "error", "cancelled"]
-JobStage = Literal["loading_model", "planning", "rendering", "writing_take"]
+JobStage = Literal["loading_model", "planning", "rendering", "writing_take", "needs_confirmation"]
 
 
 class ErrorObject(BaseModel):
@@ -117,6 +117,9 @@ class Take(BaseModel):
     lora_id: str | None = None
     favorite: bool = False
     notes: str = ""
+    job_id: str | None = None
+    provenance: dict[str, Any] | None = None
+    provenance_complete: bool = False
 
 
 class TakePage(BaseModel):
@@ -146,6 +149,8 @@ class Job(BaseModel):
     created_at: str
     updated_at: str
     artifacts: list[str]
+    submission_id: str | None = None
+    retry_of: str | None = None
 
 
 class JobPage(BaseModel):
@@ -222,6 +227,9 @@ class JobCreate(BaseModel):
     # SPEC.md sec 16.3: `from_idea` re-plans from the idea, `from_brief`
     # renders the stored brief. Omitted: the plan's own creation_mode.
     creation_mode: Literal["from_idea", "from_brief"] | None = None
+    # SPEC.md sec 16.4: one submission per project. The same id and body
+    # return the existing job; a different body is 409.
+    submission_id: str | None = None
 
 
 class UploadCreated(BaseModel):

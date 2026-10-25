@@ -49,6 +49,8 @@ This page is the orientation; the schema is the specification.
 | `POST` | `/api/projects/{id}/jobs` | Enqueue a job. Returns the `queued` row. |
 | `GET` | `/api/jobs/{job_id}` | One job's status. |
 | `GET` | `/api/jobs` | Recent jobs. Filters: `project_id`, `action`, `active`, `limit`. |
+| `POST` | `/api/jobs/{job_id}/cancel` | Cooperative cancel, same as `/v1`. |
+| `POST` | `/api/jobs/{job_id}/retry` | Queue an explicit retry linked by `retry_of` (SPEC.md section 16.5). |
 | `GET` | `/api/remote-gpu` | Remote GPU state: provisioner, price quote, connection, rental, host health. |
 | `PUT` | `/api/remote-gpu/connection` | Connect a host you run: `{ base_url, secret }`. |
 | `DELETE` | `/api/remote-gpu/connection` | Forget the connected host. |
@@ -71,6 +73,7 @@ This page is the orientation; the schema is the specification.
 | `GET` | `/v1/projects/{id}/export` | Zip: `project.json`, `plan.json`, active mix, optional stems. |
 | `POST` | `/v1/projects/{id}/jobs` | Enqueue a job. `202`, `Location: /v1/jobs/{job_id}`, and the job object. |
 | `POST` | `/v1/jobs/{job_id}/cancel` | Cancel a queued job, or ask a running job to drop its audio. |
+| `POST` | `/v1/jobs/{job_id}/retry` | Retry a failed, cancelled, or held job: `202` and the new job, whose `retry_of` names this one. |
 | `POST` | `/v1/songs` | Create a project, write its plan, and queue `generate`. `202`, `Location`, and the job. |
 | `GET` | `/v1/artifacts/{id}/{take_id}/mix.wav` | Stable `mix.wav` for a take. |
 | `GET` | `/v1/artifacts/{id}/{take_id}/mix.mp3` | Stable `mix.mp3` for a take. |

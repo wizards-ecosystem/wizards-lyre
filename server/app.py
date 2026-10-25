@@ -225,6 +225,9 @@ class JobBody(BaseModel):
     # SPEC.md sec 16.3: `from_idea` re-plans from the idea, `from_brief`
     # renders the stored brief. Omitted: the plan's own creation_mode.
     creation_mode: Literal["from_idea", "from_brief"] | None = None
+    # SPEC.md sec 16.4: one submission per project. The same id and body
+    # return the existing job; a different body is 409.
+    submission_id: str | None = None
 
 
 @app.exception_handler(storage.PathJailError)
@@ -255,6 +258,11 @@ def _lora_not_found_handler(request, exc: storage.LoraNotFound):
 @app.exception_handler(jobs.JobNotFound)
 def _job_not_found_handler(request, exc: jobs.JobNotFound):
     return _error_body(request, 404, f"job not found: {exc}", code="not_found")
+
+
+@app.exception_handler(jobs.SubmissionConflict)
+def _submission_conflict_handler(request, exc: jobs.SubmissionConflict):
+    return _error_body(request, 409, str(exc), code="conflict", param="submission_id")
 
 
 @app.exception_handler(jobs.JobError)
@@ -467,6 +475,20 @@ def create_job(project_id: str, body: JobBody) -> dict:
 @app.get("/api/jobs/{job_id}")
 def get_job(job_id: str) -> dict:
     return jobs.get_job(job_id)
+
+
+@app.post("/api/jobs/{job_id}/cancel")
+def cancel_job(job_id: str) -> dict:
+    # Same cooperative cancel as `/v1` (SPEC.md sec 15.5); the studio needs it
+    # to stop a job it started (sec 16.6).
+    return jobs.cancel_job(job_id)
+
+
+@app.post("/api/jobs/{job_id}/retry")
+def retry_job(job_id: str) -> dict:
+    # SPEC.md sec 16.5: a new job linked by `retry_of` that repeats the
+    # frozen request.
+    return jobs.retry_job(job_id)
 
 
 @app.get("/api/jobs")

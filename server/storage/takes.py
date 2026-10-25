@@ -39,6 +39,12 @@ def _normalize_take_meta(meta: dict) -> dict:
     # already written -- a take created before this exists has no key at
     # all, same reasoning as favorite/notes above.
     meta.setdefault("lora_id", None)
+    # SPEC.md sec 16.4: a take written before provenance existed is legacy.
+    # Its unknown values stay unknown; nothing is backfilled from the plan.
+    meta.setdefault("job_id", None)
+    meta.setdefault("provenance", None)
+    provenance = meta["provenance"]
+    meta["provenance_complete"] = bool(isinstance(provenance, dict) and provenance.get("complete"))
     return meta
 
 

@@ -441,6 +441,26 @@ def cancel_job(
     return job_object(jobs.read_job(job_id))
 
 
+@router.post(
+    "/jobs/{job_id}/retry",
+    status_code=202,
+    response_model=Job,
+    responses=_JOB_CREATED,
+    dependencies=_IDEMPOTENT,
+)
+def retry_job(
+    job_id: str,
+    response: Response,
+    _auth: Annotated[Any, Depends(require_scope("generate"))],
+) -> dict[str, Any]:
+    """Queue an explicit retry of a failed, cancelled, or held job (SPEC.md
+    sec 16.5). The new job's `retry_of` names this one. A job that failed
+    while a Remote GPU was rendering may repeat paid compute."""
+    job = _accepted_job(jobs.retry_job(job_id))
+    response.headers["Location"] = f"/v1/jobs/{job['id']}"
+    return job
+
+
 def _artifact(project_id: str, take_id: str, name: str, media_type: str) -> FileResponse:
     storage.load_project(project_id)
     candidate = storage.take_dir(project_id, take_id) / name

@@ -42,7 +42,14 @@ from server.jobs.deletion import (
     begin_project_deletion,
     remove_project,
 )
-from server.jobs.errors import JobCancelled, JobError, JobNotFound, ProjectDeletionConflict
+from server.jobs.errors import (
+    JobCancelled,
+    JobError,
+    JobFenced,
+    JobNotFound,
+    ProjectDeletionConflict,
+    SubmissionConflict,
+)
 from server.jobs.queue import (
     DEFAULT_JOB_TIMEOUT_SEC,
     DEFAULT_LORA_TIMEOUT_SEC,
@@ -57,6 +64,7 @@ from server.jobs.queue import (
     claim_next_queued_job,
     enqueue_job,
     finish_done,
+    freeze_resolved,
     get_job,
     job_timeout_sec,
     list_jobs_page,
@@ -65,6 +73,8 @@ from server.jobs.queue import (
     queue_counts,
     read_job,
     reclaim_stale_jobs,
+    record_remote_handle,
+    retry_job,
     set_stage,
 )
 from server.jobs.runner import (
@@ -147,8 +157,10 @@ __all__ = [
     "WORKER_STATUS_STALE_AFTER_SEC",
     "JobCancelled",
     "JobError",
+    "JobFenced",
     "JobNotFound",
     "ProjectDeletionConflict",
+    "SubmissionConflict",
     "WorkerFn",
     "abort_project_deletion",
     "acquire_worker_lease",
@@ -158,6 +170,7 @@ __all__ = [
     "claim_next_queued_job",
     "enqueue_job",
     "finish_done",
+    "freeze_resolved",
     "get_job",
     "job_timeout_sec",
     "get_worker_capability",
@@ -173,6 +186,8 @@ __all__ = [
     "publish_worker_capability",
     "publish_worker_status",
     "reclaim_stale_jobs",
+    "record_remote_handle",
+    "retry_job",
     "release_worker_lease",
     "renew_worker_lease",
     "resolve_worker_module",

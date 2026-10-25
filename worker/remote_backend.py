@@ -191,6 +191,7 @@ def run_job(
     on_stage: Callable[[str], None] | None = None,
     cancel_check: Callable[[], bool] | None = None,
     on_resolved: Callable[[dict], None] | None = None,
+    on_remote_handle: Callable[[str], None] | None = None,
 ) -> tuple[dict, dict | None, str | None]:
     """Render one job on the connected Remote GPU. Returns `(take_meta,
     plan_patch, lrc_text)` exactly as the local backends do.
@@ -208,6 +209,11 @@ def run_job(
         on_stage("loading_model")
     remote = client.RemoteClient(_connection())
     token = _submit(remote, _submission(job, plan, take_id))
+    if on_remote_handle is not None:
+        # Recorded before waiting, so a worker that dies mid-render leaves
+        # a known handle instead of an uncertain job that would be rendered
+        # again (SPEC.md sec 16.5).
+        on_remote_handle(token)
     if on_stage is not None:
         on_stage("rendering")
     result = _wait(remote, token, on_dit_loaded, cancel_check)

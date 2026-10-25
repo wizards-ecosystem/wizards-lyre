@@ -7,8 +7,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import re
 import threading
 import time
 import uuid
@@ -16,8 +18,10 @@ from contextlib import closing
 from typing import Any
 
 from server import storage
+from server.generation import artifacts
+from server.generation import brief as creation
 from server.jobs.db import _connect, _is_stale, _now, _row_to_dict
-from server.jobs.errors import JobError, JobNotFound
+from server.jobs.errors import JobError, JobFenced, JobNotFound, SubmissionConflict
 from server.jobs.validation import (
     LORA_ELIGIBLE_ACTIONS,
     PHASE_GATED_ACTIONS,
@@ -30,6 +34,14 @@ from server.jobs.validation import (
     _resolve_track_name,
 )
 from server.jobs.worker_registry import _check_worker_capability
+from worker.acestep_worker.settings import (
+    DIT_CHECKPOINTS,
+    GENERATION_GUIDANCE_SCALE,
+    GENERATION_STEPS,
+)
+
+SUBMISSION_SCHEMA = "lyre.submission/1"
+RESOLVED_SCHEMA = "lyre.resolved/1"
 
 HEARTBEAT_INTERVAL_SEC = 5.0
 STALE_AFTER_SEC = 60.0
@@ -46,8 +58,56 @@ DEFAULT_JOB_TIMEOUT_SEC = 20 * 60.0
 DEFAULT_LORA_TIMEOUT_SEC = 3 * 60 * 60.0
 
 
-def enqueue_job(project_id: str, body: dict[str, Any]) -> dict:
+_SUBMISSION_ID = re.compile(r"^[!-~]{1,255}$")
+
+
+def _submission_record(
+    body: dict[str, Any], dit_profile: str, now: str, retry_of: str | None
+) -> dict[str, Any]:
+    """`lyre.submission/1` (SPEC.md sec 16.4): what was asked for and by
+    which code, frozen with the row."""
+    seed = body.get("seed", -1)
+    return {
+        "schema": SUBMISSION_SCHEMA,
+        "submitted_at": now,
+        "submission_id": body.get("submission_id"),
+        "retry_of": retry_of,
+        "request_hash": _request_hash(body),
+        "seed_policy": "random" if seed in (None, -1) else "fixed",
+        "requested_seed": seed,
+        "dit_profile": dit_profile,
+        "checkpoint": DIT_CHECKPOINTS.get(dit_profile),
+        "inference_steps": GENERATION_STEPS.get(dit_profile),
+        "guidance_scale": GENERATION_GUIDANCE_SCALE.get(dit_profile),
+        "app_version": artifacts.app_version(),
+        "app_revision": artifacts.app_revision(),
+        "ace_step_revision": artifacts.ace_step_revision(),
+    }
+
+
+def _request_hash(body: dict[str, Any]) -> str:
+    """Canonical hash of a job body, for `submission_id` replays. Internal
+    only: `/v1` Idempotency-Key keeps comparing raw bodies (sec 15.3)."""
+    canonical = creation.canonical_json({k: v for k, v in body.items() if k != "submission_id"})
+    return "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def enqueue_job(project_id: str, body: dict[str, Any], *, retry_of: str | None = None) -> dict:
+    """Validate a job body and insert it `queued`, with its frozen creation
+    input and submission record (SPEC.md sec 16.4), before returning.
+
+    `submission_id`, when given, identifies the request within the project:
+    the same id with the same body returns the existing job, and with a
+    different body raises `SubmissionConflict` (409). `retry_of` links an
+    explicit retry to the job it repeats."""
     project = storage.load_project(project_id)
+    submission_id = body.get("submission_id")
+    if submission_id is not None and (
+        not isinstance(submission_id, str) or not _SUBMISSION_ID.fullmatch(submission_id)
+    ):
+        raise JobError(
+            "submission_id must be 1-255 visible ASCII characters", param="submission_id"
+        )
 
     action = body.get("action")
     if action in PHASE_GATED_ACTIONS:
@@ -125,6 +185,7 @@ def enqueue_job(project_id: str, body: dict[str, Any]) -> dict:
     payload["batch_size"] = 1
     if creation_record is not None:
         payload["creation"] = creation_record
+    payload["submission"] = _submission_record(body, dit_profile, now, retry_of)
     if resolved_lora is not None:
         # worker/acestep_worker.py's train_lora already writes final adapter
         # weights to <lora_dir>/adapter/final/ (see its module docstring) --
@@ -154,10 +215,25 @@ def enqueue_job(project_id: str, body: dict[str, Any]) -> dict:
         if deleting is not None:
             conn.rollback()
             raise JobError(f"project is being deleted: {project_id}")
+        if submission_id is not None:
+            existing = conn.execute(
+                "SELECT id, payload_json FROM jobs WHERE project_id = ? AND submission_id = ?",
+                (project_id, submission_id),
+            ).fetchone()
+            if existing is not None:
+                conn.rollback()
+                stored = json.loads(existing["payload_json"]).get("submission") or {}
+                if stored.get("request_hash") != payload["submission"]["request_hash"]:
+                    raise SubmissionConflict(
+                        f"submission_id {submission_id!r} already names a different request "
+                        f"in this project (job {existing['id']})"
+                    )
+                return get_job(existing["id"])
         conn.execute(
             "INSERT INTO jobs (id, project_id, action, dit_profile, status, payload_json, "
-            "take_id, error, created_at, updated_at, heartbeat_at, attempts) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "take_id, error, created_at, updated_at, heartbeat_at, attempts, "
+            "submission_id, retry_of) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 job_id,
                 project_id,
@@ -171,6 +247,8 @@ def enqueue_job(project_id: str, body: dict[str, Any]) -> dict:
                 now,
                 None,
                 0,
+                submission_id,
+                retry_of,
             ),
         )
         conn.commit()
@@ -184,13 +262,20 @@ def _set_status(
     take_id: str | None = None,
     lora_id: str | None = None,
     error: str | None = None,
+    attempt_token: str | None = None,
 ) -> None:
+    """Unconditional, except that with `attempt_token` a row another attempt
+    now owns (or one that already left `running`) is left alone."""
+    query = (
+        "UPDATE jobs SET status = ?, take_id = ?, lora_id = ?, error = ?, updated_at = ? "
+        "WHERE id = ?"
+    )
+    args: tuple = (status, take_id, lora_id, error, _now(), job_id)
+    if attempt_token is not None:
+        query += " AND status = 'running' AND attempt_token = ?"
+        args = (*args, attempt_token)
     with closing(_connect()) as conn:
-        conn.execute(
-            "UPDATE jobs SET status = ?, take_id = ?, lora_id = ?, error = ?, updated_at = ? "
-            "WHERE id = ?",
-            (status, take_id, lora_id, error, _now(), job_id),
-        )
+        conn.execute(query, args)
         conn.commit()
 
 
@@ -335,10 +420,23 @@ def _heartbeat_loop(
         _touch_heartbeat(job_id)
 
 
+GENERATE_SHAPED = {"generate", "cover", "repaint", "extract", "lego", "complete"}
+NEEDS_CONFIRMATION = "needs_confirmation"
+
+
 def claim_next_queued_job() -> dict[str, Any] | None:
     """Atomically claim the oldest `queued` job, marking it `running` and
     starting its heartbeat lease. Used by `process_one_queued_job` / the
     dedicated worker process loop.
+
+    Each claim gets a fresh `attempt_token` (SPEC.md sec 16.5). Every write
+    the attempt makes afterwards -- the resolved brief, the commit, a
+    failure -- is conditional on that token, so an attempt whose lease was
+    reclaimed cannot publish anything.
+
+    A generate-shaped job queued before section 16 has no creation
+    snapshot. It is never run against the live plan: it is held `queued`
+    with stage `needs_confirmation` until the user cancels or retries it.
 
     The `project_deletions` exclusion is defense in depth, not the primary
     guard: `enqueue_job` and `begin_project_deletion` already serialize
@@ -347,28 +445,80 @@ def claim_next_queued_job() -> dict[str, Any] | None:
     never pick up a job for a project mid-deletion, even if that invariant
     were ever violated by a future bug)."""
     now = _now()
+    token = uuid.uuid4().hex
     with closing(_connect()) as conn:
         conn.execute("BEGIN IMMEDIATE")
-        row = conn.execute(
-            "SELECT jobs.* FROM jobs "
-            "LEFT JOIN project_deletions ON project_deletions.project_id = jobs.project_id "
-            "WHERE jobs.status = 'queued' AND project_deletions.project_id IS NULL "
-            "ORDER BY jobs.created_at ASC LIMIT 1"
-        ).fetchone()
-        if row is None:
-            conn.commit()
-            return None
+        while True:
+            row = conn.execute(
+                "SELECT jobs.* FROM jobs "
+                "LEFT JOIN project_deletions ON project_deletions.project_id = jobs.project_id "
+                "WHERE jobs.status = 'queued' AND project_deletions.project_id IS NULL "
+                "AND (jobs.stage IS NULL OR jobs.stage != ?) "
+                "ORDER BY jobs.created_at ASC LIMIT 1",
+                (NEEDS_CONFIRMATION,),
+            ).fetchone()
+            if row is None:
+                conn.commit()
+                return None
+            payload = json.loads(row["payload_json"])
+            if row["action"] in GENERATE_SHAPED and "creation" not in payload:
+                conn.execute(
+                    "UPDATE jobs SET stage = ?, updated_at = ? WHERE id = ? AND status = 'queued'",
+                    (NEEDS_CONFIRMATION, now, row["id"]),
+                )
+                continue
+            break
         conn.execute(
-            "UPDATE jobs SET status = 'running', heartbeat_at = ?, "
+            "UPDATE jobs SET status = 'running', heartbeat_at = ?, attempt_token = ?, "
             "attempts = attempts + 1, updated_at = ? WHERE id = ?",
-            (now, now, row["id"]),
+            (now, token, now, row["id"]),
         )
         conn.commit()
 
     job = _row_to_dict(row)
     job["status"] = "running"  # `row` was fetched before the UPDATE above
-    job["payload"] = json.loads(row["payload_json"])
+    job["payload"] = payload
+    job["attempt_token"] = token
+    job["attempt"] = int(row["attempts"]) + 1
+    job["resolved"] = json.loads(row["resolved_json"]) if row["resolved_json"] else None
     return job
+
+
+def _fenced_update(job_id: str, attempt_token: str | None, sql: str, params: tuple) -> bool:
+    """Run `UPDATE jobs SET <sql> WHERE id = ?` only while the row is still
+    `running` under `attempt_token` (no token: any running row)."""
+    query = f"UPDATE jobs SET {sql} WHERE id = ? AND status = 'running'"
+    args: tuple = (*params, job_id)
+    if attempt_token is not None:
+        query += " AND attempt_token = ?"
+        args = (*args, attempt_token)
+    with closing(_connect()) as conn:
+        cursor = conn.execute(query, args)
+        conn.commit()
+        return cursor.rowcount == 1
+
+
+def freeze_resolved(job_id: str, attempt_token: str | None, record: dict[str, Any]) -> None:
+    """Persist the resolved brief, concrete seed, and model configuration
+    before the first DiT call (SPEC.md sec 16.4). An automatic retry
+    renders exactly this. Raises `JobFenced` when this attempt no longer
+    owns the job."""
+    if not _fenced_update(
+        job_id,
+        attempt_token,
+        "resolved_json = ?, updated_at = ?",
+        (json.dumps(record), _now()),
+    ):
+        raise JobFenced(job_id)
+
+
+def record_remote_handle(job_id: str, attempt_token: str | None, handle: str) -> None:
+    """Remember the Remote GPU job token so an interrupted remote render is
+    reconciled, never resubmitted blindly (SPEC.md sec 16.5)."""
+    if not _fenced_update(
+        job_id, attempt_token, "remote_handle = ?, updated_at = ?", (handle, _now())
+    ):
+        raise JobFenced(job_id)
 
 
 def reclaim_stale_jobs(stale_after: float = STALE_AFTER_SEC) -> list[str]:
@@ -386,7 +536,7 @@ def reclaim_stale_jobs(stale_after: float = STALE_AFTER_SEC) -> list[str]:
     with closing(_connect()) as conn:
         conn.execute("BEGIN IMMEDIATE")
         rows = conn.execute(
-            "SELECT id, attempts, heartbeat_at, updated_at, cancel_requested "
+            "SELECT id, attempts, heartbeat_at, updated_at, cancel_requested, remote_handle "
             "FROM jobs WHERE status = 'running'"
         ).fetchall()
         for row in rows:
@@ -406,9 +556,24 @@ def reclaim_stale_jobs(stale_after: float = STALE_AFTER_SEC) -> list[str]:
                 reclaimed.append(row["id"])
                 continue
 
-            if row["attempts"] >= MAX_ATTEMPTS:
+            if row["remote_handle"]:
+                # SPEC.md sec 16.5: never resubmit an uncertain remote
+                # render on our own. The user may retry explicitly.
                 conn.execute(
-                    "UPDATE jobs SET status = 'error', error = ?, updated_at = ? WHERE id = ?",
+                    "UPDATE jobs SET status = 'error', error = ?, attempt_token = NULL, "
+                    "updated_at = ? WHERE id = ?",
+                    (
+                        f"the worker stopped while Remote GPU job {row['remote_handle']} was "
+                        "rendering, so its outcome is unknown. Lyre does not resubmit it on "
+                        "its own: Retry starts a new render, which may repeat paid compute.",
+                        _now(),
+                        row["id"],
+                    ),
+                )
+            elif row["attempts"] >= MAX_ATTEMPTS:
+                conn.execute(
+                    "UPDATE jobs SET status = 'error', error = ?, attempt_token = NULL, "
+                    "updated_at = ? WHERE id = ?",
                     (
                         f"worker heartbeat lost after {row['attempts']} attempt(s); "
                         "the worker process likely crashed",
@@ -417,9 +582,11 @@ def reclaim_stale_jobs(stale_after: float = STALE_AFTER_SEC) -> list[str]:
                     ),
                 )
             else:
+                # A new attempt token is issued at the next claim; clearing
+                # this one fences off anything the lost attempt still does.
                 conn.execute(
-                    "UPDATE jobs SET status = 'queued', heartbeat_at = NULL, updated_at = ? "
-                    "WHERE id = ?",
+                    "UPDATE jobs SET status = 'queued', heartbeat_at = NULL, "
+                    "attempt_token = NULL, updated_at = ? WHERE id = ?",
                     (_now(), row["id"]),
                 )
             reclaimed.append(row["id"])
@@ -445,6 +612,7 @@ def read_job(job_id: str) -> dict:
         raise JobNotFound(job_id)
     job = _row_to_dict(row)
     job["payload"] = json.loads(row["payload_json"])
+    job["resolved"] = json.loads(row["resolved_json"]) if row["resolved_json"] else None
     return job
 
 
@@ -467,33 +635,49 @@ def set_stage(job_id: str, stage: str) -> None:
         conn.commit()
 
 
-def mark_cancelled(job_id: str) -> None:
+def mark_cancelled(job_id: str, attempt_token: str | None = None) -> None:
     """Terminal `cancelled`. Does not touch a job that already reached `done`
     or `error` (SPEC.md sec 15.5: a job that finished before the flag was
-    honored stays finished)."""
+    honored stays finished), nor, with `attempt_token`, one another attempt
+    now owns."""
+    query = (
+        "UPDATE jobs SET status = 'cancelled', error = NULL, take_id = NULL, "
+        "cancel_requested = 1, updated_at = ? "
+        "WHERE id = ? AND status IN ('queued', 'running')"
+    )
+    args: tuple = (_now(), job_id)
+    if attempt_token is not None:
+        query += " AND (status = 'queued' OR attempt_token = ?)"
+        args = (*args, attempt_token)
     with closing(_connect()) as conn:
         conn.execute("BEGIN IMMEDIATE")
-        conn.execute(
-            "UPDATE jobs SET status = 'cancelled', error = NULL, take_id = NULL, "
-            "cancel_requested = 1, updated_at = ? "
-            "WHERE id = ? AND status IN ('queued', 'running')",
-            (_now(), job_id),
-        )
+        conn.execute(query, args)
         conn.commit()
 
 
-def finish_done(job_id: str, *, take_id: str | None = None, lora_id: str | None = None) -> bool:
+def finish_done(
+    job_id: str,
+    *,
+    take_id: str | None = None,
+    lora_id: str | None = None,
+    attempt_token: str | None = None,
+) -> bool:
     """Mark a running job `done` unless cancel won the race. Returns False
-    when `cancel_requested` is set or the job is no longer `running`, so the
-    caller can drop the audio instead of publishing it."""
+    when `cancel_requested` is set, the job is no longer `running`, or (with
+    `attempt_token`) another attempt owns it, so the caller can drop the
+    audio instead of publishing it."""
+    query = (
+        "UPDATE jobs SET status = 'done', take_id = ?, lora_id = ?, error = NULL, "
+        "stage = 'writing_take', updated_at = ? "
+        "WHERE id = ? AND status = 'running' AND cancel_requested = 0"
+    )
+    args: tuple = (take_id, lora_id, _now(), job_id)
+    if attempt_token is not None:
+        query += " AND attempt_token = ?"
+        args = (*args, attempt_token)
     with closing(_connect()) as conn:
         conn.execute("BEGIN IMMEDIATE")
-        cursor = conn.execute(
-            "UPDATE jobs SET status = 'done', take_id = ?, lora_id = ?, error = NULL, "
-            "stage = 'writing_take', updated_at = ? "
-            "WHERE id = ? AND status = 'running' AND cancel_requested = 0",
-            (take_id, lora_id, _now(), job_id),
-        )
+        cursor = conn.execute(query, args)
         won = cursor.rowcount == 1
         conn.commit()
     return won
@@ -614,3 +798,67 @@ def queue_counts() -> dict[str, int]:
     for row in rows:
         counts[row["status"]] = int(row["n"])
     return counts
+
+
+_RETRYABLE = {"error", "cancelled"}
+# Request fields an explicit retry repeats. Everything else is derived again.
+_REQUEST_FIELDS = (
+    "action",
+    "dit_profile",
+    "source_take_id",
+    "source_take_ids",
+    "upload_path",
+    "repainting_start",
+    "repainting_end",
+    "track_name",
+    "name",
+    "lora_id",
+    "audio_cover_strength",
+    "seed",
+    "batch_size",
+    "creation_mode",
+)
+
+
+def retry_job(job_id: str) -> dict:
+    """An explicit user retry (SPEC.md sec 16.5): a new job linked to
+    `job_id` by `retry_of`.
+
+    A failed or cancelled job with a frozen snapshot is repeated exactly: the
+    same creation input, and the same resolved brief and seed when the first
+    attempt got that far. A job held `needs_confirmation` (queued before
+    section 16, no snapshot) is cancelled and resubmitted from the current
+    plan, which is a new submission, never labelled as the original one."""
+    original = read_job(job_id)
+    payload = original["payload"]
+    held = original["status"] == "queued" and original.get("stage") == NEEDS_CONFIRMATION
+    if original["status"] not in _RETRYABLE and not held:
+        raise JobError(
+            f"only a failed, cancelled, or held job can be retried (job is {original['status']})",
+            param="job_id",
+        )
+    body = {key: payload[key] for key in _REQUEST_FIELDS if key in payload}
+    if held:
+        mark_cancelled(job_id)
+        return enqueue_job(original["project_id"], body, retry_of=job_id)
+
+    retried = enqueue_job(original["project_id"], body, retry_of=job_id)
+    frozen = payload.get("creation")
+    with closing(_connect()) as conn:
+        row = conn.execute(
+            "SELECT payload_json FROM jobs WHERE id = ?", (retried["id"],)
+        ).fetchone()
+        new_payload = json.loads(row["payload_json"])
+        if frozen is not None:
+            new_payload["creation"] = frozen
+        conn.execute(
+            "UPDATE jobs SET payload_json = ?, resolved_json = ? "
+            "WHERE id = ? AND status = 'queued'",
+            (
+                json.dumps(new_payload),
+                json.dumps(original["resolved"]) if original.get("resolved") else None,
+                retried["id"],
+            ),
+        )
+        conn.commit()
+    return get_job(retried["id"])

@@ -7,15 +7,20 @@ the row `error`, rather than leaving it `running` or losing the failure.
 
 from __future__ import annotations
 
+import errno
+import inspect
+import os
 import shutil
 import threading
 from pathlib import Path
 from typing import Any
 
 from server import storage
+from server.generation import artifacts
+from server.generation import brief as creation
 from server.jobs import queue as job_queue
 from server.jobs.db import _now
-from server.jobs.errors import JobCancelled, JobError
+from server.jobs.errors import JobCancelled, JobError, JobFenced
 from server.jobs.queue import (
     HEARTBEAT_INTERVAL_SEC,
     _heartbeat_loop,
@@ -23,7 +28,9 @@ from server.jobs.queue import (
     cancel_requested,
     claim_next_queued_job,
     finish_done,
+    freeze_resolved,
     mark_cancelled,
+    record_remote_handle,
     set_stage,
 )
 from server.jobs.validation import (
@@ -37,6 +44,32 @@ from server.jobs.worker_registry import (
     resolve_worker_module,
 )
 from worker import mock_worker
+from worker.acestep_worker.settings import DEFAULT_LM
+
+PROVENANCE_SCHEMA = "lyre.take-provenance/1"
+
+
+def describe_failure(exc: BaseException, *, job_id: str, stage: str | None) -> str:
+    """An actionable, bounded error for the job row (SPEC.md sec 16.5): what
+    happened, what to do, and which job and stage, so a copied summary
+    identifies itself."""
+    text = str(exc) or type(exc).__name__
+    lowered = text.lower()
+    if isinstance(exc, OSError) and exc.errno == errno.ENOSPC:
+        advice = "The disk is full. Free space under projects/ and retry; no take was kept."
+    elif "out of memory" in lowered or type(exc).__name__ == "OutOfMemoryError":
+        advice = (
+            "The GPU ran out of memory. Close other GPU programs, or use a shorter "
+            "duration or the iterate profile, then retry."
+        )
+    elif "checkpoint" in lowered and ("not found" in lowered or "missing" in lowered):
+        advice = "Model files are missing. Run the model download step, then retry."
+    else:
+        advice = ""
+    if len(text) > 1500:
+        text = text[:1500] + "..."
+    where = f"[job {job_id}, stage {stage or 'queued'}]"
+    return " ".join(part for part in (text, advice, where) if part)
 
 
 def _error_take_meta(
@@ -114,6 +147,9 @@ def run_claimed_job(job: dict[str, Any]) -> None:
                     dit_profile,
                     payload,
                     generation_done=generation_done,
+                    attempt_token=job.get("attempt_token"),
+                    attempt=job.get("attempt"),
+                    resolved=job.get("resolved"),
                 )
     finally:
         stop_heartbeat.set()
@@ -197,6 +233,132 @@ def _run_train_lora_job(job_id: str, project_id: str, payload: dict[str, Any]) -
         _set_status(job_id, "error", lora_id=lora_id, error=str(exc))
 
 
+def _snapshot_plan(creation_record: dict[str, Any]) -> dict[str, Any]:
+    """The plan fields frozen in the creation input, for a backend that
+    reads `plan` rather than `job["creation"]` (a Remote GPU host built
+    before SPEC.md sec 16). Never the live plan."""
+    plan = {key: creation_record.get(key) for key in creation.TRACKED_FIELDS}
+    plan.update(
+        query=creation_record.get("query", ""),
+        instrumental=creation_record.get("instrumental", False),
+        caption_rewrite=creation_record.get("caption_rewrite", False),
+        creation_mode=creation_record.get("mode"),
+        field_origins=creation_record.get("origins"),
+        revision=creation_record.get("plan_revision", 0),
+        negative=[],
+        sections=[],
+    )
+    return plan
+
+
+def committed_take_for_job(project_id: str, job_id: str) -> str | None:
+    """The take already committed for this logical job, if any. A retry
+    that finds one finishes with it instead of publishing a second
+    (SPEC.md sec 16.5)."""
+    try:
+        takes = storage.list_takes(project_id)
+    except storage.ProjectNotFound:
+        return None
+    for take in takes:
+        if take.get("job_id") == job_id and take.get("error") is None:
+            return str(take["id"])
+    return None
+
+
+def _resolved_record(
+    brief: dict[str, Any], seed: int, dit_profile: str, attempt: int | None
+) -> dict[str, Any]:
+    return {
+        "schema": job_queue.RESOLVED_SCHEMA,
+        "brief": brief,
+        "seed": seed,
+        "dit_profile": dit_profile,
+        "checkpoint": job_queue.DIT_CHECKPOINTS.get(dit_profile),
+        "inference_steps": job_queue.GENERATION_STEPS.get(dit_profile),
+        "guidance_scale": job_queue.GENERATION_GUIDANCE_SCALE.get(dit_profile),
+        "lm_model": DEFAULT_LM,
+        "frozen_at": _now(),
+        "attempt": attempt,
+    }
+
+
+def _describe_take_files(project_id: str, take_id: str) -> dict[str, Any]:
+    directory = storage.take_dir(project_id, take_id)
+    files: dict[str, Any] = {}
+    for name in ("mix.wav", "mix.mp3", "lyrics.lrc"):
+        path = directory / name
+        if path.is_file():
+            files[name] = artifacts.describe_file(path)
+    return files
+
+
+def _complete_provenance(
+    meta: dict[str, Any],
+    *,
+    job_id: str,
+    project_id: str,
+    take_id: str,
+    payload: dict[str, Any],
+    attempt: int | None,
+    started_at: str,
+    rendered_at: str,
+) -> dict[str, Any]:
+    """Join the backend's half of the provenance (brief, request, actual)
+    with what only the queue knows (SPEC.md sec 16.4)."""
+    raw = meta.get("provenance")
+    backend_half: dict[str, Any] = raw if isinstance(raw, dict) else {}
+    submission = payload.get("submission") or {}
+    files = _describe_take_files(project_id, take_id)
+    mix = files.get("mix.wav") or files.get("mix.mp3")
+    meta = dict(meta)
+    meta["job_id"] = job_id
+    meta["provenance"] = {
+        "schema": PROVENANCE_SCHEMA,
+        "complete": bool(backend_half.get("brief")) and mix is not None,
+        "job": {
+            "id": job_id,
+            "attempt": attempt,
+            "submission_id": submission.get("submission_id"),
+            "retry_of": submission.get("retry_of"),
+        },
+        "requested": {
+            "seed_policy": submission.get("seed_policy"),
+            "seed": submission.get("requested_seed"),
+            "dit_profile": submission.get("dit_profile"),
+            "creation_mode": (payload.get("creation") or {}).get("mode"),
+            "plan_revision": (payload.get("creation") or {}).get("plan_revision"),
+            "preset": (payload.get("creation") or {}).get("preset"),
+        },
+        "brief": backend_half.get("brief"),
+        "request": backend_half.get("request"),
+        "actual": backend_half.get("actual"),
+        "actual_origins": backend_half.get("actual_origins"),
+        "model": {
+            "dit_profile": meta.get("dit_profile"),
+            "checkpoint": job_queue.DIT_CHECKPOINTS.get(str(meta.get("dit_profile"))),
+            "lm_model": DEFAULT_LM,
+            "backend": os.environ.get("LYRE_WORKER", "acestep"),
+            "ace_step_revision": submission.get("ace_step_revision"),
+            **(backend_half.get("model") or {}),
+        },
+        "app": {
+            "version": submission.get("app_version") or artifacts.app_version(),
+            "revision": submission.get("app_revision"),
+        },
+        "timestamps": {
+            "submitted_at": submission.get("submitted_at"),
+            "started_at": started_at,
+            "rendered_at": rendered_at,
+            "committed_at": None,
+        },
+        "files": files,
+    }
+    if mix is not None and mix.get("duration_sec") is not None:
+        # The measured length of the file, not the requested one.
+        meta["duration_sec"] = mix["duration_sec"]
+    return meta
+
+
 def _run_generate_shaped_job(
     job_id: str,
     project_id: str,
@@ -204,6 +366,10 @@ def _run_generate_shaped_job(
     dit_profile: str,
     payload: dict[str, Any],
     generation_done: threading.Event | None = None,
+    *,
+    attempt_token: str | None = None,
+    attempt: int | None = None,
+    resolved: dict[str, Any] | None = None,
 ) -> None:
     def _publish_dit_loaded(loaded_profile: str) -> None:
         # Fires as soon as the worker backend confirms `loaded_profile` is
@@ -228,21 +394,60 @@ def _run_generate_shaped_job(
     def _cancel_check() -> bool:
         return cancel_requested(job_id)
 
+    def _cancel() -> None:
+        mark_cancelled(job_id, attempt_token=attempt_token)
+
     take_id: str | None = None
+    started_at = _now()
     try:
         # Set before the worker is entered: a cancel that landed while the
         # job was queued-but-just-claimed never calls generate_music.
         if _cancel_check():
-            mark_cancelled(job_id)
+            _cancel()
+            return
+        # A retry after a crash that happened between committing the take
+        # and marking the job done: the take exists, so finish with it and
+        # render nothing (SPEC.md sec 16.5).
+        existing = committed_take_for_job(project_id, job_id)
+        if existing is not None:
+            finish_done(job_id, take_id=existing, attempt_token=attempt_token)
             return
         worker_fn = _resolve_worker()
-        plan = storage.load_plan(project_id)
+        creation_record = payload.get("creation")
+        # SPEC.md sec 16.4: render the snapshot taken at enqueue. Only a
+        # caller that bypassed enqueue_job reaches the live-plan fallback.
+        plan = _snapshot_plan(creation_record) if creation_record else storage.load_plan(project_id)
         src_audio = _resolve_source_audio(project_id, action, payload)
         if _cancel_check():
-            mark_cancelled(job_id)
+            _cancel()
             return
+        # The concrete synthesis seed: frozen by an earlier attempt, fixed
+        # by the request, or drawn here so it can be frozen before the DiT
+        # runs and reused by any automatic retry.
+        if resolved is not None:
+            seed = int(resolved["seed"])
+        else:
+            requested = payload.get("seed", -1)
+            seed = creation.draw_seed() if requested in (None, -1) else int(requested)
+
+        def _on_resolved(brief: dict[str, Any]) -> None:
+            if resolved is None:
+                freeze_resolved(
+                    job_id, attempt_token, _resolved_record(brief, seed, dit_profile, attempt)
+                )
+
         _on_stage("loading_model")
         take_id, tdir = storage.allocate_take_dir(project_id)
+        worker_kwargs: dict[str, Any] = {
+            "on_dit_loaded": _publish_dit_loaded,
+            "on_stage": _on_stage,
+            "cancel_check": _cancel_check,
+            "on_resolved": _on_resolved,
+        }
+        if "on_remote_handle" in _parameters(worker_fn):
+            worker_kwargs["on_remote_handle"] = lambda handle: record_remote_handle(
+                job_id, attempt_token, handle
+            )
         meta, plan_patch, lrc_text = worker_fn(
             job={
                 **payload,
@@ -250,14 +455,15 @@ def _run_generate_shaped_job(
                 "action": action,
                 "dit_profile": dit_profile,
                 "src_audio": src_audio,
+                "seed": seed,
+                "resolved": resolved,
             },
             plan=plan,
             take_id=take_id,
             take_dir=tdir,
-            on_dit_loaded=_publish_dit_loaded,
-            on_stage=_on_stage,
-            cancel_check=_cancel_check,
+            **worker_kwargs,
         )
+        rendered_at = _now()
         # The worker should already have reported `writing_take`. Set it
         # again so the meta/LRC/plan writes below are outside the deadline
         # even if a backend forgot the stage.
@@ -265,7 +471,7 @@ def _run_generate_shaped_job(
             generation_done.set()
         if _cancel_check():
             storage.discard_unfinished_take(project_id, take_id)
-            mark_cancelled(job_id)
+            _cancel()
             return
         # Written before meta.json so a client polling right after the job
         # flips to "done" never sees meta["has_lrc"] True while
@@ -276,48 +482,71 @@ def _run_generate_shaped_job(
         _on_stage("writing_take")
         if lrc_text is not None:
             storage.write_take_lrc(project_id, take_id, lrc_text)
-        storage.write_take_meta(project_id, take_id, meta)
+        meta = _complete_provenance(
+            meta,
+            job_id=job_id,
+            project_id=project_id,
+            take_id=take_id,
+            payload=payload,
+            attempt=attempt,
+            started_at=started_at,
+            rendered_at=rendered_at,
+        )
+        meta["provenance"]["timestamps"]["committed_at"] = _now()
+        with storage.project_lifecycle_lock(project_id):
+            # At most one committed take per logical job, even when a crash
+            # made the work run twice (SPEC.md sec 16.5).
+            earlier = committed_take_for_job(project_id, job_id)
+            if earlier is not None and earlier != take_id:
+                storage.discard_unfinished_take(project_id, take_id)
+                take_id = None
+                finish_done(job_id, take_id=earlier, attempt_token=attempt_token)
+                return
+            storage.write_take_meta(project_id, take_id, meta)
         if plan_patch is not None:
             # A planned brief updates the editable draft only if the draft is
             # still at the revision this job was submitted from: a newer edit
             # wins, and the take keeps its own brief either way (SPEC.md sec
             # 16.3). The merge itself re-reads and writes under storage's
             # per-project lock, so a concurrent PUT cannot interleave.
-            creation_record = payload.get("creation") or {}
             storage.merge_plan_patch(
                 project_id,
                 plan_patch,
-                expected_revision=creation_record.get("plan_revision"),
+                expected_revision=(creation_record or {}).get("plan_revision"),
             )
         if _cancel_check():
             storage.discard_unfinished_take(project_id, take_id)
-            mark_cancelled(job_id)
+            _cancel()
             return
         # Promote the take to active only after every fallible persistence
         # step above has actually succeeded (reviewer-flagged): if
         # merge_plan_patch raised, the except block below marks this take
         # `error`, and active_take_id must not be left pointing at it.
         storage.set_active_take(project_id, take_id)
-        if not finish_done(job_id, take_id=take_id):
+        if not finish_done(job_id, take_id=take_id, attempt_token=attempt_token):
             storage.discard_unfinished_take(project_id, take_id)
-            mark_cancelled(job_id)
+            _cancel()
+    except JobFenced:
+        # Another attempt owns this job now. Publish nothing and leave the
+        # row to its owner.
+        if take_id is not None:
+            storage.discard_unfinished_take(project_id, take_id)
     except JobCancelled:
         if take_id is not None:
             storage.discard_unfinished_take(project_id, take_id)
-        mark_cancelled(job_id)
+        _cancel()
     except Exception as exc:
         if _cancel_check():
             if take_id is not None:
                 storage.discard_unfinished_take(project_id, take_id)
-            mark_cancelled(job_id)
+            _cancel()
             return
+        message = describe_failure(exc, job_id=job_id, stage=_current_stage(job_id))
         if take_id is not None:
             try:
-                storage.write_take_meta(
-                    project_id,
-                    take_id,
-                    _error_take_meta(take_id, action, dit_profile, payload, str(exc)),
-                )
+                error_meta = _error_take_meta(take_id, action, dit_profile, payload, message)
+                error_meta["job_id"] = job_id
+                storage.write_take_meta(project_id, take_id, error_meta)
             except Exception:
                 # Writing the take's error metadata is a courtesy (surfaces
                 # the failure on the take, not just the job row) -- if disk
@@ -326,7 +555,21 @@ def _run_generate_shaped_job(
                 # or the job is left `running` until a later worker process
                 # times it out via reclaim_stale_jobs instead of failing fast.
                 pass
-        _set_status(job_id, "error", take_id=take_id, error=str(exc))
+        _set_status(job_id, "error", take_id=take_id, error=message, attempt_token=attempt_token)
+
+
+def _parameters(fn: Any) -> set[str]:
+    try:
+        return set(inspect.signature(fn).parameters)
+    except (TypeError, ValueError):
+        return set()
+
+
+def _current_stage(job_id: str) -> str | None:
+    try:
+        return job_queue.get_job(job_id).get("stage")
+    except Exception:
+        return None
 
 
 def process_one_queued_job() -> bool:
