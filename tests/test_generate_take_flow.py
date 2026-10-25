@@ -60,3 +60,12 @@ def test_generate_take_flow(client: TestClient) -> None:
     resp = client.get(f"/api/projects/{project_id}/takes/{take_id}/audio")
     assert resp.status_code == 200
     assert resp.content[:4] == b"RIFF"
+
+
+def test_audio_download_is_named_by_take_and_real_extension(client: TestClient) -> None:
+    project_id = client.post("/api/projects", json={"title": "Name"}).json()["id"]
+    job = client.post(f"/api/projects/{project_id}/jobs", json={"action": "generate"}).json()
+    take_id = wait_for_job(client, job["id"])["take_id"]
+    resp = client.get(f"/api/projects/{project_id}/takes/{take_id}/audio")
+    assert f'filename="{take_id}.wav"' in resp.headers["content-disposition"]
+    assert resp.headers["content-type"] == "audio/wav"

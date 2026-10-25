@@ -95,7 +95,11 @@ export function useWaveform({
 
     // A missing/corrupt/unsupported take would otherwise just leave a blank
     // waveform with no indication anything went wrong.
-    wavesurfer.on("error", (err) => setErrorMsg(`waveform load failed: ${err.message}`));
+    wavesurfer.on("error", (err) =>
+      setErrorMsg(
+        `waveform preview failed: ${err.message}. The take's file can still be downloaded.`,
+      ),
+    );
 
     // Only one repaint selection at a time (SPEC.md: drag a region ->
     // repaint) -- a new drag replaces the previous selection instead of
@@ -184,8 +188,12 @@ export function useWaveform({
 
   /** Seek to an absolute position in seconds, moving the cursor with it. */
   function seekWaveform(seconds: number): void {
-    if (waveformDuration > 0) wavesurferRef.current?.seekTo(seconds / waveformDuration);
-    setWaveformCurrentTime(seconds);
+    const clamped =
+      waveformDuration > 0
+        ? Math.min(Math.max(seconds, 0), waveformDuration)
+        : Math.max(seconds, 0);
+    if (waveformDuration > 0) wavesurferRef.current?.seekTo(clamped / waveformDuration);
+    setWaveformCurrentTime(clamped);
   }
 
   return {

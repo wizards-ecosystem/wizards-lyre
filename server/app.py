@@ -457,7 +457,9 @@ def patch_take(project_id: str, take_id: str, body: TakeAnnotationBody) -> dict:
 def get_take_audio(project_id: str, take_id: str) -> FileResponse:
     path = storage.take_audio_path(project_id, take_id)
     media_type = "audio/wav" if path.suffix == ".wav" else "audio/mpeg"
-    return FileResponse(path, media_type=media_type, filename=path.name)
+    # The stored full-resolution file, named by take and its real extension
+    # (SPEC.md sec 16.6), so a browser download is never a mislabelled MP3.
+    return FileResponse(path, media_type=media_type, filename=f"{take_id}{path.suffix}")
 
 
 @app.get("/api/projects/{project_id}/takes/{take_id}/lrc")

@@ -189,6 +189,31 @@ export interface Take {
   // generation: the UI resolves it to the pack's name via GET
   // /api/projects/{id}/loras (falling back to this stable id).
   lora_id: string | null;
+  // SPEC.md sec 16.4. Absent or null on a take written before provenance;
+  // `provenance_complete` is false then, and nothing is invented for it.
+  job_id?: string | null;
+  provenance?: TakeProvenance | null;
+  provenance_complete?: boolean;
+}
+
+export interface TakeFile {
+  file: string;
+  format: string;
+  media_type: string;
+  bytes: number;
+  sha256: string;
+  sample_rate: number | null;
+  channels: number | null;
+  frames: number | null;
+  duration_sec: number | null;
+}
+
+export interface TakeProvenance {
+  complete: boolean;
+  brief: Record<string, unknown> | null;
+  actual: Record<string, unknown> | null;
+  requested?: Record<string, unknown>;
+  files?: Record<string, TakeFile>;
 }
 
 export interface ProjectDetail {

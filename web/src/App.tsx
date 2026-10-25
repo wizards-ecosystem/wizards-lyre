@@ -17,6 +17,8 @@ import {
   ProjectDetail,
   ProjectSummary,
   Section,
+  Take,
+  TrackedField,
 } from "./api";
 import { ConfirmationDialog } from "./components/ConfirmationDialog";
 import { Icon } from "./components/Icon";
@@ -50,6 +52,7 @@ import {
 import { useTakeNotes } from "./hooks/useTakeNotes";
 import { useWaveform } from "./hooks/useWaveform";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
+import { clampPlayhead, usePlaybackOwner } from "./hooks/usePlaybackOwner";
 import { ConfirmationRequest, InspectorTab, OperationGroup } from "./types";
 
 const READINESS_LABEL: Record<string, string> = {
@@ -96,7 +99,20 @@ export default function App() {
   const [draftOffer, setDraftOffer] = useState<LocalDraft | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [selectedTakeId, setSelectedTakeId] = useState<string | null>(null);
-  const [compareTakeId, setCompareTakeId] = useState<string | null>(null);
+  // A/B comparison (SPEC.md sec 16.6): two named takes of its own, so
+  // reordering or switching them never changes the selected take (the source
+  // for Cover/Repaint and the rest) or the active kept take.
+  const [compare, setCompare] = useState<{ a: string; b: string } | null>(null);
+  const compareARef = useRef<HTMLAudioElement | null>(null);
+  const compareBRef = useRef<HTMLAudioElement | null>(null);
+  const [playerVolume, setPlayerVolume] = useState(1);
+  const [repeatPlayback, setRepeatPlayback] = useState(false);
+  // Use settings / Replay settings (sec 16.4): which take the draft came from.
+  const [settingsSource, setSettingsSource] = useState<{
+    takeLabel: string;
+    legacy: boolean;
+    withSeed: boolean;
+  } | null>(null);
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>("takes");
   const [operationGroup, setOperationGroup] = useState<OperationGroup>("create");
   const [libraryOpen, setLibraryOpen] = useState(false);
@@ -129,7 +145,7 @@ export default function App() {
   const [presetPreview, setPresetPreview] = useState<PresetResult | null>(null);
   const [loras, setLoras] = useState<Lora[]>([]);
   // Multi-select of takes to train a style pack from (SPEC.md sec 4.4 "8+
-  // songs") -- deliberately separate from selectedTakeId/compareTakeId,
+  // songs") -- deliberately separate from selectedTakeId/compare,
   // which are single-select take-list concepts used for a different purpose
   // (waveform/cover/repaint source, A/B compare).
   const [loraSourceIds, setLoraSourceIds] = useState<Set<string>>(new Set());
@@ -252,6 +268,19 @@ export default function App() {
     toggleWaveformPlayback,
     seekWaveform,
   } = useWaveform({ selectedTakeId, detail, activeIdRef, audioRefs, setErrorMsg });
+
+  // One playback owner (SPEC.md sec 16.6): starting any source pauses the
+  // others. The waveform's media element is not in the document, so it is
+  // registered; volume and Repeat follow it across take changes.
+  const { register: registerPlayback } = usePlaybackOwner();
+  useEffect(() => {
+    if (!waveformMediaEl) return;
+    registerPlayback(waveformMediaEl);
+    // The element belongs to the waveform library, not React state.
+    // eslint-disable-next-line react-hooks/immutability
+    waveformMediaEl.volume = playerVolume;
+    waveformMediaEl.loop = repeatPlayback;
+  }, [waveformMediaEl, playerVolume, repeatPlayback, registerPlayback]);
 
   // Reviewer-flagged: canceling a pending take-notes debounce timer (on
   // unmount, or on the page actually closing/reloading) used to just drop
@@ -427,12 +456,66 @@ export default function App() {
     }
   }
 
-  // Swapping A/B also changes which take Cover/Repaint/Extract/Lego/Complete
-  // act on next, since those all key off selectedTakeId -- that's the
-  // "instant swap" SPEC.md sec 12 calls for, not a separate hidden state.
+  // Reorders the two compared takes. The selected take (the source for
+  // Cover/Repaint/Extract/Lego/Complete) and the active take are untouched.
   function swapCompare(): void {
-    setSelectedTakeId(compareTakeId);
-    setCompareTakeId(selectedTakeId);
+    setCompare((current) => (current ? { a: current.b, b: current.a } : current));
+  }
+
+  // Moves listening from the playing side to the other, at about the same
+  // position (clamped to the other take's length). Not phase-aligned or
+  // loudness-matched: two independent players, switched quickly.
+  function switchAudition(): void {
+    const a = compareARef.current;
+    const b = compareBRef.current;
+    if (!a || !b) return;
+    const [from, to] = !b.paused || (a.paused && b.currentTime > a.currentTime) ? [b, a] : [a, b];
+    const position = from.currentTime;
+    from.pause();
+    to.currentTime = clampPlayhead(position, to.duration);
+    to.play().catch(() => {});
+  }
+
+  function takeLabel(takeId: string): string {
+    const index = detail?.takes.findIndex((take) => take.id === takeId) ?? -1;
+    return index >= 0 && detail
+      ? `Take ${String(detail.takes.length - index).padStart(2, "0")}`
+      : takeId.slice(0, 8);
+  }
+
+  // SPEC.md sec 16.4 "Use settings": copy what a take actually rendered into
+  // the editor as a visibly marked draft. Nothing renders, and no take or
+  // the active selection changes. withSeed is "Replay settings": the
+  // recorded seed goes into the seed field too.
+  function applyTakeSettings(take: Take, withSeed: boolean): void {
+    if (!detail) return;
+    const provenance = take.provenance;
+    const actual = provenance?.actual ?? null;
+    const brief = provenance?.brief ?? null;
+    const from = (field: string, fallback: unknown) =>
+      (actual?.[field] ?? brief?.[field] ?? fallback) as never;
+    const plan: Plan = {
+      ...detail.plan,
+      caption: from("caption", take.caption ?? ""),
+      lyrics: (brief?.lyrics ?? take.lyrics ?? "") as string,
+      bpm: from("bpm", take.bpm),
+      keyscale: from("keyscale", take.keyscale),
+      instrumental: (brief?.instrumental ?? detail.plan.instrumental) as boolean,
+      vocal_language: from("vocal_language", detail.plan.vocal_language),
+      timesignature: from("timesignature", detail.plan.timesignature),
+      duration_sec: from("duration_sec", detail.plan.duration_sec),
+      creation_mode: "from_brief",
+    };
+    const copied: TrackedField[] = brief
+      ? ["caption", "lyrics", "bpm", "keyscale", "vocal_language", "timesignature", "duration_sec"]
+      : ["caption", "lyrics", "bpm", "keyscale"];
+    plan.field_origins = {
+      ...detail.plan.field_origins,
+      ...Object.fromEntries(copied.map((field) => [field, "user"])),
+    };
+    savePlanDraft(plan);
+    if (withSeed) setSeedInput(String(take.seed));
+    setSettingsSource({ takeLabel: takeLabel(take.id), legacy: !brief, withSeed });
   }
 
   async function refreshDetail(id: string) {
@@ -514,7 +597,8 @@ export default function App() {
     // pass, before any of it can be rendered against the new project.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setSelectedTakeId(null);
-    setCompareTakeId(null);
+    setCompare(null);
+    setSettingsSource(null);
     setUploadedSourcePath(null);
     setUploadedSourceName(null);
     setLoraSourceIds(new Set());
@@ -550,18 +634,15 @@ export default function App() {
     }
   }, [selectedTakeId]);
 
-  // A take picked as A (selectedTakeId) can also already be set as B
-  // (compareTakeId) -- e.g. clicking its row while it's mid-comparison, or
-  // following a parent-take link onto it. Clear the comparison rather than
-  // showing two identical players and a no-op swap.
+  // A and B must be two different takes; a pair that collapsed onto one
+  // take (a take removed out of band) closes the comparison.
   useEffect(() => {
-    if (compareTakeId && compareTakeId === selectedTakeId) {
-      // Deliberate: A and B must never be the same take, so picking A as B's
-      // current value clears the comparison.
+    if (compare && compare.a === compare.b) {
+      // Deliberate: there is nothing to compare.
       // eslint-disable-next-line react-hooks/set-state-in-effect
-      setCompareTakeId(null);
+      setCompare(null);
     }
-  }, [selectedTakeId, compareTakeId]);
+  }, [compare]);
 
   // Mounts a fresh WaveSurfer instance pointed at the selected take's audio
   // and tears it down on every change (SPEC.md sec 9.2) -- WaveSurfer owns
@@ -1270,6 +1351,27 @@ export default function App() {
                       Copy error summary
                     </button>
                   )}
+                </div>
+              )}
+
+              {settingsSource && (
+                <div className="draft-offer settings-source" role="status">
+                  <span>
+                    The plan now holds {settingsSource.takeLabel}'s settings
+                    {settingsSource.withSeed ? " and seed" : ""} as a draft. Generate to render
+                    them; no take has changed.
+                    {settingsSource.legacy &&
+                      " That take predates full provenance: only its caption, lyrics, BPM, and key were recorded."}
+                    {settingsSource.withSeed &&
+                      " The same seed is not a promise of identical audio on other hardware or versions."}
+                  </span>
+                  <button
+                    type="button"
+                    className="text-button"
+                    onClick={() => setSettingsSource(null)}
+                  >
+                    Dismiss
+                  </button>
                 </div>
               )}
 
@@ -2156,6 +2258,29 @@ export default function App() {
                     <span className="transport-time">
                       {formatClock(waveformDuration || selectedTake?.duration_sec || 0)}
                     </span>
+                    <label className="transport-volume">
+                      <span className="sr-only">Volume</span>
+                      <input
+                        type="range"
+                        min={0}
+                        max={1}
+                        step={0.05}
+                        value={playerVolume}
+                        aria-label="Volume"
+                        onChange={(event) => setPlayerVolume(Number(event.target.value))}
+                      />
+                    </label>
+                    <label
+                      className="transport-repeat"
+                      title="Plays the take again from the start. Not a seamless loop."
+                    >
+                      <input
+                        type="checkbox"
+                        checked={repeatPlayback}
+                        onChange={(event) => setRepeatPlayback(event.target.checked)}
+                      />
+                      Repeat
+                    </label>
                     <LoudnessMeter audioEl={waveformMediaEl} />
                   </StudioPlayer>
 
@@ -2187,51 +2312,57 @@ export default function App() {
                     </div>
                   </div>
 
-                  {compareTakeId &&
+                  {compare &&
                     (() => {
-                      const compareTake = detail.takes.find((take) => take.id === compareTakeId);
-                      if (!compareTake || compareTake.error) return null;
+                      const takeA = detail.takes.find((take) => take.id === compare.a);
+                      const takeB = detail.takes.find((take) => take.id === compare.b);
+                      if (!takeA || !takeB || takeA.error || takeB.error) return null;
                       return (
                         <section className="compare" aria-label="A/B comparison">
                           <div className="compare-heading">
                             <div>
-                              <span className="eyebrow">Instant audition</span>
+                              <span className="eyebrow">Audition two takes</span>
                               <h3>Compare</h3>
                             </div>
                             <button
                               type="button"
                               className="icon-button"
                               aria-label="Close compare"
-                              onClick={() => setCompareTakeId(null)}
+                              onClick={() => setCompare(null)}
                             >
                               <Icon name="close" />
                             </button>
                           </div>
                           <div className="compare-panel">
                             <div className="compare-slot">
-                              <span className="compare-label">A: selected</span>
-                              {selectedTake && !selectedTake.error ? (
-                                <audio
-                                  controls
-                                  src={api.takeAudioUrl(detail.project.id, selectedTake.id)}
-                                />
-                              ) : (
-                                <p className="hint">Select a take to fill A too.</p>
-                              )}
-                            </div>
-                            <button
-                              type="button"
-                              className="swap-compare"
-                              disabled={!selectedTakeId}
-                              onClick={swapCompare}
-                            >
-                              Swap A/B
-                            </button>
-                            <div className="compare-slot">
-                              <span className="compare-label">B: comparing</span>
+                              <span className="compare-label">A: {takeLabel(takeA.id)}</span>
                               <audio
+                                ref={compareARef}
                                 controls
-                                src={api.takeAudioUrl(detail.project.id, compareTakeId)}
+                                preload="metadata"
+                                src={api.takeAudioUrl(detail.project.id, takeA.id)}
+                              />
+                            </div>
+                            <div className="compare-actions">
+                              <button
+                                type="button"
+                                className="swap-compare"
+                                onClick={switchAudition}
+                                title="Continue at about the same position in the other take. The two players are not phase-aligned or loudness-matched."
+                              >
+                                Switch A ↔ B
+                              </button>
+                              <button type="button" className="text-button" onClick={swapCompare}>
+                                Swap A/B
+                              </button>
+                            </div>
+                            <div className="compare-slot">
+                              <span className="compare-label">B: {takeLabel(takeB.id)}</span>
+                              <audio
+                                ref={compareBRef}
+                                controls
+                                preload="metadata"
+                                src={api.takeAudioUrl(detail.project.id, takeB.id)}
                               />
                             </div>
                           </div>
@@ -2315,7 +2446,12 @@ export default function App() {
                                 <span className="active-take-badge">active</span>
                               )}
                               {take.id === selectedTakeId && (
-                                <span className="source-take-badge">source</span>
+                                <span
+                                  className="source-take-badge"
+                                  title="Selected: on the waveform, and the source for Cover, Repaint, Extract, Lego, and Complete. Not the kept take unless it is also active."
+                                >
+                                  source
+                                </span>
                               )}
                             </div>
                             <button
@@ -2403,20 +2539,28 @@ export default function App() {
                             </button>
                             <button
                               type="button"
-                              disabled={!!take.error || take.id === selectedTakeId}
+                              disabled={
+                                !!take.error ||
+                                (!compare && (!selectedTakeId || take.id === selectedTakeId)) ||
+                                take.id === compare?.a
+                              }
                               title={
-                                take.id === selectedTakeId
+                                !compare && take.id === selectedTakeId
                                   ? "Already selected as A -- pick a different take to compare"
-                                  : undefined
+                                  : !compare && !selectedTakeId
+                                    ? "Select a take first; it becomes A"
+                                    : undefined
                               }
                               onClick={(event) => {
                                 event.stopPropagation();
-                                setCompareTakeId((current) =>
-                                  current === take.id ? null : take.id,
-                                );
+                                setCompare((current) => {
+                                  if (current?.b === take.id) return null;
+                                  const a = current?.a ?? selectedTakeId;
+                                  return a ? { a, b: take.id } : current;
+                                });
                               }}
                             >
-                              {take.id === compareTakeId ? "Comparing" : "Compare"}
+                              {take.id === compare?.b ? "Comparing" : "Compare"}
                             </button>
                             {take.parent_take_id &&
                               (detail.takes.find(
@@ -2439,12 +2583,56 @@ export default function App() {
                               ))}
                             {!take.error && (
                               <>
-                                <a
-                                  href={api.takeAudioUrl(detail.project.id, take.id)}
-                                  download={`${take.id}.wav`}
+                                {(() => {
+                                  // The stored file, by its real name: the
+                                  // full-resolution WAV, or an MP3 when that
+                                  // is all the take has (SPEC.md sec 16.6). A
+                                  // legacy take without provenance takes the
+                                  // server's filename rather than a guess.
+                                  const files = take.provenance?.files;
+                                  const ext = files?.["mix.wav"]
+                                    ? "wav"
+                                    : files?.["mix.mp3"]
+                                      ? "mp3"
+                                      : null;
+                                  return (
+                                    <a
+                                      href={api.takeAudioUrl(detail.project.id, take.id)}
+                                      download={ext ? `${take.id}.${ext}` : ""}
+                                      title={
+                                        ext === "mp3"
+                                          ? "Only an MP3 was stored for this take"
+                                          : ext === "wav"
+                                            ? "Full-resolution WAV"
+                                            : undefined
+                                      }
+                                    >
+                                      download
+                                    </a>
+                                  );
+                                })()}
+                                <button
+                                  type="button"
+                                  className="text-button"
+                                  title="Copy what this take rendered into the plan as a draft. Nothing renders until you Generate."
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    applyTakeSettings(take, false);
+                                  }}
                                 >
-                                  download
-                                </a>
+                                  Use settings
+                                </button>
+                                <button
+                                  type="button"
+                                  className="text-button"
+                                  title="Use settings, and also put this take's seed in the seed field"
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    applyTakeSettings(take, true);
+                                  }}
+                                >
+                                  Replay settings
+                                </button>
                                 {take.has_lrc && (
                                   <a
                                     href={api.takeLrcUrl(detail.project.id, take.id)}

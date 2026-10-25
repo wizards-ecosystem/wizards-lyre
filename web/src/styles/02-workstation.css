@@ -1691,3 +1691,28 @@ button.take-lora-badge:hover {
 .preset-preview small {
   color: var(--muted);
 }
+
+/* Audition (SPEC.md sec 16.6) */
+.compare-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+.transport-volume input {
+  width: 72px;
+}
+.transport-repeat {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--mono);
+  font-size: 10px;
+}
+.take-preview-error {
+  color: var(--danger);
+  font-size: 11px;
+}
+.take-actions .text-button {
+  font-size: inherit;
+}

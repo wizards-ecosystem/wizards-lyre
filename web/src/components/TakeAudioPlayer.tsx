@@ -24,6 +24,9 @@ export function TakeAudioPlayer({
   const [playing, setPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
+  // A preview that fails to load says so; the take's download link stays,
+  // because the stored file may be fine (SPEC.md sec 16.6).
+  const [failed, setFailed] = useState(false);
 
   const setRef = useCallback(
     (el: HTMLAudioElement | null) => {
@@ -58,7 +61,13 @@ export function TakeAudioPlayer({
         onEnded={() => setPlaying(false)}
         onTimeUpdate={(event) => setCurrentTime(event.currentTarget.currentTime)}
         onDurationChange={(event) => setDuration(event.currentTarget.duration || 0)}
+        onLoadedMetadata={() => setFailed(false)}
+        onError={() => {
+          setFailed(true);
+          setPlaying(false);
+        }}
       />
+      {failed && <span className="take-preview-error">Preview failed to load; download it.</span>}
       <span className="transport-time" aria-label={`${formatClock(currentTime)} elapsed`}>
         {formatClock(currentTime)}
       </span>

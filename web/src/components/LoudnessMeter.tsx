@@ -51,6 +51,9 @@ export function LoudnessMeter({ audioEl }: { audioEl: HTMLAudioElement | null })
         const AudioContextCtor =
           window.AudioContext ??
           (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+        // No Web Audio API: there is nothing to meter, and playback must
+        // not fail because of it.
+        if (typeof AudioContextCtor !== "function") return;
         const ctx = new AudioContextCtor();
         const source = ctx.createMediaElementSource(el);
         const analyser = ctx.createAnalyser();
