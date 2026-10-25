@@ -12,6 +12,7 @@ import inspect
 import os
 import shutil
 import threading
+from contextlib import closing
 from pathlib import Path
 from typing import Any
 
@@ -19,7 +20,7 @@ from server import storage
 from server.generation import artifacts
 from server.generation import brief as creation
 from server.jobs import queue as job_queue
-from server.jobs.db import _now
+from server.jobs.db import _connect, _now
 from server.jobs.errors import JobCancelled, JobError, JobFenced
 from server.jobs.queue import (
     HEARTBEAT_INTERVAL_SEC,
@@ -134,23 +135,27 @@ def run_claimed_job(job: dict[str, Any]) -> None:
     )
     heartbeat_thread.start()
     try:
-        with storage.project_lifecycle_lock(project_id):
-            if action == "train_lora":
-                # train_lora has no take/DiT-swap shape at all (no source audio
-                # generation, no plan) -- it gets its own worker entry point.
+        if action == "train_lora":
+            # train_lora has no take/DiT-swap shape at all (no source audio
+            # generation, no plan) -- it gets its own worker entry point,
+            # and keeps the whole-job project lock it always had.
+            with storage.project_lifecycle_lock(project_id):
                 _run_train_lora_job(job_id, project_id, payload)
-            else:
-                _run_generate_shaped_job(
-                    job_id,
-                    project_id,
-                    action,
-                    dit_profile,
-                    payload,
-                    generation_done=generation_done,
-                    attempt_token=job.get("attempt_token"),
-                    attempt=job.get("attempt"),
-                    resolved=job.get("resolved"),
-                )
+        else:
+            # SPEC.md sec 16.5: no project lock while rendering. The request
+            # was snapshotted at enqueue and the commit takes the lock
+            # briefly, so plan edits never wait behind inference.
+            _run_generate_shaped_job(
+                job_id,
+                project_id,
+                action,
+                dit_profile,
+                payload,
+                generation_done=generation_done,
+                attempt_token=job.get("attempt_token"),
+                attempt=job.get("attempt"),
+                resolved=job.get("resolved"),
+            )
     finally:
         stop_heartbeat.set()
         heartbeat_thread.join(timeout=HEARTBEAT_INTERVAL_SEC)
@@ -282,8 +287,7 @@ def _resolved_record(
     }
 
 
-def _describe_take_files(project_id: str, take_id: str) -> dict[str, Any]:
-    directory = storage.take_dir(project_id, take_id)
+def _describe_take_files(directory: Path) -> dict[str, Any]:
     files: dict[str, Any] = {}
     for name in ("mix.wav", "mix.mp3", "lyrics.lrc"):
         path = directory / name
@@ -308,7 +312,7 @@ def _complete_provenance(
     raw = meta.get("provenance")
     backend_half: dict[str, Any] = raw if isinstance(raw, dict) else {}
     submission = payload.get("submission") or {}
-    files = _describe_take_files(project_id, take_id)
+    files = _describe_take_files(storage.staging_dir(project_id, take_id))
     mix = files.get("mix.wav") or files.get("mix.mp3")
     meta = dict(meta)
     meta["job_id"] = job_id
@@ -437,7 +441,9 @@ def _run_generate_shaped_job(
                 )
 
         _on_stage("loading_model")
-        take_id, tdir = storage.allocate_take_dir(project_id)
+        take_id, tdir = storage.allocate_staged_take(
+            project_id, {"job_id": job_id, "attempt_token": attempt_token}
+        )
         worker_kwargs: dict[str, Any] = {
             "on_dit_loaded": _publish_dit_loaded,
             "on_stage": _on_stage,
@@ -470,18 +476,14 @@ def _run_generate_shaped_job(
         if generation_done is not None:
             generation_done.set()
         if _cancel_check():
-            storage.discard_unfinished_take(project_id, take_id)
+            storage.discard_staged_take(project_id, take_id)
             _cancel()
             return
-        # Written before meta.json so a client polling right after the job
-        # flips to "done" never sees meta["has_lrc"] True while
-        # lyrics.lrc itself doesn't exist yet (SPEC.md sec 7 / sec 12
-        # Phase 4). If this raises, the except block below writes an error
-        # take_meta instead -- same as a merge_plan_patch failure further
-        # down.
         _on_stage("writing_take")
+        # Everything lands in the staging directory first; nothing is
+        # visible as a take until the commit renames it into takes/.
         if lrc_text is not None:
-            storage.write_take_lrc(project_id, take_id, lrc_text)
+            storage.write_staged_lrc(project_id, take_id, lrc_text)
         meta = _complete_provenance(
             meta,
             job_id=job_id,
@@ -492,53 +494,62 @@ def _run_generate_shaped_job(
             started_at=started_at,
             rendered_at=rendered_at,
         )
+        if not meta["provenance"]["files"]:
+            raise RuntimeError("the backend reported success but wrote no audio")
         meta["provenance"]["timestamps"]["committed_at"] = _now()
-        with storage.project_lifecycle_lock(project_id):
-            # At most one committed take per logical job, even when a crash
-            # made the work run twice (SPEC.md sec 16.5).
-            earlier = committed_take_for_job(project_id, job_id)
-            if earlier is not None and earlier != take_id:
-                storage.discard_unfinished_take(project_id, take_id)
-                take_id = None
-                finish_done(job_id, take_id=earlier, attempt_token=attempt_token)
-                return
-            storage.write_take_meta(project_id, take_id, meta)
+        storage.write_staged_meta(project_id, take_id, meta)
+
+        outcome = _commit_take(job_id, attempt_token, project_id, take_id)
+        if outcome == "cancelled":
+            take_id = None
+            _cancel()
+            return
+        if outcome == "project_deleted":
+            take_id = None
+            _set_status(
+                job_id,
+                "error",
+                error=describe_failure(
+                    RuntimeError("project deleted while this job was rendering; no take was kept"),
+                    job_id=job_id,
+                    stage="writing_take",
+                ),
+                attempt_token=attempt_token,
+            )
+            return
+        if outcome != take_id:
+            return  # an earlier attempt's take was already committed
+        take_id = None  # committed: nothing below may discard or overwrite it
         if plan_patch is not None:
             # A planned brief updates the editable draft only if the draft is
             # still at the revision this job was submitted from: a newer edit
             # wins, and the take keeps its own brief either way (SPEC.md sec
-            # 16.3). The merge itself re-reads and writes under storage's
-            # per-project lock, so a concurrent PUT cannot interleave.
-            storage.merge_plan_patch(
-                project_id,
-                plan_patch,
-                expected_revision=(creation_record or {}).get("plan_revision"),
-            )
-        if _cancel_check():
-            storage.discard_unfinished_take(project_id, take_id)
-            _cancel()
-            return
-        # Promote the take to active only after every fallible persistence
-        # step above has actually succeeded (reviewer-flagged): if
-        # merge_plan_patch raised, the except block below marks this take
-        # `error`, and active_take_id must not be left pointing at it.
-        storage.set_active_take(project_id, take_id)
-        if not finish_done(job_id, take_id=take_id, attempt_token=attempt_token):
-            storage.discard_unfinished_take(project_id, take_id)
-            _cancel()
+            # 16.3). The take is already committed, so a draft that cannot
+            # be updated (the project went away) loses nothing.
+            try:
+                storage.merge_plan_patch(
+                    project_id,
+                    plan_patch,
+                    expected_revision=(creation_record or {}).get("plan_revision"),
+                )
+            except Exception as exc:
+                # The take is committed and keeps its own brief; only the
+                # draft did not pick it up (a lock timeout, the project
+                # going away). That is not a failed job.
+                print(f"job {job_id}: planned brief not merged into the draft: {exc}")
     except JobFenced:
         # Another attempt owns this job now. Publish nothing and leave the
         # row to its owner.
         if take_id is not None:
-            storage.discard_unfinished_take(project_id, take_id)
+            storage.discard_staged_take(project_id, take_id)
     except JobCancelled:
         if take_id is not None:
-            storage.discard_unfinished_take(project_id, take_id)
+            storage.discard_staged_take(project_id, take_id)
         _cancel()
     except Exception as exc:
+        if take_id is not None:
+            storage.discard_staged_take(project_id, take_id)
         if _cancel_check():
-            if take_id is not None:
-                storage.discard_unfinished_take(project_id, take_id)
             _cancel()
             return
         message = describe_failure(exc, job_id=job_id, stage=_current_stage(job_id))
@@ -546,16 +557,104 @@ def _run_generate_shaped_job(
             try:
                 error_meta = _error_take_meta(take_id, action, dit_profile, payload, message)
                 error_meta["job_id"] = job_id
-                storage.write_take_meta(project_id, take_id, error_meta)
+                storage.write_error_take(project_id, take_id, error_meta)
             except Exception:
                 # Writing the take's error metadata is a courtesy (surfaces
                 # the failure on the take, not just the job row) -- if disk
-                # I/O itself is failing (full disk, permissions, lock), that
-                # must not stop the job row below from being marked `error`,
-                # or the job is left `running` until a later worker process
-                # times it out via reclaim_stale_jobs instead of failing fast.
-                pass
+                # I/O itself is failing (full disk, permissions, lock), or
+                # the project is gone, that must not stop the job row below
+                # from being marked `error`.
+                take_id = None
         _set_status(job_id, "error", take_id=take_id, error=message, attempt_token=attempt_token)
+
+
+def _commit_take(job_id: str, attempt_token: str | None, project_id: str, take_id: str) -> str:
+    """Publish a staged take (SPEC.md sec 16.5). Under the project lock and
+    one `BEGIN IMMEDIATE`: check the attempt still owns the running job,
+    that it was not cancelled, that the project still exists and is not
+    being deleted, and that no take was committed for this job before; then
+    rename the staged directory into takes/ and mark the job `done` in the
+    same transaction. A crash between the rename and the commit leaves a
+    take whose `job_id` the next attempt finds and finishes with.
+
+    Returns the committed take id (this one, or an earlier attempt's),
+    `"cancelled"`, or `"project_deleted"`. Raises `JobFenced` when another
+    attempt owns the job. Every outcome but this take's own commit discards
+    the staged files."""
+    with storage.project_lifecycle_lock(project_id), closing(_connect()) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            row = conn.execute(
+                "SELECT status, attempt_token, cancel_requested FROM jobs WHERE id = ?",
+                (job_id,),
+            ).fetchone()
+            if (
+                row is None
+                or row["status"] != "running"
+                or (attempt_token is not None and row["attempt_token"] != attempt_token)
+            ):
+                raise JobFenced(job_id)
+            if row["cancel_requested"]:
+                conn.rollback()
+                storage.discard_staged_take(project_id, take_id)
+                return "cancelled"
+            deleting = conn.execute(
+                "SELECT 1 FROM project_deletions WHERE project_id = ?", (project_id,)
+            ).fetchone()
+            try:
+                storage.load_project(project_id)
+                exists = deleting is None
+            except storage.ProjectNotFound:
+                exists = False
+            if not exists:
+                conn.rollback()
+                storage.discard_staged_take(project_id, take_id)
+                return "project_deleted"
+            earlier = committed_take_for_job(project_id, job_id)
+            final = earlier or take_id
+            if earlier is None:
+                storage.promote_staged_take(project_id, take_id)
+            conn.execute(
+                "UPDATE jobs SET status = 'done', take_id = ?, error = NULL, "
+                "stage = 'writing_take', updated_at = ? WHERE id = ?",
+                (final, _now(), job_id),
+            )
+            conn.commit()
+        except BaseException:
+            conn.rollback()
+            storage.discard_staged_take(project_id, take_id)
+            raise
+        if earlier is not None:
+            storage.discard_staged_take(project_id, take_id)
+            return earlier
+        # A finished job never replaces the user's kept take; the first
+        # playable take of a project becomes active (SPEC.md sec 16.5).
+        storage.set_active_take_if_unset(project_id, take_id)
+        return take_id
+
+
+def cleanup_staging() -> list[str]:
+    """Remove staged takes whose owning attempt is no longer running: a
+    crashed, reclaimed, cancelled, or finished attempt. Called by the worker
+    between jobs, so it never races its own render. Returns removed ids."""
+    removed: list[str] = []
+    for project_id, take_id, owner in storage.list_staged_takes():
+        alive = False
+        if owner and owner.get("job_id"):
+            try:
+                row = job_queue.read_job(str(owner["job_id"]))
+            except Exception:
+                row = None
+            if row is not None and row["status"] == "running":
+                with closing(_connect()) as conn:
+                    token = conn.execute(
+                        "SELECT attempt_token FROM jobs WHERE id = ?", (owner["job_id"],)
+                    ).fetchone()
+                alive = token is not None and token["attempt_token"] == owner.get("attempt_token")
+        if not alive:
+            storage.discard_staged_take(project_id, take_id)
+            removed.append(take_id)
+    return removed
 
 
 def _parameters(fn: Any) -> set[str]:

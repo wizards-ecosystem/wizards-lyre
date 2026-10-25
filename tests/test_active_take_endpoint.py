@@ -38,10 +38,13 @@ def test_set_active_take_restores_an_earlier_take(client: TestClient) -> None:
     second_take_id = _generate_take(client, project_id)
     assert first_take_id != second_take_id
 
-    # Existing auto-set behavior: the newest take is active by default.
+    # SPEC.md sec 16.5: the first take becomes active, and a later
+    # generation never replaces the kept take on its own.
     resp = client.get(f"/api/projects/{project_id}")
     assert resp.status_code == 200
-    assert resp.json()["project"]["active_take_id"] == second_take_id
+    assert resp.json()["project"]["active_take_id"] == first_take_id
+    resp = client.post(f"/api/projects/{project_id}/active_take", json={"take_id": second_take_id})
+    assert resp.json()["active_take_id"] == second_take_id
 
     # Walk parent_take_id back: restore the first take as active without
     # deleting either take's history.

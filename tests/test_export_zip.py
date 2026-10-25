@@ -160,8 +160,8 @@ def test_export_excludes_complete_takes_from_stems(client: TestClient) -> None:
 
 
 def test_export_always_includes_active_mix_even_when_it_is_also_a_stem(client: TestClient) -> None:
-    """extract/lego promote their output to the active take (like every other
-    job), so the common export-right-after-extract case still must write
+    """Keeping an extract/lego output as the active take (an explicit choice
+    since SPEC.md sec 16.5) and exporting it must still write
     "mix<ext>" -- consumers need one predictable, unconditional place to find
     the active take, regardless of whether it also qualifies as a stem
     (reviewer-flagged: omitting "mix<ext>" here breaks that contract, even
@@ -195,7 +195,9 @@ def test_export_always_includes_active_mix_even_when_it_is_also_a_stem(client: T
     stem_take_id = extract_job["take_id"]
 
     project_after = client.get(f"/api/projects/{project_id}").json()
-    assert project_after["project"]["active_take_id"] == stem_take_id
+    assert project_after["project"]["active_take_id"] == source_take_id
+    kept = client.post(f"/api/projects/{project_id}/active_take", json={"take_id": stem_take_id})
+    assert kept.json()["active_take_id"] == stem_take_id
 
     resp = client.get(f"/api/projects/{project_id}/export?include_stems=true")
     assert resp.status_code == 200

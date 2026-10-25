@@ -78,10 +78,13 @@ from server.jobs.queue import (
     set_stage,
 )
 from server.jobs.runner import (
+    _commit_take,
     _error_lora_meta,
     _error_take_meta,
     _run_generate_shaped_job,
     _run_train_lora_job,
+    cleanup_staging,
+    committed_take_for_job,
     process_one_queued_job,
     run_claimed_job,
 )
@@ -121,6 +124,7 @@ __all__ = [
     # Private helpers are part of the historical surface: tests and the
     # worker process reach them as jobs.<name>.
     "_check_worker_capability",
+    "_commit_take",
     "_connect",
     "_distinct_lora_source_ids",
     "_ensure_column",
@@ -168,6 +172,8 @@ __all__ = [
     "cancel_job",
     "cancel_requested",
     "claim_next_queued_job",
+    "cleanup_staging",
+    "committed_take_for_job",
     "enqueue_job",
     "finish_done",
     "freeze_resolved",

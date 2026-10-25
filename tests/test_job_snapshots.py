@@ -16,7 +16,6 @@ from fastapi.testclient import TestClient
 
 import worker.mock_worker as mock_worker_module
 from server import jobs, storage
-from server.jobs import runner as runner_module
 
 _REAL_RUN_JOB = mock_worker_module.run_job
 _REAL_PLANNER = mock_worker_module._mock_planner
@@ -210,31 +209,31 @@ def test_a_stale_attempt_cannot_publish(api_client: TestClient) -> None:
 def test_a_crash_after_the_commit_finishes_with_that_take(
     api_client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """At most one committed take per logical job: the retry finds the take
-    the lost attempt committed and finishes with it."""
+    """At most one committed take per logical job: the process dies after
+    the staged take was renamed into takes/ but before the job row was
+    marked done. The retry finds that take and finishes with it."""
     project_id = _project(api_client, caption="x")
-    _enqueue(api_client, project_id)
-    calls = {"n": 0}
-    real_finish = jobs.finish_done
+    job = _enqueue(api_client, project_id)
+    real_promote = storage.promote_staged_take
 
-    def crash_on_first_finish(*args, **kwargs):
-        calls["n"] += 1
-        if calls["n"] == 1:
-            raise _Crash()
-        return real_finish(*args, **kwargs)
+    def promote_then_crash(*args, **kwargs):
+        real_promote(*args, **kwargs)
+        raise _Crash()
 
-    monkeypatch.setattr(runner_module, "finish_done", crash_on_first_finish)
+    monkeypatch.setattr(storage, "promote_staged_take", promote_then_crash)
     with pytest.raises(_Crash):
         jobs.run_claimed_job(jobs.claim_next_queued_job())
+    assert jobs.get_job(job["id"])["status"] == "running"
     committed = storage.list_takes(project_id)
     assert len(committed) == 1
+    assert committed[0]["job_id"] == job["id"]
 
+    monkeypatch.setattr(storage, "promote_staged_take", real_promote)
     rendered: list[str] = []
-    real_run = mock_worker_module.run_job
     monkeypatch.setattr(
         mock_worker_module,
         "run_job",
-        lambda **kwargs: rendered.append("again") or real_run(**kwargs),
+        lambda **kwargs: rendered.append("again") or _REAL_RUN_JOB(**kwargs),
     )
     jobs.reclaim_stale_jobs(stale_after=-1)
     done = _run_next()

@@ -295,11 +295,13 @@ def run_loop(stop_event: threading.Event, poll_interval: float = DEFAULT_POLL_IN
         lease_thread.start()
         try:
             jobs.reclaim_stale_jobs()  # recover anything a previous, now-dead worker left running
+            jobs.cleanup_staging()  # and drop staged takes nobody owns any more
             startup_ready, startup_message = _startup_readiness()
             _refresh_published_state(startup_ready, startup_message)
             last_status_refresh = time.monotonic()
             while not stop_event.is_set():
                 jobs.reclaim_stale_jobs()
+                jobs.cleanup_staging()
                 did_work = jobs.process_one_queued_job()
                 if did_work:
                     # A job just ran (successfully or not) -- republish from live
