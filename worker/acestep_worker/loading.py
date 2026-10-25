@@ -316,7 +316,7 @@ def supports_dit_profile(dit_profile: str) -> tuple[bool, str | None]:
     if dit_profile not in CPU_OFFLOAD_PROFILES:
         return True, None
     try:
-        AceStepHandler, _, _, _, _, _ = _import_acestep()
+        AceStepHandler, *_ = _import_acestep()
     except WorkerUnavailable as exc:
         return False, str(exc)
     if not _handler_supports_cpu_offload(AceStepHandler):
@@ -331,7 +331,7 @@ def supports_dit_profile(dit_profile: str) -> tuple[bool, str | None]:
 
 def _ensure_loaded(dit_profile: str) -> tuple[Any, Any, Any]:
     """Swap the loaded DiT if needed. Caller holds _LOCK."""
-    AceStepHandler, _, _, LLMHandler, _, _ = _import_acestep()
+    AceStepHandler, _, _, LLMHandler, *_ = _import_acestep()
 
     if _STATE["dit_profile"] != dit_profile or _STATE["handler"] is None:
         # Unload the previous DiT before loading the next; never hold two

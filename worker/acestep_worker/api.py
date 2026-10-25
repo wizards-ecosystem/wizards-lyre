@@ -20,6 +20,7 @@ def _import_acestep():
             GenerationConfig,
             GenerationParams,
             create_sample,
+            format_sample,
             generate_music,
         )
         from acestep.llm_inference import LLMHandler
@@ -36,6 +37,7 @@ def _import_acestep():
         LLMHandler,
         generate_music,
         create_sample,
+        format_sample,
     )
 
 

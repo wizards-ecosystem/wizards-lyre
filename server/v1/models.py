@@ -6,12 +6,12 @@ so `app.openapi()` carries a response schema for each operation
 from __future__ import annotations
 
 import math
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 JobStatus = Literal["queued", "running", "done", "error", "cancelled"]
-JobStage = Literal["loading_model", "planning", "rendering", "writing_take"]
+JobStage = Literal["loading_model", "planning", "rendering", "writing_take", "needs_confirmation"]
 
 
 class ErrorObject(BaseModel):
@@ -90,6 +90,11 @@ class Plan(BaseModel):
     duration_sec: float | None = None
     sections: list[PlanSection] = Field(default_factory=list)
     caption_rewrite: bool = False
+    creation_mode: Literal["from_idea", "from_brief"] = "from_brief"
+    field_origins: dict[str, str] = Field(default_factory=dict)
+    revision: int = 0
+    brief: dict[str, Any] | None = None
+    preset: dict[str, Any] | None = None
 
 
 class Take(BaseModel):
@@ -113,6 +118,9 @@ class Take(BaseModel):
     lora_id: str | None = None
     favorite: bool = False
     notes: str = ""
+    job_id: str | None = None
+    provenance: dict[str, Any] | None = None
+    provenance_complete: bool = False
 
 
 class TakePage(BaseModel):
@@ -142,6 +150,8 @@ class Job(BaseModel):
     created_at: str
     updated_at: str
     artifacts: list[str]
+    submission_id: str | None = None
+    retry_of: str | None = None
 
 
 class JobPage(BaseModel):
@@ -182,6 +192,13 @@ class PlanWrite(BaseModel):
     duration_sec: float | None = None
     sections: list[PlanSection] | None = None
     caption_rewrite: bool | None = None
+    creation_mode: Literal["from_idea", "from_brief"] | None = None
+    field_origins: dict[str, str] | None = None
+    preset: dict[str, Any] | None = None
+    expected_revision: int | None = Field(
+        default=None,
+        description="Write only if the plan is still at this revision; 409 otherwise.",
+    )
 
 
 class ActiveTake(BaseModel):
@@ -209,6 +226,12 @@ class JobCreate(BaseModel):
     audio_cover_strength: float = Field(0.7, ge=0.0, le=1.0)
     seed: int = -1
     batch_size: int = 1
+    # SPEC.md sec 16.3: `from_idea` re-plans from the idea, `from_brief`
+    # renders the stored brief. Omitted: the plan's own creation_mode.
+    creation_mode: Literal["from_idea", "from_brief"] | None = None
+    # SPEC.md sec 16.4: one submission per project. The same id and body
+    # return the existing job; a different body is 409.
+    submission_id: str | None = None
 
 
 class UploadCreated(BaseModel):
@@ -285,3 +308,73 @@ class Lora(BaseModel):
     dit_profile: str | None = None
     status: str | None = None
     error: str | None = None
+
+
+class WorkerState(BaseModel):
+    state: Literal["stopped", "unavailable", "loading", "busy", "ready"]
+    reason: str | None = None
+    backend: str
+    dit_loaded: str | None = None
+    queue: QueueCounts
+
+
+class ProfileCapability(BaseModel):
+    id: str
+    label: str
+    summary: str
+    checkpoint: str
+    inference_steps: int
+    guidance_scale: float
+    cpu_offload: bool
+    files: Literal["present", "incomplete", "missing", "remote"]
+    validated: bool
+    loaded: bool
+    supported: bool | None = None
+    reason: str | None = None
+
+
+class Capabilities(BaseModel):
+    """SPEC.md sec 16.6: what this install can do right now. `files` is a
+    filesystem check only; `validated` means a job on that profile has
+    completed. The LM is fixed (`selectable: false`)."""
+
+    model_config = ConfigDict(extra="allow")
+
+    schema_: str = Field(alias="schema")
+    worker: WorkerState
+    profiles: list[ProfileCapability]
+    lm: dict[str, Any]
+    disk: dict[str, Any]
+    presets: list[dict[str, Any]]
+    limits: dict[str, Any]
+
+
+class PresetRequest(BaseModel):
+    preset_id: str
+    apply: bool = False
+    expected_revision: int | None = None
+
+
+class PresetResult(BaseModel):
+    plan: Plan
+    changes: list[dict[str, Any]]
+    warnings: list[str]
+    preset: dict[str, Any]
+    applied: bool
+
+
+class ExportManifest(BaseModel):
+    """`lyre.export-manifest/1` (SPEC.md sec 16.6). `take` is null when the
+    project has no kept take; `unavailable` names every optional file that
+    is not in the archive and why."""
+
+    model_config = ConfigDict(extra="allow")
+
+    schema_: str = Field(alias="schema")
+    created_at: str
+    project: dict[str, Any]
+    take: dict[str, Any] | None
+    files: list[dict[str, Any]]
+    unavailable: list[dict[str, Any]]
+    notes: dict[str, str]
+    export_url: str | None = None

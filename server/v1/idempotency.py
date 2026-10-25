@@ -34,7 +34,7 @@ from server.jobs.db import _connect
 # Visible ASCII, no spaces. Long enough for a UUID, short enough to index.
 _KEY_RE = re.compile(r"^[!-~]{1,255}$")
 # These POSTs answer 202 because they queued a job. The stored replay is 200.
-_QUEUED_JOB_POST = re.compile(r"^/v1/(?:songs|projects/[^/]+/jobs)$")
+_QUEUED_JOB_POST = re.compile(r"^/v1/(?:songs|projects/[^/]+/jobs|jobs/[^/]+/retry)$")
 IDEMPOTENCY_TTL_SECONDS = 24 * 60 * 60
 
 # Auth-off requests share this owner. It is not an API key id.

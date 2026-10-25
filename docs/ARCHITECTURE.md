@@ -91,14 +91,34 @@ JSON is the source of truth for metadata; audio and weights are never in git.
 ```
 projects/<project_id>/
   project.json          id, title, timestamps, dit_profile, active_take_id, favorite
-  plan.json             caption, lyrics, bpm, keyscale, duration, sections[]
+  plan.json             caption, lyrics, metas, sections[], creation_mode,
+                        field_origins, revision, brief
   takes/<take_id>/
     mix.wav             the archive copy
-    meta.json           seed, task_type, parent_take_id, score, error, notes
+    mix.mp3             the playback copy
+    meta.json           seed, task_type, parent_take_id, score, error, notes,
+                        job_id, provenance (requested, brief, actual, files)
     lyrics.lrc          when ACE-Step supplied timestamps
   uploads/              drag-dropped source audio
   loras/<lora_id>/      trained style packs
+projects/.staging/<project_id>/<take_id>/
+                        a render in progress, never listed as a take
 ```
+
+**What renders is frozen at enqueue.** A generate-shaped job stores its
+creation input and submission record in the queue row
+(`server/generation/brief.py` decides precedence for every surface). Before
+the first DiT call the worker freezes the resolved brief and concrete seed in
+the row, fenced by the claim's attempt token, so an automatic retry renders
+exactly that (SPEC.md section 16.4).
+
+**Commits are staged.** The worker renders into `projects/.staging/` with no
+project lock held, so plan edits never wait for inference. It then takes the
+project lock and one SQLite transaction, checks that its attempt still owns
+the job, that the job was not cancelled, and that the project still exists,
+renames the staged directory into `takes/`, and marks the job done. A take
+already committed for the same job wins, so a crash cannot publish two
+(SPEC.md section 16.5).
 
 **Takes are immutable.** Cover, repaint, extract, lego, and complete all create
 a *new* take with `parent_take_id` pointing at the source. Nothing overwrites

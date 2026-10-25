@@ -44,8 +44,14 @@ export function useKeyboardShortcuts({
   // Space are ordinary characters those same fields need to accept normally.
   useEffect(() => {
     function isTextEntryFocused(): boolean {
-      const tag = document.activeElement?.tagName;
-      return tag === "INPUT" || tag === "TEXTAREA";
+      const active = document.activeElement as HTMLElement | null;
+      const tag = active?.tagName;
+      return (
+        tag === "INPUT" ||
+        tag === "TEXTAREA" ||
+        tag === "SELECT" ||
+        Boolean(active?.isContentEditable)
+      );
     }
 
     function onKeyDown(event: KeyboardEvent) {

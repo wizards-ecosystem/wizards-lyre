@@ -12,7 +12,7 @@ import os
 import secrets
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.exception_handlers import request_validation_exception_handler
@@ -23,7 +23,8 @@ from pydantic import BaseModel, Field
 from starlette.routing import Route
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from server import config, jobs, storage
+from server import capabilities, config, creation, jobs, storage
+from server.generation.presets import PresetNotFound
 from server.mcp.http import gateway as mcp_gateway
 from server.mcp.http import mcp_lifespan
 from server.remote_gpu import service as remote_gpu
@@ -222,6 +223,12 @@ class JobBody(BaseModel):
     audio_cover_strength: float = Field(0.7, ge=0.0, le=1.0)
     seed: int = -1
     batch_size: int = 1
+    # SPEC.md sec 16.3: `from_idea` re-plans from the idea, `from_brief`
+    # renders the stored brief. Omitted: the plan's own creation_mode.
+    creation_mode: Literal["from_idea", "from_brief"] | None = None
+    # SPEC.md sec 16.4: one submission per project. The same id and body
+    # return the existing job; a different body is 409.
+    submission_id: str | None = None
 
 
 @app.exception_handler(storage.PathJailError)
@@ -239,6 +246,23 @@ def _take_not_found_handler(request, exc: storage.TakeNotFound):
     return _error_body(request, 404, f"take not found: {exc}", code="not_found")
 
 
+@app.exception_handler(storage.PlanRevisionConflict)
+def _plan_revision_handler(request, exc: storage.PlanRevisionConflict):
+    return _error_body(request, 409, str(exc), code="conflict", param="expected_revision")
+
+
+@app.exception_handler(PresetNotFound)
+def _preset_not_found_handler(request, exc: PresetNotFound):
+    return _error_body(
+        request, 404, f"preset not found: {exc}", code="not_found", param="preset_id"
+    )
+
+
+@app.exception_handler(storage.ExportError)
+def _export_error_handler(request, exc: storage.ExportError):
+    return _error_body(request, 400, str(exc), code="invalid_request", param=exc.param)
+
+
 @app.exception_handler(storage.LoraNotFound)
 def _lora_not_found_handler(request, exc: storage.LoraNotFound):
     return _error_body(request, 404, f"lora not found: {exc}", code="not_found")
@@ -249,9 +273,20 @@ def _job_not_found_handler(request, exc: jobs.JobNotFound):
     return _error_body(request, 404, f"job not found: {exc}", code="not_found")
 
 
+@app.exception_handler(jobs.SubmissionConflict)
+def _submission_conflict_handler(request, exc: jobs.SubmissionConflict):
+    return _error_body(request, 409, str(exc), code="conflict", param="submission_id")
+
+
 @app.exception_handler(jobs.JobError)
 def _job_error_handler(request, exc: jobs.JobError):
-    return _error_body(request, 400, str(exc), code="invalid_request")
+    return _error_body(
+        request,
+        400,
+        str(exc),
+        code=getattr(exc, "code", "invalid_request"),
+        param=getattr(exc, "param", None),
+    )
 
 
 @app.exception_handler(ProvisionerError)
@@ -335,6 +370,26 @@ def health() -> dict[str, Any]:
     }
 
 
+@app.get("/api/capabilities")
+def get_capabilities() -> dict[str, Any]:
+    # SPEC.md sec 16.6: readiness, profiles, presets, and limits in one read.
+    return capabilities.capabilities()
+
+
+class PresetBody(BaseModel):
+    preset_id: str
+    apply: bool = False
+    expected_revision: int | None = None
+
+
+@app.post("/api/projects/{project_id}/preset")
+def project_preset(project_id: str, body: PresetBody) -> dict[str, Any]:
+    # Preview by default; `apply: true` writes the plan (SPEC.md sec 16.6).
+    return creation.preset_on_project(
+        project_id, body.preset_id, apply=body.apply, expected_revision=body.expected_revision
+    )
+
+
 @app.get("/api/projects")
 def list_projects() -> list[dict]:
     return storage.list_projects()
@@ -369,7 +424,12 @@ def delete_project(project_id: str) -> Response:
 
 @app.put("/api/projects/{project_id}/plan")
 def put_plan(project_id: str, body: dict[str, Any]) -> dict:
-    return storage.save_plan(project_id, body)
+    # SPEC.md sec 16.3: an optional `expected_revision` makes the replace
+    # conditional. It is a request field, not part of plan.json.
+    expected = body.pop("expected_revision", None)
+    if expected is not None and (isinstance(expected, bool) or not isinstance(expected, int)):
+        raise ValueError("expected_revision must be an integer")
+    return storage.save_plan(project_id, body, expected_revision=expected)
 
 
 @app.get("/api/projects/{project_id}/takes")
@@ -402,7 +462,9 @@ def patch_take(project_id: str, take_id: str, body: TakeAnnotationBody) -> dict:
 def get_take_audio(project_id: str, take_id: str) -> FileResponse:
     path = storage.take_audio_path(project_id, take_id)
     media_type = "audio/wav" if path.suffix == ".wav" else "audio/mpeg"
-    return FileResponse(path, media_type=media_type, filename=path.name)
+    # The stored full-resolution file, named by take and its real extension
+    # (SPEC.md sec 16.6), so a browser download is never a mislabelled MP3.
+    return FileResponse(path, media_type=media_type, filename=f"{take_id}{path.suffix}")
 
 
 @app.get("/api/projects/{project_id}/takes/{take_id}/lrc")
@@ -416,11 +478,14 @@ def get_take_lrc(project_id: str, take_id: str) -> FileResponse:
 
 
 @app.get("/api/projects/{project_id}/export")
-def export_project(project_id: str, include_stems: bool = True) -> Response:
-    # SPEC.md sec 12 Phase 5 / sec 9.2: project.json + plan.json + active
-    # mix + optional stems, built in memory by storage.build_export_zip.
+def export_project(
+    project_id: str, include_stems: bool = True, take_id: str | None = None
+) -> Response:
+    # SPEC.md sec 16.6: the selected take's full-resolution mix (the active
+    # take unless take_id names one), its LRC, optional stems, project.json,
+    # plan.json, and manifest.json, built by storage.build_export_zip.
     project = storage.load_project(project_id)
-    zip_bytes = storage.build_export_zip(project_id, include_stems=include_stems)
+    zip_bytes = storage.build_export_zip(project_id, include_stems=include_stems, take_id=take_id)
     filename = f"{storage.sanitize_filename(project['title'])}-export.zip"
     return Response(
         content=zip_bytes,
@@ -448,6 +513,20 @@ def create_job(project_id: str, body: JobBody) -> dict:
 @app.get("/api/jobs/{job_id}")
 def get_job(job_id: str) -> dict:
     return jobs.get_job(job_id)
+
+
+@app.post("/api/jobs/{job_id}/cancel")
+def cancel_job(job_id: str) -> dict:
+    # Same cooperative cancel as `/v1` (SPEC.md sec 15.5); the studio needs it
+    # to stop a job it started (sec 16.6).
+    return jobs.cancel_job(job_id)
+
+
+@app.post("/api/jobs/{job_id}/retry")
+def retry_job(job_id: str) -> dict:
+    # SPEC.md sec 16.5: a new job linked by `retry_of` that repeats the
+    # frozen request.
+    return jobs.retry_job(job_id)
 
 
 @app.get("/api/jobs")

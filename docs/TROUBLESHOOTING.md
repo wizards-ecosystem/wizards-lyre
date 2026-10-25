@@ -30,6 +30,47 @@ Jobs left `running` by a crashed worker are requeued automatically when a
 worker next starts, and marked `error` after three attempts rather than
 retrying forever.
 
+## A job says "Needs confirmation"
+
+It was queued before the upgrade to the completion release and has no
+snapshot of what to render. Lyre will not guess from the current plan. Choose
+**Retry** in the job strip to resubmit it from the plan as it is now (a new
+job), or **Cancel**. Agents use `POST /v1/jobs/{id}/retry`. See
+[COMPLETION_MIGRATION.md](COMPLETION_MIGRATION.md).
+
+## Generate is disabled with "Instrumental and lyrics conflict"
+
+Instrumental asks for no vocals, but the plan has lyrics. Lyre does not
+delete words for you: choose **Clear lyrics** or **Keep vocals**.
+
+## A request is refused before anything renders
+
+Lyre rejects values ACE-Step does not support before it uses the GPU, and
+the error names the field: BPM 30-300, duration 10-600 seconds, a key such as
+`C major` or `F#m`, a meter of `2`, `3`, `4`, `6`, `2/4`, `3/4`, `4/4`, or
+`6/8`, and an ACE-Step language code. It also refuses when less than 512 MB is
+free under `projects/`.
+
+## The plan says "Changed elsewhere"
+
+Another tab, an agent, or a finished planned render saved the plan after
+this page last read it. Your edit is still on screen and in the browser's
+local draft. **Keep my edits** writes it over the newer plan; **Use saved
+plan** discards it and loads the saved one.
+
+## "Save failed, retrying"
+
+The server did not answer the last plan save. The text stays on screen and in
+the local draft, and the save is retried on its own; **Retry now** sends it
+immediately. A save the server *rejected* says "Save failed" and is not
+retried automatically, because it would fail the same way.
+
+## Cancelling did not stop the GPU right away
+
+ACE-Step cannot interrupt a render in progress. A cancel stops a queued job
+at once; a running job finishes its current pass, its output is discarded,
+and no take is kept. The job strip says "Cancelling" until then.
+
 ## The worker will not start
 
 **`WorkerUnavailable: ACE-Step is not installed`:** run

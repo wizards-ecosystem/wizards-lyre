@@ -85,7 +85,10 @@ here, including this one. The constraints that matter most:
   and writes, idempotency keys, one-shot songs, cooperative cancel, and the
   MCP server from SPEC.md section 15 are implemented. Later phases in
   section 12 (SSE, webhooks, signed artifact tokens, `/api` deprecation
-  headers) are not. Do not skip ahead of that order. The Remote
+  headers) are not, and are deferred out of the bounded completion release
+  (SPEC.md section 16; the packet list is
+  [docs/COMPLETION_CHECKLIST.md](docs/COMPLETION_CHECKLIST.md)). Do not skip
+  ahead of that order. The Remote
   GPU host is the authenticated render service; see
   [docs/remote-gpu.md](docs/remote-gpu.md).
 - **`pytest` must never need a GPU** and must never import `acestep` or `torch`.

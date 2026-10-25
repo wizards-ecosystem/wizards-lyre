@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 from server import storage
+from server.generation import brief as creation
 from server.jobs.errors import JobError
 
 # SPEC.md sec 12 (phase order): phase 1 is generate; phase 2 adds cover and
@@ -229,3 +230,25 @@ def _resolve_lora(project_id: str, lora_id: str) -> dict:
     if not lora.get("status"):
         raise JobError(f"lora_id '{lora_id}' has not finished training successfully")
     return lora
+
+
+GENERATE_SHAPED_ACTIONS = {"generate", "cover", "repaint", "extract", "lego", "complete"}
+
+
+def _resolve_creation(plan: dict, action: str, body: dict[str, Any]) -> dict | None:
+    """The frozen creation input for a generate-shaped job (SPEC.md sec
+    16.3/16.4), validated so an unsupported value fails here as a 400 that
+    names the field, not later on the GPU. None for `train_lora`."""
+    if action not in GENERATE_SHAPED_ACTIONS:
+        return None
+    mode = body.get("creation_mode")
+    if mode is not None and action != "generate":
+        raise JobError(
+            f"creation_mode only applies to action 'generate' (got '{action}')",
+            param="creation_mode",
+        )
+    try:
+        intent = creation.creation_input(plan, action=action, mode_override=mode)
+        return creation.validate_creation(intent)
+    except creation.BriefError as exc:
+        raise JobError(str(exc), param=exc.param, code=exc.code) from exc

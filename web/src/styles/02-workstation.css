@@ -383,6 +383,30 @@ kbd {
 .job-model {
   margin-left: auto;
 }
+.job-note {
+  color: var(--muted);
+  font-family: inherit;
+}
+.status-cancelled .job-pulse {
+  background: var(--muted-dim);
+}
+.job-strip .text-button,
+.save-state .text-button {
+  font: inherit;
+}
+.draft-offer {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  border-bottom: 1px solid var(--rule);
+  padding: 8px 0;
+  font-size: 12px;
+}
+.draft-offer > span {
+  flex: 1 1 260px;
+}
 @keyframes job-pulse {
   50% {
     opacity: 0.28;
@@ -470,6 +494,12 @@ kbd {
 }
 .save-error > span {
   background: var(--danger);
+}
+.save-conflict {
+  color: var(--signal);
+}
+.save-conflict > span {
+  background: var(--signal);
 }
 .plan-scroll {
   flex: 1 1 auto;
@@ -764,7 +794,8 @@ kbd {
 .stage-transport {
   display: grid;
   flex: 0 0 auto;
-  grid-template-columns: 34px 38px minmax(80px, 1fr) 38px 52px;
+  /* play, elapsed, scrubber, total, volume, repeat, meter */
+  grid-template-columns: 34px 38px minmax(80px, 1fr) 38px 72px auto 52px;
   align-items: center;
   gap: 9px;
   border-bottom: 1px solid var(--rule);
@@ -1411,10 +1442,11 @@ button.take-lora-badge:hover {
     min-height: 180px;
   }
   .stage-transport {
-    grid-template-columns: 38px 34px minmax(60px, 1fr) 34px;
+    grid-template-columns: 38px 34px minmax(60px, 1fr) 34px auto;
     min-height: 58px;
   }
-  .stage-transport .loudness-meter {
+  .stage-transport .loudness-meter,
+  .stage-transport .transport-volume {
     display: none;
   }
   .region-bar {
@@ -1558,4 +1590,136 @@ button.take-lora-badge:hover {
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+/* Creation contract (SPEC.md sec 16.3/16.6) */
+.song-kind {
+  display: inline-flex;
+  margin-top: 10px;
+  border: 1px solid var(--rule-strong);
+}
+.song-kind label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.song-kind label.selected {
+  background: var(--surface-raised);
+  color: var(--text);
+}
+.song-kind input {
+  margin: 0;
+}
+.creation-conflict {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  border-left: 2px solid var(--danger);
+  padding: 6px 10px;
+  background: var(--danger-bg);
+  font-size: 12px;
+}
+.creation-conflict > span {
+  flex: 1 1 220px;
+}
+.brief-source {
+  margin-top: 8px;
+}
+.field-origin {
+  margin-left: 6px;
+  border: 1px solid var(--rule);
+  padding: 0 4px;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 9px;
+  font-weight: 400;
+  text-transform: lowercase;
+}
+.field-origin.origin-user {
+  border-color: var(--signal);
+  color: var(--signal);
+}
+.field-origin.origin-planner,
+.field-origin.origin-preset {
+  border-color: var(--success);
+  color: var(--success);
+}
+.generate-intent {
+  display: flex;
+  flex: 1 1 100%;
+  flex-direction: column;
+  gap: 3px;
+  border-left: 2px solid var(--signal);
+  padding: 4px 10px;
+  font-size: 12px;
+}
+.generate-intent small {
+  color: var(--muted);
+}
+.generate-intent .text-button {
+  align-self: flex-start;
+}
+
+.dit-profile-option.unavailable {
+  text-decoration: line-through;
+}
+.disk-warning {
+  border-left: 2px solid var(--danger);
+  padding: 6px 10px;
+  background: var(--danger-bg);
+  font-size: 12px;
+}
+.preset-field {
+  margin-top: 10px;
+}
+.preset-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+  border-left: 2px solid var(--success);
+  padding: 6px 10px;
+  font-size: 12px;
+}
+.preset-preview ul {
+  margin: 0;
+  padding-left: 16px;
+}
+.preset-preview small {
+  color: var(--muted);
+}
+
+/* Audition (SPEC.md sec 16.6) */
+.compare-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+.transport-volume {
+  display: flex;
+  align-items: center;
+}
+.transport-volume input {
+  width: 100%;
+  min-width: 0;
+}
+.transport-repeat {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--mono);
+  font-size: 10px;
+}
+.take-preview-error {
+  color: var(--danger);
+  font-size: 11px;
+}
+.take-actions .text-button {
+  font-size: inherit;
 }

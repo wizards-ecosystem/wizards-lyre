@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
+from server.generation import brief as creation
 from worker.acestep_worker.api import _api_call
 from worker.acestep_worker.settings import _LOCK, GENERATION_STEPS
 
@@ -23,68 +24,68 @@ def _repaint_meta(job: dict[str, Any]) -> dict | None:
     }
 
 
-def _is_simple_mode(job: dict[str, Any], plan: dict[str, Any]) -> bool:
-    """SPEC.md sec 7.2: Simple mode is "user types query"; caption/lyrics
-    stay empty until the LM fills them in."""
-    return (
-        job.get("action") == "generate"
-        and bool(plan.get("query"))
-        and not plan.get("caption")
-        and not plan.get("lyrics")
-    )
+def _run_planner(
+    request: dict[str, Any],
+    create_sample_fn: Any,
+    format_sample_fn: Any,
+    lm: Any,
+) -> dict[str, Any]:
+    """Run the upstream planner `server.generation.brief.planner_request`
+    chose, and return its result under upstream's own field names
+    (`caption`, `lyrics`, `bpm`, `duration`, `keyscale`, `language`,
+    `timesignature`). Precedence is applied afterwards by
+    `brief.apply_planner`, never here. Both planners are module-level
+    functions that take the LM handler as `llm_handler` (two Ls)."""
+    if request["planner"] == "format_sample":
+        sample = _api_call(
+            "format_sample",
+            format_sample_fn,
+            llm_handler=lm,
+            caption=request["caption"],
+            lyrics=request["lyrics"],
+            user_metadata=request["user_metadata"],
+        )
+    else:
+        sample = _api_call(
+            "create_sample",
+            create_sample_fn,
+            llm_handler=lm,
+            query=request["query"],
+            instrumental=request["instrumental"],
+            vocal_language=request["vocal_language"],
+        )
 
-
-def _plan_from_query(create_sample_fn: Any, lm: Any, plan: dict[str, Any]) -> dict[str, Any]:
-    """Simple mode (SPEC.md sec 7.2): turn `query` into a full plan via
-    ACE-Step's module-level `create_sample` (it takes the LM handler, it is
-    not a method on it), then merge the result onto `plan`."""
-    sample = _api_call(
-        "create_sample",
-        create_sample_fn,
-        # Upstream spells this `llm_handler`, with two Ls -- unlike
-        # `AceStepHandler`/`LLMHandler.initialize`, which take neither. Passing
-        # `lm_handler` raised TypeError on every real simple-mode generate.
-        llm_handler=lm,
-        query=plan.get("query"),
-        instrumental=plan.get("instrumental", False),
-        # Without this, create_sample is free to pick any language for the
-        # lyrics it writes -- the plan's own vocal_language (default "en",
-        # SPEC.md sec 7.2) is what's supposed to constrain that.
-        vocal_language=plan.get("vocal_language"),
-    )
-
-    def _field(name: str, fallback: Any) -> Any:
+    def _field(name: str) -> Any:
         if isinstance(sample, dict):
-            return sample.get(name, fallback)
-        return getattr(sample, name, fallback)
+            return sample.get(name)
+        return getattr(sample, name, None)
 
-    # Mirrors generate_music's GenerationResult.success handling further
-    # down in this module: absent means the installed acestep predates this
-    # field (treated as success, matching the fakes/tests below), but an
-    # explicit False must fail the job instead of silently generating from
-    # an empty/fallback caption and lyrics.
-    if not _field("success", True):
-        detail = _field("error", None) or _field("message", None) or _field("status", None)
-        raise RuntimeError(f"create_sample reported failure: {detail or 'no detail provided'}")
-
-    return {
-        **plan,
-        "caption": _field("caption", plan.get("caption", "")),
-        "lyrics": _field("lyrics", plan.get("lyrics", "")),
-        "bpm": _field("bpm", plan.get("bpm")),
-        "keyscale": _field("keyscale", plan.get("keyscale")),
-        "duration_sec": _field("duration", plan.get("duration_sec")),
-        # create_sample's result field is "language", not "vocal_language"
-        # (that's Lyre's own plan.json field name -- see storage.default_plan).
-        "vocal_language": _field("language", plan.get("vocal_language")),
-        "timesignature": _field("timesignature", plan.get("timesignature")),
-    }
+    # Absent `success` means an older acestep (treated as success, as for
+    # generate_music below); an explicit False fails the job instead of
+    # rendering from an empty caption and lyrics.
+    success = _field("success")
+    if success is not None and not success:
+        detail = _field("error") or _field("message") or _field("status_message")
+        raise RuntimeError(
+            f"{request['planner']} reported failure: {detail or 'no detail provided'}"
+        )
+    names = ("caption", "lyrics", "bpm", "duration", "keyscale", "language", "timesignature")
+    return {name: _field(name) for name in names}
 
 
 def _result_field(container: Any, name: str, fallback: Any) -> Any:
     if isinstance(container, dict):
         return container.get(name, fallback)
     return getattr(container, name, fallback)
+
+
+def _has_sung_words(lyrics: Any) -> bool:
+    """Alignment scoring and LRC timestamps need words to align. The
+    `[Instrumental]` placeholder has none, and scoring it cost a second
+    forward pass per take -- about 11 s on the CPU-offloaded quality profile,
+    measured on the 16 GB target (docs/COMPLETION_BENCHMARK.md)."""
+    text = str(lyrics or "").strip()
+    return bool(text) and not creation.is_instrumental_placeholder(text)
 
 
 def _quality_score(
@@ -119,7 +120,7 @@ def _quality_score(
     model (SPEC.md sec 4.3: "one GPU occupant... jobs serialize"), same as
     the `generate_music` call above.
     """
-    if not lyrics or not str(lyrics).strip():
+    if not _has_sung_words(lyrics):
         return None
     pred_latents = extra_lookup("pred_latents", None)
     encoder_hidden_states = extra_lookup("encoder_hidden_states", None)
@@ -186,7 +187,7 @@ def _lyric_timestamps(
     `_quality_score`: a timestamp failure must never fail an otherwise-
     successful take, so this never raises -- it only ever falls back to
     `None`, meaning no `lyrics.lrc` is written for the take."""
-    if not lyrics or not str(lyrics).strip():
+    if not _has_sung_words(lyrics):
         return None
     if not duration_sec:
         return None

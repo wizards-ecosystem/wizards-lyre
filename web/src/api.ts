@@ -6,6 +6,58 @@ export interface Health {
   dit_loaded: string | null;
 }
 
+// SPEC.md sec 16.6: what this install can do right now. `files` is a
+// filesystem check only; `validated` means a job on that profile completed.
+export type WorkerReadiness = "stopped" | "unavailable" | "loading" | "busy" | "ready";
+
+export interface ProfileCapability {
+  id: string;
+  label: string;
+  summary: string;
+  checkpoint: string;
+  inference_steps: number;
+  guidance_scale: number;
+  cpu_offload: boolean;
+  files: "present" | "incomplete" | "missing" | "remote";
+  validated: boolean;
+  loaded: boolean;
+  supported: boolean | null;
+  reason: string | null;
+}
+
+export interface Preset {
+  id: string;
+  version: number;
+  name: string;
+  purpose: string;
+  caption: string;
+  instrumental: boolean;
+  fields: Record<string, unknown>;
+  example: string;
+}
+
+export interface Capabilities {
+  worker: {
+    state: WorkerReadiness;
+    reason: string | null;
+    backend: string;
+    dit_loaded: string | null;
+    queue: { queued: number; running: number };
+  };
+  profiles: ProfileCapability[];
+  lm: { model: string; selectable: boolean };
+  disk: { free_bytes: number | null; low: boolean; blocked: boolean };
+  presets: Preset[];
+}
+
+export interface PresetResult {
+  plan: Plan;
+  changes: { field: string; from: unknown; to: unknown }[];
+  warnings: string[];
+  preset: { id: string; version: number };
+  applied: boolean;
+}
+
 // Opt-in Remote GPU (docs/remote-gpu.md). Mirrors server/remote_gpu/service.py.
 export interface RemoteGpuQuote {
   gpu: string;
@@ -76,6 +128,11 @@ export interface Section {
   lyrics: string;
 }
 
+export type CreationMode = "from_idea" | "from_brief";
+export type FieldOrigin = "user" | "planner" | "preset" | "default" | "unknown";
+export type TrackedField =
+  "caption" | "lyrics" | "vocal_language" | "bpm" | "keyscale" | "timesignature" | "duration_sec";
+
 export interface Plan {
   query: string;
   caption: string;
@@ -86,12 +143,20 @@ export interface Plan {
   bpm: number | null;
   keyscale: string | null;
   timesignature: string;
-  duration_sec: number;
+  duration_sec: number | null;
   sections: Section[];
   // SPEC.md sec 9.2: Custom-mode checkbox -- whether ACE-Step's LM
   // ("thinking") is allowed to rewrite the user's caption. Simple mode
   // ignores this and always runs with thinking=true.
   caption_rewrite: boolean;
+  // SPEC.md sec 16.3 creation contract. The server derives all four on
+  // every write; the UI reads them and may name an origin or mode
+  // explicitly. Optional so a plan from an older server still type-checks.
+  creation_mode?: CreationMode;
+  field_origins?: Partial<Record<TrackedField, FieldOrigin>>;
+  revision?: number;
+  brief?: { source_query: string; job_id: string; content_hash: string } | null;
+  preset?: { id: string; version: number } | null;
 }
 
 export interface Take {
@@ -124,6 +189,31 @@ export interface Take {
   // generation: the UI resolves it to the pack's name via GET
   // /api/projects/{id}/loras (falling back to this stable id).
   lora_id: string | null;
+  // SPEC.md sec 16.4. Absent or null on a take written before provenance;
+  // `provenance_complete` is false then, and nothing is invented for it.
+  job_id?: string | null;
+  provenance?: TakeProvenance | null;
+  provenance_complete?: boolean;
+}
+
+export interface TakeFile {
+  file: string;
+  format: string;
+  media_type: string;
+  bytes: number;
+  sha256: string;
+  sample_rate: number | null;
+  channels: number | null;
+  frames: number | null;
+  duration_sec: number | null;
+}
+
+export interface TakeProvenance {
+  complete: boolean;
+  brief: Record<string, unknown> | null;
+  actual: Record<string, unknown> | null;
+  requested?: Record<string, unknown>;
+  files?: Record<string, TakeFile>;
 }
 
 export interface ProjectDetail {
@@ -149,12 +239,21 @@ export interface Lora {
   error: string | null;
 }
 
+export type JobStatus = "queued" | "running" | "done" | "error" | "cancelled";
+export const TERMINAL_JOB_STATUSES: readonly string[] = ["done", "error", "cancelled"];
+
 export interface Job {
   id: string;
   project_id: string;
   action: string;
   dit_profile: string;
   status: string;
+  // SPEC.md sec 15.7/16.5. Optional: older rows and the train_lora path may
+  // omit them.
+  stage?: string | null;
+  cancel_requested?: number;
+  submission_id?: string | null;
+  retry_of?: string | null;
   take_id: string | null;
   // Set for train_lora jobs once the worker allocates the pack (the finished
   // pack id on `done`; kept on `error` too so a failed training remains a
@@ -166,6 +265,21 @@ export interface Job {
   updated_at: string;
 }
 
+/** A job body as SPEC.md sec 8.1 defines it. Built by lib/jobBodies.ts. */
+export type JobRequest = { action: string } & Record<string, unknown>;
+
+/** An HTTP error response. `status` lets callers tell a conflict (409) or a
+ *  rejected request (4xx) from a lost response, which surfaces as a plain
+ *  network `TypeError` from fetch instead. */
+export class ApiError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const resp = await fetch(path, {
     headers: { "Content-Type": "application/json" },
@@ -173,7 +287,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   });
   if (!resp.ok) {
     const body = await resp.text();
-    throw new Error(`${resp.status} ${resp.statusText}: ${body}`);
+    throw new ApiError(resp.status, `${resp.status} ${resp.statusText}: ${body}`);
   }
   // DELETE /api/projects/{id} responds 204 No Content -- resp.json() would
   // throw on the empty body, so every other (JSON-bodied) response takes
@@ -202,6 +316,21 @@ async function uploadAudio(projectId: string, file: File): Promise<{ upload_path
 
 export const api = {
   health: () => request<Health>("/api/health"),
+  capabilities: () => request<Capabilities>("/api/capabilities"),
+  // Preview (apply false) or apply a preset; applying is revision-checked.
+  presetOnProject: (
+    projectId: string,
+    presetId: string,
+    opts: { apply: boolean; expectedRevision?: number | null },
+  ) =>
+    request<PresetResult>(`/api/projects/${projectId}/preset`, {
+      method: "POST",
+      body: JSON.stringify({
+        preset_id: presetId,
+        apply: opts.apply,
+        expected_revision: opts.expectedRevision ?? null,
+      }),
+    }),
   remoteGpu: () => request<RemoteGpuStatus>("/api/remote-gpu"),
   connectRemoteGpu: (base_url: string, secret: string) =>
     request<RemoteGpuStatus>("/api/remote-gpu/connection", {
@@ -240,132 +369,34 @@ export const api = {
       body: JSON.stringify(patch),
       ...(opts?.keepalive ? { keepalive: true } : {}),
     }),
-  savePlan: (id: string, plan: Plan) =>
+  // expectedRevision makes the write conditional (SPEC.md sec 16.3): a
+  // plan that moved on since this edit started is a 409, never a silent
+  // overwrite. keepalive lets a pagehide handler finish the last save.
+  savePlan: (
+    id: string,
+    plan: Plan,
+    opts?: { expectedRevision?: number | null; keepalive?: boolean },
+  ) =>
     request<Plan>(`/api/projects/${id}/plan`, {
       method: "PUT",
-      body: JSON.stringify(plan),
+      body: JSON.stringify(
+        opts?.expectedRevision != null
+          ? { ...plan, expected_revision: opts.expectedRevision }
+          : plan,
+      ),
+      ...(opts?.keepalive ? { keepalive: true } : {}),
     }),
-  // dit_profile is intentionally omitted: the server falls back to the
-  // project's own persisted dit_profile (PATCH /api/projects/{id}) when the
-  // job body doesn't provide one. Hardcoding "iterate" here would silently
-  // override that project-level choice on every generate request.
-  //
-  // loraId is optional (SPEC.md sec 4.4 "LoRA train / load" -- the load
-  // half): when set, server.jobs._resolve_dit_profile coerces the omitted
-  // dit_profile to "studio_ops" for us, since a trained LoRA's weights are
-  // only valid against that base checkpoint -- callers must not also pass an
-  // explicit dit_profile here or the server rejects the conflict.
-  //
-  // seed (SPEC.md sec 7.3): -1 means the worker picks a seed and records
-  // the actual one used in the take meta; any other integer is a fixed seed
-  // the worker must honor verbatim.
-  generate: (id: string, loraId?: string | null, seed: number = -1) =>
-    request<Job>(`/api/projects/${id}/jobs`, {
-      method: "POST",
-      body: JSON.stringify({
-        action: "generate",
-        seed,
-        ...(loraId ? { lora_id: loraId } : {}),
-      }),
-    }),
-  // Exactly one of source_take_id/upload_path is ever sent, matching
-  // server.jobs._resolve_source_audio's "source_take_id or upload_path"
-  // contract (SPEC.md sec 8.1) -- callers pass whichever source is active.
-  // seed: see generate() above (-1 = worker picks and records).
-  cover: (
-    id: string,
-    source: { takeId: string } | { uploadPath: string },
-    strength: number,
-    loraId?: string | null,
-    seed: number = -1,
-  ) =>
-    request<Job>(`/api/projects/${id}/jobs`, {
-      method: "POST",
-      body: JSON.stringify({
-        action: "cover",
-        ...("takeId" in source
-          ? { source_take_id: source.takeId }
-          : { upload_path: source.uploadPath }),
-        audio_cover_strength: strength,
-        seed,
-        ...(loraId ? { lora_id: loraId } : {}),
-      }),
-    }),
-  // seed: see generate() above (-1 = worker picks and records).
-  repaint: (
-    id: string,
-    source: { takeId: string } | { uploadPath: string },
-    start: number,
-    end: number,
-    loraId?: string | null,
-    seed: number = -1,
-  ) =>
-    request<Job>(`/api/projects/${id}/jobs`, {
-      method: "POST",
-      body: JSON.stringify({
-        action: "repaint",
-        ...("takeId" in source
-          ? { source_take_id: source.takeId }
-          : { upload_path: source.uploadPath }),
-        repainting_start: start,
-        repainting_end: end,
-        seed,
-        ...(loraId ? { lora_id: loraId } : {}),
-      }),
-    }),
-  extract: (id: string, sourceTakeId: string, trackName: string) =>
-    request<Job>(`/api/projects/${id}/jobs`, {
-      method: "POST",
-      body: JSON.stringify({
-        action: "extract",
-        dit_profile: "studio_ops",
-        source_take_id: sourceTakeId,
-        track_name: trackName,
-        seed: -1,
-      }),
-    }),
-  lego: (
-    id: string,
-    sourceTakeId: string,
-    trackName: string,
-    region: { start: number; end: number } | null,
-  ) =>
-    request<Job>(`/api/projects/${id}/jobs`, {
-      method: "POST",
-      body: JSON.stringify({
-        action: "lego",
-        dit_profile: "studio_ops",
-        source_take_id: sourceTakeId,
-        track_name: trackName,
-        seed: -1,
-        ...(region ? { repainting_start: region.start, repainting_end: region.end } : {}),
-      }),
-    }),
-  complete: (id: string, sourceTakeId: string, trackName: string) =>
-    request<Job>(`/api/projects/${id}/jobs`, {
-      method: "POST",
-      body: JSON.stringify({
-        action: "complete",
-        dit_profile: "studio_ops",
-        source_take_id: sourceTakeId,
-        track_name: trackName,
-        seed: -1,
-      }),
-    }),
-  listLoras: (projectId: string) => request<Lora[]>(`/api/projects/${projectId}/loras`),
-  // source_take_ids must contain 8+ distinct take ids -- server.jobs
-  // enforces MIN_LORA_SOURCE_TAKES and rejects with a clear JobError
-  // otherwise (SPEC.md sec 4.4 "8+ songs").
-  trainLora: (projectId: string, sourceTakeIds: string[], name: string) =>
+  // One enqueue for every action. `submission_id` is the browser's
+  // identity for this submission (SPEC.md sec 16.4): resending the same id
+  // and body after a lost response returns the job the first send created.
+  enqueue: (projectId: string, body: JobRequest, submissionId: string) =>
     request<Job>(`/api/projects/${projectId}/jobs`, {
       method: "POST",
-      body: JSON.stringify({
-        action: "train_lora",
-        source_take_ids: sourceTakeIds,
-        name,
-        seed: -1,
-      }),
+      body: JSON.stringify({ ...body, submission_id: submissionId }),
     }),
+  cancelJob: (jobId: string) => request<Job>(`/api/jobs/${jobId}/cancel`, { method: "POST" }),
+  retryJob: (jobId: string) => request<Job>(`/api/jobs/${jobId}/retry`, { method: "POST" }),
+  listLoras: (projectId: string) => request<Lora[]>(`/api/projects/${projectId}/loras`),
   setActiveTake: (id: string, takeId: string) =>
     request<Project>(`/api/projects/${id}/active_take`, {
       method: "POST",

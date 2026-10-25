@@ -78,7 +78,7 @@ def test_prompt_only_instrumental_is_filled_by_the_worker(client: TestClient) ->
     # The mock's plan patch fills bpm and key and leaves a provided duration.
     assert plan["duration_sec"] == 10
     assert plan["bpm"] == 120
-    assert plan["keyscale"] == "C Major"
+    assert plan["keyscale"] == "C major"
 
 
 def test_caller_caption_is_kept_unless_rewrite_is_requested(client: TestClient) -> None:
@@ -185,12 +185,22 @@ def test_song_plan_is_written_before_the_worker_runs(api_client: TestClient) -> 
     assert empty["plan"]["query"] == "solo piano"
     assert empty["plan"]["duration_sec"] is None
 
+    conflict = api_client.post(
+        "/v1/songs",
+        json={"prompt": "solo piano", "instrumental": True, "lyrics": "[Verse]\nkeep me"},
+    )
+    # SPEC.md sec 16.3: Instrumental with real lyrics is a conflict the
+    # caller resolves; Lyre neither drops the words nor ignores the flag.
+    assert conflict.status_code == 400, conflict.text
+    assert conflict.json()["error"]["code"] == "instrumental_lyrics_conflict"
+    assert conflict.json()["error"]["param"] == "lyrics"
+
     custom = api_client.post(
         "/v1/songs",
         json={
             "prompt": "solo piano",
             "caption": "felt piano",
-            "instrumental": True,
+            "instrumental": False,
             "timesignature": "3/4",
             "vocal_language": " es ",
             "bpm": 72,
@@ -210,8 +220,10 @@ def test_song_plan_is_written_before_the_worker_runs(api_client: TestClient) -> 
     detail = api_client.get(f"/v1/projects/{body['project_id']}").json()
     assert detail["project"]["title"] == "Night"
     assert detail["project"]["dit_profile"] == "polish"
-    # Caller-supplied lyrics win over the instrumental placeholder.
     assert detail["plan"]["lyrics"] == "[Verse]\nkeep me"
+    assert detail["plan"]["creation_mode"] == "from_brief"
+    assert detail["plan"]["field_origins"]["bpm"] == "user"
+    assert detail["plan"]["field_origins"]["vocal_language"] == "user"
     assert detail["plan"]["caption"] == "felt piano"
     assert detail["plan"]["caption_rewrite"] is False
     assert detail["plan"]["timesignature"] == "3/4"
@@ -219,7 +231,7 @@ def test_song_plan_is_written_before_the_worker_runs(api_client: TestClient) -> 
     assert detail["plan"]["bpm"] == 72
     assert detail["plan"]["keyscale"] == "D Minor"
     assert detail["plan"]["duration_sec"] == 10
-    assert detail["plan"]["instrumental"] is True
+    assert detail["plan"]["instrumental"] is False
 
     placeholder = api_client.post(
         "/v1/songs",
@@ -289,9 +301,14 @@ def test_song_validation_uses_the_v1_error(api_client: TestClient) -> None:
 
     assert api_client.get("/v1/projects").json()["data"] == []
     # `/api` does not gain this route, and it keeps its own error shape.
+    # Without a built SPA the router answers 404 in `/api` shape. With
+    # web/dist present the static mount owns unmatched paths and answers a
+    # POST with 405. Either way no route handled it.
     unknown = api_client.post("/api/songs", json={"prompt": "rain"})
-    assert unknown.status_code == 404
-    assert "detail" in unknown.json()
+    assert unknown.status_code in (404, 405)
+    if unknown.status_code == 404:
+        assert "detail" in unknown.json()
+    assert not any(getattr(route, "path", None) == "/api/songs" for route in app.routes)
 
 
 def test_song_duration_rejects_non_finite() -> None:
@@ -517,3 +534,29 @@ def test_song_openapi_schema() -> None:
         assert body
     job = operation["responses"]["202"]["content"]["application/json"]["schema"]
     assert job
+
+
+def test_another_take_after_a_song_reuses_its_brief(client: TestClient) -> None:
+    """SPEC.md sec 16.3: a one-shot song plans from its prompt; the next
+    generate on that project renders the planned brief with a new seed and
+    does not plan again. Supplied lyrics stay verbatim throughout."""
+    song = client.post(
+        "/v1/songs", json={"prompt": "harbour lights", "lyrics": "[Verse]\nmine", "bpm": 88}
+    ).json()
+    first = wait_for_job(client, song["id"])
+    assert first["status"] == "done", first.get("error")
+    project_id = song["project_id"]
+
+    again = client.post(f"/v1/projects/{project_id}/jobs", json={"action": "generate"})
+    assert again.status_code == 202
+    second = wait_for_job(client, again.json()["id"])
+    takes = {
+        take["id"]: take for take in client.get(f"/v1/projects/{project_id}/takes").json()["data"]
+    }
+    one, two = takes[first["take_id"]], takes[second["take_id"]]
+    for take in (one, two):
+        assert take["lyrics"] == "[Verse]\nmine"
+        assert take["bpm"] == 88
+        assert take["provenance"]["brief"]["planner"] is None
+    assert one["provenance"]["brief"]["content_hash"] == two["provenance"]["brief"]["content_hash"]
+    assert one["seed"] != two["seed"]

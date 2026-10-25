@@ -223,3 +223,25 @@ def test_watchdog_does_not_expire_while_the_playback_copy_is_written(
     assert exited == []
     take_dir = storage.take_dir(project["id"], job["take_id"])
     assert (take_dir / "mix.wav").is_file()
+
+
+def test_staging_left_by_an_expired_job_is_cleaned_on_the_next_start(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The watchdog exits the process mid-render, so its staged take is left
+    behind. Once the job is terminal, the next worker's cleanup removes it,
+    and it was never listed as a take (SPEC.md sec 16.5)."""
+    job_id = _running_job(tmp_path, monkeypatch)
+    job = jobs_module.get_job(job_id)
+    project_id = job["project_id"]
+    take_id, staged = storage.allocate_staged_take(
+        project_id, {"job_id": job_id, "attempt_token": "lost-attempt"}
+    )
+    (staged / "mix.wav").write_bytes(b"partial")
+    monkeypatch.setattr(queue_module, "_exit_process", lambda: None)
+    queue_module._expire_job(job_id, 1.0)
+    assert jobs_module.get_job(job_id)["status"] == "error"
+
+    assert storage.list_takes(project_id) == []
+    assert jobs_module.cleanup_staging() == [take_id]
+    assert not staged.exists()

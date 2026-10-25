@@ -190,6 +190,11 @@ def test_tools_list_is_static_and_discovers_tasks(api_client: TestClient) -> Non
         "update_plan",
         "list_takes",
         "get_artifact",
+        # SPEC.md sec 16.6: the narrow completion flow.
+        "get_capabilities",
+        "generate_take",
+        "set_active_take",
+        "get_export",
     ]
     for tool in listed["tools"]:
         assert tool["inputSchema"]["type"] == "object"
@@ -928,3 +933,103 @@ def test_main_uses_stdio(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_content_length_ignores_junk() -> None:
     response = httpx2.Response(200, headers={"content-length": "nope"})
     assert mcp_client._content_length(response) is None
+
+
+def _tool(client: TestClient, name: str, arguments: dict[str, Any], **kwargs: Any) -> dict:
+    return _result(
+        _rpc(
+            client,
+            "tools/call",
+            {"name": name, "arguments": arguments, "_meta": _meta()},
+            name=name,
+            **kwargs,
+        )
+    )
+
+
+def test_an_agent_completes_the_narrow_flow(client: TestClient, fast_poll: None) -> None:
+    """SPEC.md sec 16.6: discover, create from an idea, another take, keep
+    one, and export it -- all through MCP, all backed by /v1."""
+    caps = _tool(client, "get_capabilities", {})["structuredContent"]
+    assert caps["lm"]["selectable"] is False
+    assert caps["presets"][0]["id"] == "lyric_song"
+
+    first = _tool(client, "create_song", {"prompt": "harbour lights", "wait_timeout_sec": 30})[
+        "structuredContent"
+    ]
+    assert first["status"] == "done", first
+    project_id = first["project_id"]
+
+    second = _tool(
+        client,
+        "generate_take",
+        {"project_id": project_id, "creation_mode": "from_brief", "wait_timeout_sec": 30},
+    )["structuredContent"]
+    assert second["status"] == "done", second
+    assert second["take_id"] != first["take_id"]
+
+    # The agent's another-take renders the same brief the studio would: an
+    # /api generate on the same plan resolves to the same content hash.
+    studio = client.post(f"/api/projects/{project_id}/jobs", json={"action": "generate"}).json()
+    from tests.helpers import wait_for_job
+
+    studio_take = wait_for_job(client, studio["id"])["take_id"]
+    takes = {t["id"]: t for t in client.get(f"/v1/projects/{project_id}/takes").json()["data"]}
+    assert (
+        takes[second["take_id"]]["provenance"]["brief"]["content_hash"]
+        == takes[studio_take]["provenance"]["brief"]["content_hash"]
+    )
+
+    kept = _tool(
+        client, "set_active_take", {"project_id": project_id, "take_id": second["take_id"]}
+    )["structuredContent"]
+    assert kept["active_take_id"] == second["take_id"]
+
+    exported = _tool(client, "get_export", {"project_id": project_id})["structuredContent"]
+    manifest = exported["manifest"]
+    assert manifest["take"]["id"] == second["take_id"]
+    mix = next(entry for entry in manifest["files"] if entry["role"] == "mix")
+    assert mix["sha256"] == takes[second["take_id"]]["provenance"]["files"]["mix.wav"]["sha256"]
+    assert exported["url"].startswith(f"/v1/projects/{project_id}/export")
+    archive = client.get(exported["url"])
+    assert archive.status_code == 200
+    assert archive.headers["content-type"] == "application/zip"
+
+
+def test_generate_take_rejects_a_bad_mode_without_enqueueing(
+    api_client: TestClient,
+) -> None:
+    project_id = api_client.post("/api/projects", json={"title": "Mode"}).json()["id"]
+    result = _tool(
+        api_client,
+        "generate_take",
+        {"project_id": project_id, "creation_mode": "whatever", "wait_timeout_sec": 0},
+    )
+    assert result["isError"] is True
+    assert api_client.get(f"/v1/jobs?project_id={project_id}").json()["data"] == []
+
+
+def test_read_only_keys_can_export_but_not_generate_or_keep(
+    api_client: TestClient, lyre_env: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from server.api_keys import create_key
+
+    project_id = api_client.post("/api/projects", json={"title": "Scopes"}).json()["id"]
+    monkeypatch.setenv("LYRE_REQUIRE_AUTH", "1")
+    _reader, read_secret = create_key("reader", ["read"])
+    export = _tool(api_client, "get_export", {"project_id": project_id}, token=read_secret)
+    assert export["structuredContent"]["manifest"]["take"] is None
+    denied = _tool(
+        api_client,
+        "generate_take",
+        {"project_id": project_id, "wait_timeout_sec": 0},
+        token=read_secret,
+    )
+    assert denied["isError"] is True
+    keep = _tool(
+        api_client,
+        "set_active_take",
+        {"project_id": project_id, "take_id": "x"},
+        token=read_secret,
+    )
+    assert keep["isError"] is True

@@ -61,6 +61,10 @@ EXPECTED_KEYWORDS: dict[str, tuple[Any, set[str]]] = {
         acestep_inference.create_sample,
         {"llm_handler", "query", "instrumental", "vocal_language"},
     ),
+    "format_sample": (
+        acestep_inference.format_sample,
+        {"llm_handler", "caption", "lyrics", "user_metadata"},
+    ),
     "generate_music": (
         acestep_inference.generate_music,
         {"dit_handler", "llm_handler", "params", "config", "save_dir"},
@@ -82,6 +86,10 @@ EXPECTED_FIELDS: dict[str, tuple[Any, set[str]]] = {
             "timesignature",
             "thinking",
             "use_cot_metas",
+            # SPEC.md sec 16.3: sent explicitly, since upstream defaults
+            # both to True and then rewrites caption and language.
+            "use_cot_caption",
+            "use_cot_language",
             "seed",
             "inference_steps",
             "guidance_scale",
@@ -135,3 +143,25 @@ def test_fields_the_adapter_avoids_are_still_absent() -> None:
             f"upstream now defines {present} on GenerationParams; the adapter may start "
             "sending them (see its module docstring)"
         )
+
+
+def test_upstream_still_defaults_the_cot_rewrites_on() -> None:
+    """Why the adapter must send `use_cot_caption`/`use_cot_language`
+    itself. If upstream ever flips these defaults the explicit flags are
+    still correct, but this note should be revisited."""
+    fields = {f.name: f for f in dataclasses.fields(acestep_inference.GenerationParams)}
+    assert fields["use_cot_caption"].default is True
+    assert fields["use_cot_language"].default is True
+
+
+def test_per_audio_params_carry_the_cot_fill_fields() -> None:
+    """`server.generation.brief.actual_values` reads the CoT fill from
+    `audio["params"]["cot_*"]`, which is `GenerationParams.to_dict()`."""
+    names = _field_names(acestep_inference.GenerationParams)
+    assert {
+        "cot_bpm",
+        "cot_keyscale",
+        "cot_timesignature",
+        "cot_duration",
+        "cot_vocal_language",
+    } <= names

@@ -28,7 +28,7 @@ from server.mcp import service
 from server.mcp.results import create_task_result, tasks_get_result
 
 TASKS = "io.modelcontextprotocol/tasks"
-_GENERATION = frozenset({"create_song", "transform_take"})
+_GENERATION = frozenset({"create_song", "transform_take", "generate_take"})
 
 
 class TaskParams(RequestParams):

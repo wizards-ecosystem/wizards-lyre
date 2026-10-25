@@ -18,6 +18,9 @@ on:
     paths:
       - "worker/remote_host/**"
       - "worker/acestep_worker/**"
+      - "worker/playback.py"
+      - "server/generation/**"
+      - ".dockerignore"
       - "docker/remote-gpu/**"
       - "ACE_STEP_REVISION"
       - "requirements/ace-step-security.txt"
@@ -107,8 +110,9 @@ jobs:
           docker logs host
           echo "$health"
           test "$(echo "$health" | python3 -c 'import json,sys; print(json.load(sys.stdin)["build"])')" = "$BUILD"
+          test "$(echo "$health" | python3 -c 'import json,sys; print(json.load(sys.stdin)["ready"])')" = True
           test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/health)" = 401
-          docker run --rm --entrypoint python "$IMAGE:$BUILD" -c "import acestep, torch"
+          docker run --rm --entrypoint python "$IMAGE:$BUILD" -c "import acestep, torch, worker.acestep_worker"
           docker rm -f host
 
       - name: Push

@@ -22,6 +22,9 @@ _ROOT = _WORKER_DIR.parent
 # protocol code and the ACE-Step adapter it wraps both count; the local-only
 # modules (run_worker, mock_worker, remote_backend) do not.
 _BUILD_SOURCES = ("remote_host", "acestep_worker")
+# The creation resolver decides what a remote take renders too (SPEC.md sec
+# 16.3); it lives under server/ and the image copies it to the same path.
+_ROOT_BUILD_SOURCES = ("server/generation",)
 # And everything else that decides what the image contains. Published tags are
 # immutable, so an image whose dependencies changed must get a new id. The
 # image keeps copies of these at the same paths so it reports the same id.
@@ -29,6 +32,7 @@ _BUILD_FILES = (
     "ACE_STEP_REVISION",
     "requirements/ace-step-security.txt",
     "docker/remote-gpu/Dockerfile",
+    "worker/playback.py",
 )
 
 
@@ -43,6 +47,10 @@ def build_id() -> str:
     digest = hashlib.sha256()
     for package in _BUILD_SOURCES:
         for path in sorted((_WORKER_DIR / package).glob("*.py")):
+            digest.update(f"{package}/{path.name}".encode())
+            digest.update(path.read_bytes())
+    for package in _ROOT_BUILD_SOURCES:
+        for path in sorted((_ROOT / package).glob("*.py")):
             digest.update(f"{package}/{path.name}".encode())
             digest.update(path.read_bytes())
     for relative in _BUILD_FILES:

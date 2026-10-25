@@ -1,6 +1,6 @@
 # The Wizard's Lyre: spec
 
-This file is the sole product spec. Implement it in phase order. Do not invent extra engines or unofficial music APIs. Do not replace the studio workspace with a one-field generate page. The agent API in section 15 is in scope; it writes the same projects the studio edits.
+This file is the sole product spec. Implement it in phase order; the bounded completion in section 16 is the current work and the stopping rule. Do not invent extra engines or unofficial music APIs. Do not replace the studio workspace with a one-field generate page. The agent API in section 15 is in scope; it writes the same projects the studio edits.
 
 **Target hardware:** a 16 GB-class NVIDIA GPU (developed against an RTX 4070 Ti SUPER) on Linux/WSL2 or Windows.
 **User:** one local operator. The studio is the human interface. Section 15 lets that operator's own agents generate and iterate. No accounts, and no hosted deployment of Lyre itself (an opt-in Remote GPU for rendering is section 3.1).
@@ -214,6 +214,7 @@ Local composition plan shared by human and 5Hz LM. Not a third-party API client.
 
 - **Simple mode:** user types `query`. Worker sets `thinking=true`. LM fills caption, lyrics, metas. Persist the filled plan.
 - **Custom mode:** user edits caption, lyrics, metas. `thinking` may still rewrite caption unless the user disables caption rewrite.
+- Section 16.3 replaces the implicit Simple/Custom test with `creation_mode` (`from_idea` / `from_brief`), per-field origins, and a revision counter, all additive.
 - `POST /v1/songs` (section 15.4) uses these same two modes. When the caller sends caption or lyrics, `caption_rewrite` defaults to false.
 - Null / omitted BPM, key, duration: let ACE-Step CoT fill them (`use_cot_metas`).
 
@@ -244,6 +245,8 @@ Local composition plan shared by human and 5Hz LM. Not a third-party API client.
 Every take is immutable. Cover / repaint / extract create a **new** take with `parent_take_id` set. Never overwrite mix.wav in place.
 
 Seeds: store the actual seed used (`-1` from the user means worker picks and records it).
+
+Section 16.4 adds `job_id` and a versioned `provenance` object (requested and actual values, model and audio details). Takes without it are legacy and stay readable.
 
 ---
 
@@ -284,7 +287,8 @@ This section is what the server serves today (`docs/API.md` is checked against t
 }
 ```
 
-- `generate` uses current `plan.json`. Simple vs custom is whether `query` is set and caption/lyrics are empty.
+- `generate` renders a snapshot of `plan.json` taken at enqueue. Its creation mode is the plan's `creation_mode`, or a `creation_mode` on the job body (section 16.3). The old Simple-vs-Custom test (`query` set, caption and lyrics empty) only derives the mode of a plan written before section 16.
+- Optional `submission_id` identifies one submission per project (section 16.4).
 - `cover` / `repaint` / `extract` / `lego` / `complete` require `source_take_id` or a server-side uploaded file under `projects/<id>/`.
 - Reject `extract|lego|complete` unless `dit_profile` is `studio_ops` (server may coerce and warn).
 - Reject `quality` if worker reports it cannot load XL with offload.
@@ -740,3 +744,110 @@ Section 10 and section 3.1 stay in force. The agent API adds columns, not a seco
 ### 15.9 Tests
 
 Default `pytest` stays GPU-free and network-free, and it still must not import `acestep` or `torch` at module scope. Phases 9 and 13 are the ones that need a real GPU, and only through `./scripts/lyre live-check`. The phase 11 bind test configures the app in-process; it does not open a public socket.
+
+---
+
+## 16. Bounded completion (amended 2026-10-25)
+
+This section adopts the accepted completion scope. It finishes Lyre as a dependable local generator: describe a song or instrumental, optionally supply or edit lyrics, generate with ACE-Step, listen, keep a take, and export it. Sections 1–15 stay in force; where this section is more specific, it wins. Sections 2, 3, 3.1, 4.2, 4.3, 10, and 15.2 (engines, local-first, Remote GPU rental rules, one GPU occupant, loopback/no-auth default) are unchanged, and `tests/test_spec_lock.py` keeps enforcing them.
+
+### 16.1 Scope, priorities, and non-goals
+
+- **P0:** prompt precedence (16.3), submission snapshots and durable job identity (16.4), honest cancellation and recovery (16.5), save continuity, and result integrity (one committed take per logical job).
+- **P1:** truthful readiness, audition and keep, export provenance, a small curated preset set, narrow MCP parity, measured optimization, clean implementation of the touched code.
+- **P2 (never delays a release whose P0/P1 gates pass):** standalone brief preview, up to three serial alternate takes per request, minor conveniences built on the P0/P1 foundations.
+- **Excluded:** new model families, a second or API lyric LLM, conversational editing, new revision or extension workflows, a DAW, MIDI or plugin hosting, a mastering suite, training expansion, adaptive game layers, a preset marketplace, multi-user hosting, and a new native Windows port. Ordinary game instrumentals are supported; seamless loops are not promised.
+- **Retained secondary features** (accessible and regression-tested, not driving new work): cover, repaint, extract, lego, complete, local style packs (LoRA train/apply), the Remote GPU lane, annotations, favorites, search, uploads, `/v1`, and the nine MCP tools.
+
+**Existing commitments.** Phase 10 (SSE, webhooks, signed artifact tokens) and phase 13 (the SPA moves to `/v1`; `/api` deprecation headers) are not part of the bounded release. They stay specified and unscheduled; reopening them is a separate scope decision. The browser keeps `/api`, MCP keeps `/v1`, and both call the same domain services. `/api` takes the additive fields below as compatible extras (section 15.3 already allows extra fields).
+
+**Evidence limits.** Mocked tests prove routing and state, not that a model rendered audible music. Claims of quality or speed require the recorded live evidence in 16.8; none are made here.
+
+**Supported baseline.** Linux or WSL2 with a 16 GB-class NVIDIA GPU. Windows keeps its existing compatible behavior and is marked unverified unless a live report exists.
+
+### 16.2 Profiles, as presented
+
+| API id | Actual baseline | Presentation |
+|---|---|---|
+| `iterate` | turbo, 8 steps, guidance 1.0 | default fast iteration profile |
+| `polish` | sft, 50 steps, guidance 7.5 | slower alternative; not promised to be better |
+| `quality` | XL turbo, 8 steps, guidance 1.0, CPU offload | optional larger checkpoint; resource cost shown |
+| `studio_ops` | base, 50 steps, guidance 7.5 | secondary operations and style packs only |
+
+`project.lm_model` is descriptive: the worker always loads `acestep-5Hz-lm-1.7B`, and no UI presents it as a working selector. `plan.negative` is stored and not forwarded. Cue-map `sections` are annotations, not enforced arrangement timing. The lyric alignment score is not a quality score and the peak meter is not LUFS.
+
+### 16.3 Creation contract (`lyre.creation/1`)
+
+A `generate` job has an explicit creation mode instead of the implicit Simple/Custom test of section 8.1:
+
+- `from_idea` resolves the current idea (`query`) with the 5 Hz LM planner, then renders.
+- `from_brief` renders the stored brief (caption, lyrics, metas) without planning.
+
+**plan.json additions (additive; old files keep loading).**
+
+| Field | Meaning | Missing on an old plan |
+|---|---|---|
+| `creation_mode` | `from_idea` or `from_brief` | derived by the old rule: `from_idea` iff `query` is set and caption and lyrics are empty |
+| `field_origins` | per field (`caption`, `lyrics`, `vocal_language`, `bpm`, `keyscale`, `timesignature`, `duration_sec`): `user`, `planner`, `preset`, `default`, or `unknown` | every field `unknown` |
+| `revision` | integer bumped by every write | `0` |
+| `brief` | `null`, or which idea and job produced the planner-filled fields | `null` |
+
+`duration_sec` may now be `null` (the model chooses), matching section 7.2's CoT rule.
+
+**Origins on write.** A `PUT /plan` may send `field_origins`; otherwise the server derives them: a tracked field whose value changed is `user`, an unchanged field keeps its origin, and a cleared field (`null`, or an empty string) becomes `default`. A changed `query` sets `creation_mode` to `from_idea` unless the same write sets it. An optional `expected_revision` makes the write conditional: a mismatch is `409` and nothing is written. Without it, `PUT` keeps its replace semantics (MCP `update_plan` is unchanged).
+
+**Precedence (the product contract).**
+
+1. Explicit user fields (`user` origin) win over preset defaults, planner suggestions, and application defaults.
+2. User-supplied lyrics are preserved verbatim. Section-tag checks report warnings and never rewrite sung words. The only transport normalization is CRLF to LF, and the brief keeps the original when that changed it.
+3. Song/Instrumental and explicit language, duration, BPM, key, and meter survive planning. Unsupported values fail at enqueue (`400`, naming the field) before any GPU work: BPM is an integer 30–300; duration is 10–600 seconds; key is a note `A`–`G`, an optional `#`/`b`/`♯`/`♭`, and `major` or `minor`; meter is `2`, `3`, `4`, `6`, `2/4`, `3/4`, `4/4`, or `6/8`; language is one of upstream's language codes or `unknown`. Instrumental with non-placeholder lyrics is a conflict (`instrumental_lyrics_conflict`); the lyrics are kept and the user resolves it.
+4. Unspecified fields may be filled by the planner (origin `planner`) or, during rendering, by ACE-Step's CoT (recorded as `model` in the take). Application defaults are origin `default`, never an explicit lock.
+5. Caption rewriting is opt-in for user-authored captions (`caption_rewrite`, off on new plans; this supersedes section 7.2's earlier default of on). The adapter passes `use_cot_caption` and `use_cot_language` explicitly (upstream defaults both to true, which previously rewrote the caption and language even with rewrite off). The effective caption is recorded on the take.
+
+`unknown` origins (old plans) keep the old behavior for their mode: planning may fill them in `from_idea`, and they render as stored in `from_brief`. No lock is invented for old data; editing a field marks it `user`.
+
+**Planner.** `from_idea` without user lyrics or caption calls upstream `create_sample(query, instrumental, vocal_language)`. With user lyrics or a user caption it calls `format_sample(caption or query, lyrics, user_metadata=<explicit metas>)`. Either way the explicit fields are then reapplied over the result, so a planner value never replaces an explicit one. Upstream exposes no planner seed; the brief records `deterministic: false` instead of inventing one.
+
+**After a planned render.** The planner-filled fields merge into the editable draft only if `plan.revision` still equals the revision frozen at submission. The merge sets those fields' origin to `planner`, sets `creation_mode` to `from_brief`, and records `brief`. If the draft changed meanwhile, the merge is skipped and the newer text wins; the take still carries its own brief. Generating again without edits reuses that brief with a new seed ("another take"). Re-planning is an explicit action (set `creation_mode: from_idea`, or send it on the job body).
+
+### 16.4 Frozen requests and provenance
+
+- **Submission snapshot** (`payload.creation`, `lyre.creation/1`, and `payload.submission`, `lyre.submission/1`) is written to the queue row before the enqueue call returns. It holds the full effective input (plan fields, origins, mode, plan revision), the seed policy and requested seed, the profile with its checkpoint, steps, and guidance, the app version, the pinned ACE-Step revision, and the optional `submission_id`. Later edits cannot change it; the worker never reads the live plan for a snapshotted job.
+- **Resolved record** (`jobs.resolved_json`, `lyre.resolved/1`) is written, fenced by the attempt token, before the first DiT call: the resolved brief, the concrete synthesis seed (a `-1` request is drawn here), and the model configuration. An automatic retry reuses it and never replans, reseeds, or re-reads defaults. A crash before it was written may replan from the frozen intent; no identical-plan promise applies.
+- **Take provenance** (`meta.json` `provenance`, `lyre.take-provenance/1`, plus top-level `job_id`): requested and actual values (actual seed, effective caption and lyrics, metas with their origins, steps, guidance, LM flags), checkpoint and LM names, ACE-Step revision, backend and device when known, job and attempt identity, submission/start/commit timestamps, and audio details (format, sample rate, channels, frames, duration, bytes, sha256) for every file. Takes written before this have no `provenance` and are presented as `provenance_complete: false`; nothing is backfilled from the current plan.
+- **Replay vs reuse.** "Use settings" copies a take's effective brief into the editor as a visibly marked draft and never renders. "Another take" keeps the brief and draws a new seed. "Replay settings" restores the recorded seed and settings where the take has them. A fixed seed is not a promise of byte-identical audio across drivers, hardware, checkpoint revisions, or kernels; the audio file is authoritative. Tested boundary (2026-10-25, RTX 4070 Ti SUPER, pinned ACE-Step): with LM audio codes off (a hand-written brief, caption rewrite off), the same brief and seed re-render byte-identically; with LM codes on (a planned brief, or caption rewrite on), the same brief and seed render different audio, and re-planning the same idea gives a different caption. "Replay settings" says so for such takes.
+- **Idempotency.** `/v1` keeps its raw-body `Idempotency-Key` contract (section 15.3) unchanged. `submission_id` on a job body is a second, per-project identity: the same id and the same body return the existing job; the same id with a different body is `409`.
+
+### 16.5 Durable jobs, commits, and recovery
+
+- Status vocabulary is unchanged (`queued`, `running`, `done`, `error`, `cancelled`), plus `cancel_requested` and these stages: `loading_model`, `planning`, `rendering`, `writing_take`, and, on a queued row only, `needs_confirmation`.
+- **Commit.** The worker renders into `projects/.staging/<project>/<take>/` outside any project lock. It commits by taking the project lock and one `BEGIN IMMEDIATE` transaction that checks the attempt token, `cancel_requested`, the deletion tombstone, and the absence of an earlier committed take for the same job, then renames the staged directory into `takes/` and marks the job `done`. A stale token, a cancelled job, or a deleted project discards the staged files. A retry that finds a committed take for its job finishes `done` with that take and renders nothing. Exactly-once GPU execution is not claimed; at most one committed take per job is.
+- **Active take.** Completing a job never replaces an existing active take. The first playable take of a project becomes active when none is set.
+- **Locks.** The project lock covers the snapshot and the commit, not the render, so plan edits never wait for inference. Style-pack training keeps its whole-job lock.
+- **Recovery.** Stale-heartbeat reclaim (60 seconds, at most 3 attempts) and the watchdog keep their semantics. A reclaimed job's token is cleared, so a late commit from the lost attempt is rejected. A job whose remote render handle was recorded is not resubmitted automatically: it ends `error` with a possible-duplicate-compute note, and the user may retry it explicitly. `POST /api/jobs/{id}/retry` and `POST /v1/jobs/{id}/retry` create a new job linked by `retry_of`, reusing the frozen request (and the resolved brief and seed when they exist). Failed jobs are never deleted to tidy the UI.
+- **Old queued jobs.** A generate-shaped job queued before this amendment (no snapshot) is not run against the current plan. It is held as `queued` with stage `needs_confirmation`; the user cancels it or retries it, and the retry snapshots the current brief as a new submission. It is never labelled as the original request.
+- **Errors** carry an actionable message and the job id and stage. Disk-full, out-of-memory, missing models, a lost worker, and a lost remote host each have their own message. There are no blind retry loops for invalid input or memory exhaustion.
+
+### 16.6 Studio and agent surfaces
+
+- **Generate is primary.** The plan pane shows the idea, Song or Instrumental, optional lyrics, the locked and inferred musical fields, the profile, readiness, and Generate. Existing secondary tools stay behind clear disclosure; the library, take rail, and waveform stay.
+- **Browser jobs.** The browser creates a `submission_id` before sending and reuses it when retrying a lost response. On load, reload, and project switch it lists and attaches to every in-flight job of the open project, not only training. All terminal states are handled. Observing a job past the client's patience is not a failure: the job stays listed and keeps being observed.
+- **Saves** show Saving, Saved, and Save failed. The latest unsent draft is kept locally with its project id and base revision, and is offered back on reload only when it does not overwrite a newer server revision silently.
+- **Playback.** One playback owner: starting another source pauses the previous one. Selected for listening, the source for a secondary operation, and the active kept take are distinct. A/B keeps two named takes and carries the playhead across a swap (clamped to the shorter length). Downloads use the stored full-resolution file with its real extension.
+- **Export.** The ZIP is a delivery bundle, not a backup. It adds a versioned `manifest.json` (`lyre.export-manifest/1`) naming the project, the selected take, its provenance completeness, and every member's role, size, and sha256, and listing unavailable optional files (LRC, stems). `project.json` and `plan.json` stay, labelled as the current mutable plan, which may differ from the take's frozen brief. A missing required mix is an error, not a silent omission.
+- **Presets.** A small versioned registry (`server/generation/presets.py`): lyric song, intimate acoustic song, energetic electronic song, exploration ambience, combat cue, menu theme. Applying one fills only fields that are not `user` origin, never touches lyrics, models, media, or compute, and its id and version are recorded on the take.
+- **Readiness** distinguishes installed, model files present, worker stopped, loading, ready, busy, and unavailable, with an actionable reason. A file name on disk is not reported as a validated model.
+- **MCP parity.** The nine section 15.6 tools keep their contracts. Four join them, each a thin client of a `/v1` route: `get_capabilities` (sync, `GET /v1/capabilities`: profiles with readiness, presets, limits), `generate_take` (task, `POST /v1/projects/{id}/jobs` with `action: generate` and an optional `creation_mode`: another take, a re-plan from the idea, or a render of the stored brief), `set_active_take` (sync, `POST /v1/projects/{id}/active_take`), and `get_export` (sync: the export manifest and its URL, never the bytes). `update_plan` keeps its replace semantics. No tool rents hardware or starts a Remote GPU session.
+
+### 16.7 Migration
+
+All schema changes are additive columns and JSON fields. Old projects, takes, and annotations stay readable. `docs/COMPLETION_MIGRATION.md` documents a consistent backup (quiesce the server and worker, SQLite online backup, then copy the matching `projects/` set) and the restore of that set. Reverting the code alone is not a database rollback. Downgrading to a build before this amendment is unsupported: it would run held `needs_confirmation` jobs against the live plan. That is documented, not hidden.
+
+### 16.8 Release gates and stopping rule
+
+1. **Automated:** the documented lint, type, test, and build commands pass on the release commit, with the suite still GPU- and network-free.
+2. **Real browser:** a fresh project with empty defaults, prompt to audio, supplied lyrics, instrumental, reload during generation, cross-project navigation, keyboard transport, A/B, keep selection, and downloaded-file checks. Browser versions are recorded.
+3. **Live hardware** (the 16 GB baseline, real weights, `./scripts/lyre live-check`): default generation, custom locked settings, available profiles, model swaps, a cancelled job, a restarted worker, full-resolution download, and export. Each output is checked for decodability, sample rate and channels, finite non-silent samples, duration within the published tolerance, and manifest consistency.
+4. **Listening:** six briefs (acoustic lyric song, rhythmic lyric song, supplied-lyrics song, exploration ambience, combat instrumental, menu theme), two recorded seeds each. A human rates prompt/style fit, coherence, clipping or glitches, vocal intelligibility and lyric adherence, absence of unwanted vocals, and usable starts and endings. The threshold is that at least one take per brief is usable and no kept take has a catastrophic artifact. This is a release sample, not a quality guarantee.
+
+A blocked live or listening gate means completion is not established. When every mandatory gate has recorded evidence, the bounded release is complete and feature development stops; later work is regressions, security, installation breakage, and pinned-upstream compatibility. New capabilities need a separate scope decision. The packet checklist is `docs/COMPLETION_CHECKLIST.md`.

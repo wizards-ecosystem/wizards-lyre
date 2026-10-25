@@ -7,6 +7,7 @@ surface, auth, and job lifecycle without ACE-Step, torch, or a network.
 from __future__ import annotations
 
 import base64
+import fnmatch
 import re
 import time
 from collections.abc import Iterator
@@ -202,3 +203,43 @@ def test_build_id_changes_with_what_goes_into_the_image(
     before = build_id()
     (tmp_path / relative).write_text("changed\n")
     assert build_id() != before
+
+
+def _docker_context_includes(relative: str, rules: list[str]) -> bool:
+    # .dockerignore semantics for this repository's rules: last match wins,
+    # `!` re-includes, `*` does not cross `/` except as the whole pattern.
+    included = True
+    for rule in rules:
+        negate = rule.startswith("!")
+        pattern = rule[1:] if negate else rule
+        if pattern == "*" or fnmatch.fnmatchcase(relative, pattern):
+            if "/" in pattern and pattern.count("/") != relative.count("/"):
+                continue
+            included = negate
+    return included
+
+
+def test_every_file_the_host_image_copies_is_in_the_build_context() -> None:
+    # A COPY source excluded by .dockerignore fails the image build in CI
+    # (and only there): check each copied file against the ignore rules.
+    root = Path(__file__).resolve().parent.parent
+    rules = [
+        line.strip()
+        for line in (root / ".dockerignore").read_text().splitlines()
+        if line.strip() and not line.startswith("#")
+    ]
+    dockerfile = (root / "docker" / "remote-gpu" / "Dockerfile").read_text()
+    sources: list[str] = []
+    for line in dockerfile.splitlines():
+        words = line.split()
+        if not words or words[0] != "COPY" or any(w.startswith("--from") for w in words):
+            continue
+        sources.extend(words[1:-1])
+    assert sources
+    for source in sources:
+        path = root / source
+        files = sorted(p for p in path.rglob("*.py")) if path.is_dir() else [path]
+        assert files, source
+        for file in files:
+            relative = file.relative_to(root).as_posix()
+            assert _docker_context_includes(relative, rules), relative

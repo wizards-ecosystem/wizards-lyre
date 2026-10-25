@@ -24,6 +24,15 @@ as `/v1`. See [Configuration](CONFIGURATION.md).
 | `update_plan` | Replaces `plan.json`. |
 | `list_takes` | Takes for one project. |
 | `get_artifact` | URL and metadata for `mix.wav`, `mix.mp3`, and `lyrics.lrc`. Does not download the audio. |
+| `get_capabilities` | `GET /v1/capabilities`: worker readiness, profiles (files present, validated by a render, loaded, supported), the fixed LM, presets, request limits. |
+| `generate_take` | Another take in an existing project (`POST /v1/projects/{id}/jobs`, `action: generate`). `creation_mode: from_brief` renders the stored brief with a new seed; `from_idea` re-plans from the idea; omitted follows the plan. Sends `Idempotency-Key`. |
+| `set_active_take` | Keeps a take (`POST /v1/projects/{id}/active_take`). A failed take is refused. |
+| `get_export` | The export manifest (`lyre.export-manifest/1`) and the ZIP's URL, for the active take or a named `take_id`. Does not download the archive. |
+
+A typical agent flow is `get_capabilities`, `create_song`, `generate_take`
+for more takes, `set_active_take` for the one to keep, then `get_export`.
+`update_plan` replaces the whole plan; read it with `get_project` first and
+send it back with your changes.
 
 `delete_project`, `train_lora`, file upload, and Remote GPU session start are
 not tools. Those stay on the HTTP API or on the loopback studio.
@@ -38,7 +47,7 @@ Audio bytes stay at the artifact URL. A finished generation also includes a
 
 ## Tasks and waiting
 
-`create_song` and `transform_take` take minutes.
+`create_song`, `generate_take`, and `transform_take` take minutes.
 
 - If the client advertises `io.modelcontextprotocol/tasks`, omit
   `wait_timeout_sec`. The tool returns a task whose `taskId` is the Lyre job

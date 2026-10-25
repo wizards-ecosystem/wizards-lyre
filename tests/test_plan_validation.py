@@ -55,14 +55,30 @@ def test_valid_plan_roundtrip(api_client: TestClient) -> None:
 
     resp = api_client.put(f"/api/projects/{project_id}/plan", json=plan)
     assert resp.status_code == 200
-    assert resp.json() == plan
+    saved = resp.json()
+    assert {key: saved[key] for key in plan} == plan
 
     # What landed on disk matches, and GET returns the same plan.
     on_disk = json.loads(storage.plan_json_path(project_id).read_text(encoding="utf-8"))
-    assert on_disk == plan
+    assert on_disk == saved
     resp = api_client.get(f"/api/projects/{project_id}")
     assert resp.status_code == 200
-    assert resp.json()["plan"] == plan
+    assert resp.json()["plan"] == saved
+
+    # SPEC.md sec 16.3: the server adds the creation contract. Every tracked
+    # field this write changed from the new-project defaults is a user value.
+    assert saved["revision"] == 1
+    assert saved["brief"] is None
+    assert saved["creation_mode"] == "from_idea"
+    assert saved["field_origins"] == {
+        "caption": "user",
+        "lyrics": "user",
+        "vocal_language": "default",
+        "bpm": "user",
+        "keyscale": "user",
+        "timesignature": "default",
+        "duration_sec": "user",
+    }
 
 
 def test_missing_keys_filled_from_defaults(api_client: TestClient) -> None:
@@ -79,11 +95,13 @@ def test_missing_keys_filled_from_defaults(api_client: TestClient) -> None:
     expected = storage.default_plan()
     expected["query"] = "lofi beat"
     expected["bpm"] = 84
+    expected["revision"] = 1
+    expected["field_origins"]["bpm"] = "user"
     assert body == expected
 
-    # Specifically: a body omitting caption_rewrite normalizes to the
-    # default_plan() value (True for new plans), not the legacy False.
-    assert body["caption_rewrite"] is True
+    # A body omitting caption_rewrite normalizes to the default_plan() value:
+    # off, since SPEC.md sec 16.3 makes rewriting a user caption opt-in.
+    assert body["caption_rewrite"] is False
     assert body["sections"] == []
     assert body["vocal_language"] == "en"
 
@@ -140,7 +158,11 @@ _INVALID_PLANS: list[tuple[str, Any, str]] = [
     ("keyscale", 5, "keyscale"),
     ("keyscale", ["C Major"], "keyscale"),
     ("duration_sec", "120", "duration_sec"),
-    ("duration_sec", None, "duration_sec"),
+    ("creation_mode", "simple", "creation_mode"),
+    ("field_origins", "user", "field_origins"),
+    ("field_origins", {"bpm": "guessed"}, "field_origins.bpm"),
+    ("revision", -1, "revision"),
+    ("revision", "3", "revision"),
     ("duration_sec", True, "duration_sec"),
     ("sections", "intro", "sections"),
     ("sections", {"name": "intro"}, "sections"),
@@ -180,7 +202,9 @@ def test_invalid_plan_leaves_stored_plan_untouched(api_client: TestClient) -> No
     resp = api_client.put(f"/api/projects/{project_id}/plan", json=bad)
     assert resp.status_code == 400
 
-    assert api_client.get(f"/api/projects/{project_id}").json()["plan"] == original
+    saved = api_client.get(f"/api/projects/{project_id}").json()["plan"]
+    assert {key: saved[key] for key in original} == original
+    assert saved["revision"] == 1
 
 
 def test_non_finite_numbers_rejected() -> None:
@@ -253,6 +277,7 @@ def test_simple_mode_merge_plan_patch_after_validated_save(api_client: TestClien
     project_id = _create_project(api_client)
     simple_plan = storage.default_plan()
     simple_plan["query"] = "dreamy synthwave drive"
+    simple_plan["caption_rewrite"] = True
     assert api_client.put(f"/api/projects/{project_id}/plan", json=simple_plan).status_code == 200
 
     # Same shape as worker.acestep_worker's simple-mode plan_patch.
@@ -275,3 +300,97 @@ def test_simple_mode_merge_plan_patch_after_validated_save(api_client: TestClien
     # The merge result is what GET now serves, and it is still a valid plan.
     assert api_client.get(f"/api/projects/{project_id}").json()["plan"] == merged
     assert storage.validate_plan(merged) == merged
+
+
+def test_null_duration_is_accepted_for_the_model_to_choose(api_client: TestClient) -> None:
+    """SPEC.md sec 7.2/16.3: a null duration leaves the length to the planner
+    or ACE-Step's CoT, and clearing it marks the field `default`."""
+    project_id = _create_project(api_client)
+    resp = api_client.put(
+        f"/api/projects/{project_id}/plan", json={**_valid_plan(), "duration_sec": None}
+    )
+    assert resp.status_code == 200
+    assert resp.json()["duration_sec"] is None
+    assert resp.json()["field_origins"]["duration_sec"] == "default"
+
+
+def test_client_cannot_write_the_server_managed_brief(api_client: TestClient) -> None:
+    project_id = _create_project(api_client)
+    resp = api_client.put(
+        f"/api/projects/{project_id}/plan",
+        json={**_valid_plan(), "brief": {"source_query": "forged", "job_id": "x"}},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["brief"] is None
+
+
+def test_planner_merge_is_skipped_when_the_draft_moved_on(api_client: TestClient) -> None:
+    """SPEC.md sec 16.3: a planned brief merges into the draft only if the
+    draft is still at the revision the job was submitted from. A newer edit
+    wins, and nothing is written."""
+    project_id = _create_project(api_client)
+    first = api_client.put(f"/api/projects/{project_id}/plan", json={"query": "first idea"}).json()
+    api_client.put(f"/api/projects/{project_id}/plan", json={**first, "query": "second idea"})
+
+    skipped = storage.merge_plan_patch(
+        project_id, {"caption": "auto: first idea"}, expected_revision=first["revision"]
+    )
+    assert skipped is None
+    plan = api_client.get(f"/api/projects/{project_id}").json()["plan"]
+    assert plan["query"] == "second idea"
+    assert plan["caption"] == ""
+    assert plan["revision"] == first["revision"] + 1
+
+
+def test_expected_revision_makes_a_plan_write_conditional(api_client: TestClient) -> None:
+    project_id = _create_project(api_client)
+    saved = api_client.put(f"/api/projects/{project_id}/plan", json={"query": "a"}).json()
+    stale = api_client.put(
+        f"/api/projects/{project_id}/plan",
+        json={**saved, "query": "b", "expected_revision": saved["revision"] - 1},
+    )
+    assert stale.status_code == 409
+    assert api_client.get(f"/api/projects/{project_id}").json()["plan"]["query"] == "a"
+
+    fresh = api_client.put(
+        f"/api/projects/{project_id}/plan",
+        json={**saved, "query": "b", "expected_revision": saved["revision"]},
+    )
+    assert fresh.status_code == 200
+    assert fresh.json()["revision"] == saved["revision"] + 1
+    assert "expected_revision" not in fresh.json()
+
+    v1_stale = api_client.put(
+        f"/v1/projects/{project_id}/plan", json={"query": "c", "expected_revision": 0}
+    )
+    assert v1_stale.status_code == 409
+    assert v1_stale.json()["error"]["code"] == "conflict"
+
+
+def test_changing_the_idea_switches_back_to_resolving_it(api_client: TestClient) -> None:
+    """A planned brief sets `from_brief`; editing the idea afterwards makes
+    the next Generate resolve the changed idea (SPEC.md sec 16.3)."""
+    project_id = _create_project(api_client)
+    plan = api_client.put(f"/api/projects/{project_id}/plan", json={"query": "rain"}).json()
+    storage.merge_plan_patch(
+        project_id,
+        {
+            "caption": "auto: rain",
+            "creation_mode": "from_brief",
+            "field_origins": {"caption": "planner"},
+        },
+    )
+    planned = api_client.get(f"/api/projects/{project_id}").json()["plan"]
+    assert planned["creation_mode"] == "from_brief"
+    assert planned["field_origins"]["caption"] == "planner"
+
+    # Echoing the plan back unchanged keeps the brief.
+    echoed = api_client.put(f"/api/projects/{project_id}/plan", json=planned).json()
+    assert echoed["creation_mode"] == "from_brief"
+    assert echoed["field_origins"]["caption"] == "planner"
+
+    edited = api_client.put(
+        f"/api/projects/{project_id}/plan", json={**echoed, "query": "snow"}
+    ).json()
+    assert edited["creation_mode"] == "from_idea"
+    assert plan["revision"] < edited["revision"]

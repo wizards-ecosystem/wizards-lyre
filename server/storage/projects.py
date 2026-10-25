@@ -13,8 +13,9 @@ import time
 from collections.abc import Callable
 
 from server import config
+from server.generation import brief as creation
 from server.storage import jsonio
-from server.storage.errors import ProjectNotFound
+from server.storage.errors import PlanRevisionConflict, ProjectNotFound
 from server.storage.locks import _project_lock
 from server.storage.paths import (
     _now,
@@ -47,7 +48,11 @@ def _update_project(project_id: str, mutate: Callable[[dict], None]) -> dict:
         return project
 
 
-def _update_plan(project_id: str, mutate: Callable[[dict], dict]) -> dict:
+def _update_plan(
+    project_id: str,
+    mutate: Callable[[dict], dict],
+    write_if: Callable[[], bool] | None = None,
+) -> dict:
     """Atomically read-modify-write plan.json: load the project (raises if
     missing), load the *current* plan.json, apply `mutate` to get the new
     plan, write it back, and bump project.json's `updated_at` -- all in one
@@ -59,6 +64,8 @@ def _update_plan(project_id: str, mutate: Callable[[dict], dict]) -> dict:
         project = load_project(project_id)
         current_plan = _read_plan_or_default(project_id)
         new_plan = mutate(current_plan)
+        if write_if is not None and not write_if():
+            return new_plan
         jsonio._write_json(plan_json_path(project_id), new_plan)
         project["updated_at"] = _now()
         jsonio._write_json(project_json_path(project_id), project)
@@ -190,16 +197,22 @@ def load_plan(project_id: str) -> dict:
 def replace_plan(project_id: str, plan: dict) -> dict:
     """Write `plan` as plan.json without `validate_plan`.
 
-    `save_plan` rejects a null `duration_sec` and fills an omitted one with
-    120. A one-shot song stores null so ACE-Step's chain of thought can fill
-    the length, and stores a provided duration as given (SPEC.md sec 15.4).
-    The caller builds the complete plan. Unknown projects still raise
+    `POST /v1/songs` builds the complete plan itself, including its field
+    origins and creation mode (SPEC.md sec 15.4/16.3), and stores a provided
+    duration as given. The revision still advances, so a snapshot taken
+    before this write is recognizably older. Unknown projects still raise
     `ProjectNotFound`."""
-    snapshot = dict(plan)
-    return _update_plan(project_id, lambda _current: snapshot)
+
+    def mutate(current: dict) -> dict:
+        snapshot = dict(plan)
+        snapshot["revision"] = int(current.get("revision") or 0) + 1
+        snapshot.setdefault("brief", None)
+        return snapshot
+
+    return _update_plan(project_id, mutate)
 
 
-def save_plan(project_id: str, plan: dict) -> dict:
+def save_plan(project_id: str, plan: dict, expected_revision: int | None = None) -> dict:
     """Replace plan.json outright (PUT /api/projects/{id}/plan). The body is
     validated and normalized first (`validate_plan`): well-formed plans pass
     through unchanged, missing keys are filled from `default_plan()`, unknown
@@ -207,17 +220,53 @@ def save_plan(project_id: str, plan: dict) -> dict:
     server/app.py) before anything is written. Validation runs inside the
     locked read-modify-write so an unknown project_id still surfaces
     ProjectNotFound (-> 404) ahead of a malformed body. Locked and atomic --
-    see the module-level note above `_project_lock`."""
-    return _update_plan(project_id, lambda _current: validate_plan(plan))
+    see the module-level note above `_project_lock`.
+
+    SPEC.md sec 16.3: `apply_write_semantics` derives field origins, the
+    creation mode, and the next revision from what changed against the plan
+    on disk. `expected_revision`, when given, makes the write conditional:
+    a plan that moved on since the client read it raises
+    `PlanRevisionConflict` (-> 409) and nothing is written."""
+
+    def mutate(current: dict) -> dict:
+        if expected_revision is not None and int(current.get("revision") or 0) != expected_revision:
+            raise PlanRevisionConflict(
+                f"plan revision is {current.get('revision', 0)}, not {expected_revision}: "
+                "it changed since this edit started"
+            )
+        return creation.apply_write_semantics(current, validate_plan(plan), plan)
+
+    return _update_plan(project_id, mutate)
 
 
-def merge_plan_patch(project_id: str, patch: dict) -> dict:
+def merge_plan_patch(
+    project_id: str, patch: dict, expected_revision: int | None = None
+) -> dict | None:
     """Merge `patch` onto whatever plan is current on disk, atomically: the
     read of "current" and the write both happen inside the same lock, so a
     plan PUT landing between the read and the write can never be silently
-    clobbered (SPEC.md sec 7.2). Used by `server.jobs` to apply a
-    simple-mode `plan_patch` after a job finishes."""
-    return _update_plan(project_id, lambda current: {**current, **patch})
+    clobbered (SPEC.md sec 7.2). Used by `server.jobs` to apply a planned
+    render's brief after a job finishes.
+
+    `field_origins` in the patch merges key by key. With
+    `expected_revision`, a draft that changed since the job was submitted
+    is left alone and this returns None: the newer text wins and the take
+    keeps its own brief (SPEC.md sec 16.3)."""
+    skipped = False
+
+    def mutate(current: dict) -> dict:
+        nonlocal skipped
+        if expected_revision is not None and int(current.get("revision") or 0) != expected_revision:
+            skipped = True
+            return current
+        merged = {**current, **patch}
+        if isinstance(patch.get("field_origins"), dict):
+            merged["field_origins"] = {**current.get("field_origins", {}), **patch["field_origins"]}
+        merged["revision"] = int(current.get("revision") or 0) + 1
+        return merged
+
+    result = _update_plan(project_id, mutate, write_if=lambda: not skipped)
+    return None if skipped else result
 
 
 def patch_project(project_id: str, patch: dict) -> dict:

@@ -82,6 +82,21 @@ def init_db() -> None:
         # migrate with a null stage and cancel_requested 0.
         _ensure_column(conn, "jobs", "stage", "TEXT")
         _ensure_column(conn, "jobs", "cancel_requested", "INTEGER NOT NULL DEFAULT 0")
+        # SPEC.md sec 16.4/16.5, all additive. `attempt_token` fences every
+        # write a claimed attempt makes; `resolved_json` is the brief, seed,
+        # and model configuration frozen before the first DiT call;
+        # `remote_handle` is the Remote GPU job token, so an interrupted
+        # remote render is reconciled instead of silently resubmitted;
+        # `submission_id` and `retry_of` are the request identities.
+        _ensure_column(conn, "jobs", "attempt_token", "TEXT")
+        _ensure_column(conn, "jobs", "resolved_json", "TEXT")
+        _ensure_column(conn, "jobs", "remote_handle", "TEXT")
+        _ensure_column(conn, "jobs", "submission_id", "TEXT")
+        _ensure_column(conn, "jobs", "retry_of", "TEXT")
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS jobs_submission "
+            "ON jobs (project_id, submission_id) WHERE submission_id IS NOT NULL"
+        )
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS worker_capabilities (
@@ -175,4 +190,6 @@ def _row_to_dict(row: sqlite3.Row) -> dict:
         "cancel_requested": (
             int(row["cancel_requested"]) if "cancel_requested" in row.keys() else 0  # noqa: SIM118
         ),
+        "submission_id": row["submission_id"] if "submission_id" in row.keys() else None,  # noqa: SIM118
+        "retry_of": row["retry_of"] if "retry_of" in row.keys() else None,  # noqa: SIM118
     }

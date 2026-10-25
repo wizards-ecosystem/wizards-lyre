@@ -5,7 +5,11 @@ Rules for coding agents working in this repository. Human contributors want
 alongside setup and the test loop.
 
 - **SPEC.md is the sole product spec.** Implement it in the phase order written
-  there. Do not re-open product-scope research.
+  there. Do not re-open product-scope research. Section 16 (bounded
+  completion) is the current work: follow its packet order in
+  [docs/COMPLETION_CHECKLIST.md](docs/COMPLETION_CHECKLIST.md). Once its
+  release gates pass, do maintenance, security, and compatibility work only;
+  new capabilities need a separate scope decision.
 - Generation is **ACE-Step 1.5 only**: on the local GPU by default, or through
   the opt-in Remote GPU lane (SPEC.md section 3.1), which runs the same
   `worker/acestep_worker` adapter on a GPU the user rents or owns. No Lyria,

@@ -8,6 +8,7 @@ favorite/notes fields.
 
 from __future__ import annotations
 
+import os
 import shutil
 from pathlib import Path
 
@@ -17,6 +18,7 @@ from server.storage.errors import LoraNotFound, TakeNotFound
 from server.storage.locks import _project_lock
 from server.storage.paths import (
     _jail,
+    jailed_path,
     lora_dir,
     loras_dir,
     new_id,
@@ -39,6 +41,12 @@ def _normalize_take_meta(meta: dict) -> dict:
     # already written -- a take created before this exists has no key at
     # all, same reasoning as favorite/notes above.
     meta.setdefault("lora_id", None)
+    # SPEC.md sec 16.4: a take written before provenance existed is legacy.
+    # Its unknown values stay unknown; nothing is backfilled from the plan.
+    meta.setdefault("job_id", None)
+    meta.setdefault("provenance", None)
+    provenance = meta["provenance"]
+    meta["provenance_complete"] = bool(isinstance(provenance, dict) and provenance.get("complete"))
     return meta
 
 
@@ -197,3 +205,107 @@ def write_take_lrc(project_id: str, take_id: str, lrc_text: str) -> None:
         load_project(project_id)
         path = take_dir(project_id, take_id) / "lyrics.lrc"
         jsonio._write_text(path, lrc_text)
+
+
+# SPEC.md sec 16.5: a take is rendered into a private staging directory
+# outside the project, then promoted into takes/ with one rename. Staging
+# lives under projects/.staging/<project>/<take> -- the same filesystem as
+# takes/, so the rename is atomic -- and outside projects/<project>/, so a
+# render that outlives a project deletion can never recreate that project's
+# directory. A staged take is never listed as a take.
+STAGING_MARKER = ".lyre-staging.json"
+
+
+def staging_dir(project_id: str, take_id: str) -> Path:
+    return jailed_path(".staging", project_id, take_id)
+
+
+def allocate_staged_take(project_id: str, owner: dict) -> tuple[str, Path]:
+    """Allocate a take id and its staging directory. `owner` (job id and
+    attempt token) is written beside the files so cleanup can tell whose
+    work it is."""
+    with _project_lock(project_id):
+        load_project(project_id)
+        take_id = new_id()
+        sdir = staging_dir(project_id, take_id)
+        sdir.mkdir(parents=True, exist_ok=False)
+        jsonio._write_json(sdir / STAGING_MARKER, {**owner, "take_id": take_id})
+        return take_id, sdir
+
+
+def write_staged_meta(project_id: str, take_id: str, meta: dict) -> None:
+    jsonio._write_json(staging_dir(project_id, take_id) / "meta.json", meta)
+
+
+def write_staged_lrc(project_id: str, take_id: str, lrc_text: str) -> None:
+    jsonio._write_text(staging_dir(project_id, take_id) / "lyrics.lrc", lrc_text)
+
+
+def promote_staged_take(project_id: str, take_id: str) -> None:
+    """Move a fully written staged take into takes/ in one rename. The
+    caller holds the project lock and has checked the project exists."""
+    source = staging_dir(project_id, take_id)
+    if not (source / "meta.json").is_file():
+        raise RuntimeError(f"staged take {take_id} has no meta.json; refusing to promote it")
+    (source / STAGING_MARKER).unlink(missing_ok=True)
+    target = take_dir(project_id, take_id)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    os.rename(source, target)
+
+
+def discard_staged_take(project_id: str, take_id: str) -> None:
+    shutil.rmtree(staging_dir(project_id, take_id), ignore_errors=True)
+    try:
+        jailed_path(".staging", project_id).rmdir()
+    except OSError:
+        pass  # other staged takes remain, or it is already gone
+
+
+def list_staged_takes() -> list[tuple[str, str, dict | None]]:
+    """Every staged take as `(project_id, take_id, owner marker or None)`."""
+    root = config.projects_dir() / ".staging"
+    out: list[tuple[str, str, dict | None]] = []
+    if not root.is_dir():
+        return out
+    for project in sorted(root.iterdir()):
+        if not project.is_dir():
+            continue
+        for take in sorted(project.iterdir()):
+            marker = take / STAGING_MARKER
+            try:
+                owner = jsonio._read_json(marker) if marker.is_file() else None
+            except (OSError, ValueError):
+                owner = None
+            out.append((project.name, take.name, owner))
+    return out
+
+
+def write_error_take(project_id: str, take_id: str, meta: dict) -> None:
+    """A failed generation is still recorded as a take with `error` set
+    (SPEC.md sec 10 point 5), but holds no audio: only its meta.json."""
+    with _project_lock(project_id):
+        load_project(project_id)
+        jsonio._write_json(take_dir(project_id, take_id) / "meta.json", meta)
+
+
+def set_active_take_if_unset(project_id: str, take_id: str) -> bool:
+    """Make `take_id` active only when the project has no playable active
+    take (SPEC.md sec 16.5): a finished job never replaces the user's kept
+    take. Returns whether it became active. Caller holds the project lock
+    or accepts the race with an explicit set."""
+    from server.storage.projects import _update_project
+
+    became = False
+
+    def mutate(project: dict) -> None:
+        nonlocal became
+        current = project.get("active_take_id")
+        if current and (take_dir(project_id, current) / "meta.json").is_file():
+            meta = jsonio._read_json(take_dir(project_id, current) / "meta.json")
+            if meta.get("error") is None:
+                return
+        project["active_take_id"] = take_id
+        became = True
+
+    _update_project(project_id, mutate)
+    return became

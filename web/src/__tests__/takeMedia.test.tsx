@@ -71,7 +71,47 @@ describe("Takes pane score and media links", () => {
     expect(within(secondRow).queryByText("lyrics (.lrc)")).toBeNull();
   });
 
-  it("gives every non-errored take a download link with the correct href/filename", async () => {
+  it("names a download by the stored file's real extension", async () => {
+    const file = (name: string) => ({
+      file: name,
+      format: name.split(".")[1],
+      media_type: "",
+      bytes: 10,
+      sha256: "sha256:x",
+      sample_rate: null,
+      channels: null,
+      frames: null,
+      duration_sec: null,
+    });
+    const takes = [
+      makeTake("take-01", 1, {
+        provenance: {
+          complete: true,
+          brief: {},
+          actual: {},
+          files: { "mix.wav": file("mix.wav"), "mix.mp3": file("mix.mp3") },
+        },
+      }),
+      makeTake("take-02", 2, {
+        provenance: {
+          complete: true,
+          brief: {},
+          actual: {},
+          files: { "mix.mp3": file("mix.mp3") },
+        },
+      }),
+    ];
+    app = await renderOpenedProject({ takes });
+    const [wavRow, mp3Row] = takeRows();
+    const wav = within(wavRow).getByRole("link", { name: "download" });
+    expect(wav.getAttribute("download")).toBe("take-01.wav");
+    expect(wav.title).toBe("Full-resolution WAV");
+    const mp3 = within(mp3Row).getByRole("link", { name: "download" });
+    expect(mp3.getAttribute("download")).toBe("take-02.mp3");
+    expect(mp3.title).toMatch(/Only an MP3/);
+  });
+
+  it("gives every non-errored take a download link; a legacy take keeps the server's filename", async () => {
     const takes = [makeTake("take-01", 1, {}), makeTake("take-02", 2, {})];
     app = await renderOpenedProject({ takes });
     const [firstRow, secondRow] = takeRows();
@@ -80,13 +120,15 @@ describe("Takes pane score and media links", () => {
       name: "download",
     }) as HTMLAnchorElement;
     expect(firstDownload.getAttribute("href")).toBe(api.takeAudioUrl(PROJECT_ID, "take-01"));
-    expect(firstDownload.getAttribute("download")).toBe("take-01.wav");
+    // No provenance: the server names it (<take>.<real extension>), so the
+    // page does not guess ".wav".
+    expect(firstDownload.getAttribute("download")).toBe("");
 
     const secondDownload = within(secondRow).getByRole("link", {
       name: "download",
     }) as HTMLAnchorElement;
     expect(secondDownload.getAttribute("href")).toBe(api.takeAudioUrl(PROJECT_ID, "take-02"));
-    expect(secondDownload.getAttribute("download")).toBe("take-02.wav");
+    expect(secondDownload.getAttribute("download")).toBe("");
   });
 
   it("shows only the failure message -- no player, download, or LRC link -- for an errored take", async () => {

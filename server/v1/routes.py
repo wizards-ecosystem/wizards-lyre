@@ -18,12 +18,15 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, File, Header, Response, UploadFile
 from fastapi.responses import FileResponse
 
-from server import jobs, storage
+from server import capabilities as capability_report
+from server import creation, jobs, storage
 from server.uploads import receive_audio_upload
 from server.v1.auth import require_scope
 from server.v1.models import (
     ActiveTake,
+    Capabilities,
     Error,
+    ExportManifest,
     Health,
     Job,
     JobCreate,
@@ -31,6 +34,8 @@ from server.v1.models import (
     Lora,
     Plan,
     PlanWrite,
+    PresetRequest,
+    PresetResult,
     Project,
     ProjectCreate,
     ProjectDetail,
@@ -68,6 +73,11 @@ _ERRORS: dict[int | str, dict[str, Any]] = {
     401: {"model": Error, "description": "Missing or unknown API key"},
     403: {"model": Error, "description": "Known API key without the required scope"},
     404: {"model": Error, "description": "Unknown project, take, or job"},
+}
+
+_PLAN_ERRORS: dict[int | str, dict[str, Any]] = {
+    **_ERRORS,
+    409: {"model": Error, "description": "expected_revision no longer matches the plan"},
 }
 
 _POST_ERRORS: dict[int | str, dict[str, Any]] = {
@@ -149,6 +159,35 @@ def health(_auth: Annotated[Any, Depends(require_scope("read"))]) -> dict[str, A
     }
 
 
+@router.get(
+    "/capabilities",
+    response_model=Capabilities,
+    response_model_by_alias=True,
+    responses=_ERRORS,
+)
+def get_capabilities(_auth: Annotated[Any, Depends(require_scope("read"))]) -> dict[str, Any]:
+    """Readiness, profiles, presets, and request limits (SPEC.md sec 16.6)."""
+    return capability_report.capabilities()
+
+
+@router.post(
+    "/projects/{project_id}/preset",
+    response_model=PresetResult,
+    responses={**_PLAN_ERRORS, **_POST_ERRORS},
+    dependencies=_IDEMPOTENT,
+)
+def project_preset(
+    project_id: str,
+    body: PresetRequest,
+    _auth: Annotated[Any, Depends(require_scope("write"))],
+) -> dict[str, Any]:
+    """Preview a preset (`apply: false`, the default) or apply it. Applying
+    keeps every field the user set and never touches lyrics."""
+    return creation.preset_on_project(
+        project_id, body.preset_id, apply=body.apply, expected_revision=body.expected_revision
+    )
+
+
 @router.post(
     "/projects",
     response_model=Project,
@@ -219,14 +258,16 @@ def delete_project(
 @router.put(
     "/projects/{project_id}/plan",
     response_model=Plan,
-    responses=_ERRORS,
+    responses=_PLAN_ERRORS,
 )
 def put_plan(
     project_id: str,
     body: PlanWrite,
     _auth: Annotated[Any, Depends(require_scope("write"))],
 ) -> dict[str, Any]:
-    return storage.save_plan(project_id, body.model_dump(exclude_unset=True))
+    sent = body.model_dump(exclude_unset=True)
+    expected = sent.pop("expected_revision", None)
+    return storage.save_plan(project_id, sent, expected_revision=expected)
 
 
 @router.get("/projects/{project_id}/takes", response_model=TakePage, responses=_ERRORS)
@@ -307,7 +348,10 @@ def list_loras(
 
 _ZIP: dict[int | str, dict[str, Any]] = {
     200: {
-        "description": "Zip of project.json, plan.json, the active mix, and optional stems.",
+        "description": (
+            "Zip of the selected take's mix (the active take unless take_id names one), its "
+            "LRC, optional stems, project.json, plan.json, and manifest.json."
+        ),
         "content": {"application/zip": {"schema": {"type": "string", "format": "binary"}}},
     },
     **_ERRORS,
@@ -319,15 +363,41 @@ def export_project(
     project_id: str,
     _auth: Annotated[Any, Depends(require_scope("read"))],
     include_stems: bool = True,
+    take_id: str | None = None,
 ) -> Response:
     project = storage.load_project(project_id)
-    zip_bytes = storage.build_export_zip(project_id, include_stems=include_stems)
+    zip_bytes = storage.build_export_zip(project_id, include_stems=include_stems, take_id=take_id)
     filename = f"{storage.sanitize_filename(project['title'])}-export.zip"
     return Response(
         content=zip_bytes,
         media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+@router.get(
+    "/projects/{project_id}/export/manifest",
+    response_model=ExportManifest,
+    response_model_by_alias=True,
+    responses=_ERRORS,
+)
+def export_manifest(
+    project_id: str,
+    _auth: Annotated[Any, Depends(require_scope("read"))],
+    include_stems: bool = True,
+    take_id: str | None = None,
+) -> dict[str, Any]:
+    """The export's `manifest.json` without the archive (SPEC.md sec 16.6):
+    which take, its provenance, and every file's size and sha256. Fetch the
+    ZIP from `export_url`."""
+    manifest = storage.build_export_manifest(
+        project_id, include_stems=include_stems, take_id=take_id
+    )
+    query = f"include_stems={str(include_stems).lower()}"
+    if take_id:
+        query += f"&take_id={take_id}"
+    manifest["export_url"] = f"/v1/projects/{project_id}/export?{query}"
+    return manifest
 
 
 _JOB_CREATED: dict[int | str, dict[str, Any]] = {
@@ -432,6 +502,26 @@ def cancel_job(
 ) -> dict[str, Any]:
     jobs.cancel_job(job_id)
     return job_object(jobs.read_job(job_id))
+
+
+@router.post(
+    "/jobs/{job_id}/retry",
+    status_code=202,
+    response_model=Job,
+    responses=_JOB_CREATED,
+    dependencies=_IDEMPOTENT,
+)
+def retry_job(
+    job_id: str,
+    response: Response,
+    _auth: Annotated[Any, Depends(require_scope("generate"))],
+) -> dict[str, Any]:
+    """Queue an explicit retry of a failed, cancelled, or held job (SPEC.md
+    sec 16.5). The new job's `retry_of` names this one. A job that failed
+    while a Remote GPU was rendering may repeat paid compute."""
+    job = _accepted_job(jobs.retry_job(job_id))
+    response.headers["Location"] = f"/v1/jobs/{job['id']}"
+    return job
 
 
 def _artifact(project_id: str, take_id: str, name: str, media_type: str) -> FileResponse:

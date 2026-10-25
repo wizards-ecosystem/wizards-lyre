@@ -6,9 +6,23 @@ import {
   useRef,
   useState,
 } from "react";
-import { api, Job, Lora, ProjectDetail, ProjectSummary, Section } from "./api";
+import {
+  api,
+  Job,
+  JobRequest,
+  Lora,
+  Plan,
+  PresetResult,
+  ProfileCapability,
+  ProjectDetail,
+  ProjectSummary,
+  Section,
+  Take,
+  TrackedField,
+} from "./api";
 import { ConfirmationDialog } from "./components/ConfirmationDialog";
 import { Icon } from "./components/Icon";
+import { FieldOrigin } from "./components/FieldOrigin";
 import { LibraryPane } from "./components/LibraryPane";
 import { StylePackPanel } from "./components/StylePackPanel";
 import { LoudnessMeter } from "./components/LoudnessMeter";
@@ -21,22 +35,48 @@ import {
   StudioStage,
   TakesRail,
 } from "./components/Workbench";
-import {
-  DIT_PROFILE_OPTIONS,
-  LORA_TRAIN_POLL_TIMEOUT_MS,
-  LORA_TRAIN_RECOVERY_POLL_MS,
-  MIN_LORA_SOURCE_TAKES,
-  STRUCTURE_TAGS,
-} from "./constants";
+import { DIT_PROFILE_OPTIONS, MIN_LORA_SOURCE_TAKES, STRUCTURE_TAGS } from "./constants";
+import { generateIntent, hasInstrumentalConflict, INTENT_COPY, originOf } from "./lib/creation";
 import { formatClock, parseSeed } from "./lib/format";
-import { pollJob } from "./lib/jobs";
+import { jobBodies } from "./lib/jobBodies";
+import { describeJob, errorSummary, submitJob } from "./lib/jobs";
+import { useProjectJobs } from "./hooks/useProjectJobs";
 import { useHealth } from "./hooks/useHealth";
 import { RemoteGpuControl } from "./components/RemoteGpuControl";
-import { usePlanAutosave } from "./hooks/usePlanAutosave";
+import {
+  clearLocalDraft,
+  LocalDraft,
+  readLocalDraft,
+  usePlanAutosave,
+} from "./hooks/usePlanAutosave";
 import { useTakeNotes } from "./hooks/useTakeNotes";
 import { useWaveform } from "./hooks/useWaveform";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
+import { clampPlayhead, usePlaybackOwner } from "./hooks/usePlaybackOwner";
 import { ConfirmationRequest, InspectorTab, OperationGroup } from "./types";
+
+const READINESS_LABEL: Record<string, string> = {
+  ready: "Ready",
+  busy: "Busy",
+  loading: "Loading model",
+  stopped: "Worker stopped",
+  unavailable: "Unavailable",
+};
+
+function profileTitle(profile: string, report: ProfileCapability | undefined): string {
+  if (!report) return profile;
+  const files =
+    report.files === "remote"
+      ? "models on the worker host"
+      : report.validated
+        ? "has rendered on this machine"
+        : report.files === "present"
+          ? "files present, not yet validated by a render"
+          : `files ${report.files}`;
+  const reason =
+    report.supported === false && report.reason ? ` Unavailable: ${report.reason}` : "";
+  return `${report.label}: ${report.summary} (${files}).${reason}`;
+}
 
 export default function App() {
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
@@ -51,12 +91,29 @@ export default function App() {
   const [newTitle, setNewTitle] = useState("");
   const [newQuery, setNewQuery] = useState("");
   const [creatingProject, setCreatingProject] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [busyStatus, setBusyStatus] = useState<string | null>(null);
-  const [activeJobAction, setActiveJobAction] = useState<string | null>(null);
+  // True only while a job body is on its way to the server. Whether a job is
+  // queued or running comes from the queue itself (useProjectJobs below).
+  const [submitting, setSubmitting] = useState(false);
+  // A local draft newer than nothing on the server but older than the saved
+  // plan: offered back to the user, never applied silently (sec 16.6).
+  const [draftOffer, setDraftOffer] = useState<LocalDraft | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [selectedTakeId, setSelectedTakeId] = useState<string | null>(null);
-  const [compareTakeId, setCompareTakeId] = useState<string | null>(null);
+  // A/B comparison (SPEC.md sec 16.6): two named takes of its own, so
+  // reordering or switching them never changes the selected take (the source
+  // for Cover/Repaint and the rest) or the active kept take.
+  const [compare, setCompare] = useState<{ a: string; b: string } | null>(null);
+  const compareARef = useRef<HTMLAudioElement | null>(null);
+  const compareBRef = useRef<HTMLAudioElement | null>(null);
+  const [playerVolume, setPlayerVolume] = useState(1);
+  const [repeatPlayback, setRepeatPlayback] = useState(false);
+  // Use settings / Replay settings (sec 16.4): which take the draft came from.
+  const [settingsSource, setSettingsSource] = useState<{
+    takeLabel: string;
+    legacy: boolean;
+    withSeed: boolean;
+    lmCodes: boolean;
+  } | null>(null);
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>("takes");
   const [operationGroup, setOperationGroup] = useState<OperationGroup>("create");
   const [libraryOpen, setLibraryOpen] = useState(false);
@@ -83,10 +140,13 @@ export default function App() {
   const [seedInput, setSeedInput] = useState("");
   const [trackName, setTrackName] = useState("");
   const [includeStems, setIncludeStems] = useState(true);
-  const { health, error: healthError } = useHealth();
+  const { health, capabilities, error: healthError } = useHealth();
+  // A preset preview awaiting Apply or Cancel (SPEC.md sec 16.6). Nothing is
+  // written until the user applies it.
+  const [presetPreview, setPresetPreview] = useState<PresetResult | null>(null);
   const [loras, setLoras] = useState<Lora[]>([]);
   // Multi-select of takes to train a style pack from (SPEC.md sec 4.4 "8+
-  // songs") -- deliberately separate from selectedTakeId/compareTakeId,
+  // songs") -- deliberately separate from selectedTakeId/compare,
   // which are single-select take-list concepts used for a different purpose
   // (waveform/cover/repaint source, A/B compare).
   const [loraSourceIds, setLoraSourceIds] = useState<Set<string>>(new Set());
@@ -95,13 +155,10 @@ export default function App() {
   // (SPEC.md sec 4.4 "LoRA train / load" -- the load half). Separate from
   // loraSourceIds above, which only feeds *training* a new pack.
   const [selectedLoraId, setSelectedLoraId] = useState<string | null>(null);
-  // This project's train_lora jobs that are still queued/running, recovered
-  // from GET /api/jobs on project load and kept current by a poll below.
-  // This is what makes a long training survive a page refresh: the busy
-  // state of the session that started it is gone, but the job row in the
-  // queue is not, so the Style Packs pane can keep showing its status and
-  // refresh the pack list the moment it finishes (no second reload needed).
-  const [trainingJobs, setTrainingJobs] = useState<Job[]>([]);
+  // Jobs this page submitted. Only their completion selects the new take for
+  // listening or clears the inputs that produced it; a job another tab or an
+  // agent started finishes without moving this page's selection.
+  const startedHereRef = useRef<Set<string>>(new Set());
 
   // Plan saves are debounced and serialized: at most one PUT /plan in
   // flight at a time, always carrying the latest edit. Without this, one
@@ -116,14 +173,38 @@ export default function App() {
   //
   const {
     saveState,
+    retrying: planSaveRetrying,
     setSaveState,
     savePlanField,
+    savePlan: savePlanDraft,
     flushPendingPlanSave,
+    retryNow: retryPlanSave,
+    resolveConflict: resolvePlanConflict,
+    hasPendingEdit: hasPendingPlanEdit,
+    flushOnUnload: flushPlanOnUnload,
+    setServerRevision,
     reset: resetPlanAutosave,
   } = usePlanAutosave({
     getContext: () => (activeId && detail ? { projectId: activeId, plan: detail.plan } : null),
     onPlanChange: (plan) => setDetail((current) => (current ? { ...current, plan } : current)),
     onError: (message) => setErrorMsg(message),
+    // The server derives origins, mode, and revision on every write (sec
+    // 16.3). Take those from the saved plan; keep the text on screen.
+    onSaved: (projectId, saved) =>
+      setDetail((current) =>
+        current?.project.id === projectId
+          ? {
+              ...current,
+              plan: {
+                ...current.plan,
+                creation_mode: saved.creation_mode,
+                field_origins: saved.field_origins,
+                revision: saved.revision,
+                brief: saved.brief,
+              },
+            }
+          : current,
+      ),
   });
 
   const {
@@ -189,6 +270,19 @@ export default function App() {
     seekWaveform,
   } = useWaveform({ selectedTakeId, detail, activeIdRef, audioRefs, setErrorMsg });
 
+  // One playback owner (SPEC.md sec 16.6): starting any source pauses the
+  // others. The waveform's media element is not in the document, so it is
+  // registered; volume and Repeat follow it across take changes.
+  const { register: registerPlayback } = usePlaybackOwner();
+  useEffect(() => {
+    if (!waveformMediaEl) return;
+    registerPlayback(waveformMediaEl);
+    // The element belongs to the waveform library, not React state.
+    // eslint-disable-next-line react-hooks/immutability
+    waveformMediaEl.volume = playerVolume;
+    waveformMediaEl.loop = repeatPlayback;
+  }, [waveformMediaEl, playerVolume, repeatPlayback, registerPlayback]);
+
   // Reviewer-flagged: canceling a pending take-notes debounce timer (on
   // unmount, or on the page actually closing/reloading) used to just drop
   // the buffered edit on the floor. `pagehide` (fires reliably on
@@ -200,6 +294,9 @@ export default function App() {
   useEffect(() => {
     function flushTakeNotesOnUnload() {
       flushAllPendingTakeNotes({ keepalive: true }).catch(() => {});
+      // The last debounced plan edit too (SPEC.md sec 16.6); its local draft
+      // stays until a save confirms it, in case the browser drops this one.
+      flushPlanOnUnload();
     }
     window.addEventListener("pagehide", flushTakeNotesOnUnload);
     window.addEventListener("beforeunload", flushTakeNotesOnUnload);
@@ -360,23 +457,90 @@ export default function App() {
     }
   }
 
-  // Swapping A/B also changes which take Cover/Repaint/Extract/Lego/Complete
-  // act on next, since those all key off selectedTakeId -- that's the
-  // "instant swap" SPEC.md sec 12 calls for, not a separate hidden state.
+  // Reorders the two compared takes. The selected take (the source for
+  // Cover/Repaint/Extract/Lego/Complete) and the active take are untouched.
   function swapCompare(): void {
-    setSelectedTakeId(compareTakeId);
-    setCompareTakeId(selectedTakeId);
+    setCompare((current) => (current ? { a: current.b, b: current.a } : current));
+  }
+
+  // Moves listening from the playing side to the other, at about the same
+  // position (clamped to the other take's length). Not phase-aligned or
+  // loudness-matched: two independent players, switched quickly.
+  function switchAudition(): void {
+    const a = compareARef.current;
+    const b = compareBRef.current;
+    if (!a || !b) return;
+    const [from, to] = !b.paused || (a.paused && b.currentTime > a.currentTime) ? [b, a] : [a, b];
+    const position = from.currentTime;
+    from.pause();
+    to.currentTime = clampPlayhead(position, to.duration);
+    to.play().catch(() => {});
+  }
+
+  function takeLabel(takeId: string): string {
+    const index = detail?.takes.findIndex((take) => take.id === takeId) ?? -1;
+    return index >= 0 && detail
+      ? `Take ${String(detail.takes.length - index).padStart(2, "0")}`
+      : takeId.slice(0, 8);
+  }
+
+  // SPEC.md sec 16.4 "Use settings": copy what a take actually rendered into
+  // the editor as a visibly marked draft. Nothing renders, and no take or
+  // the active selection changes. withSeed is "Replay settings": the
+  // recorded seed goes into the seed field too.
+  function applyTakeSettings(take: Take, withSeed: boolean): void {
+    if (!detail) return;
+    const provenance = take.provenance;
+    const actual = provenance?.actual ?? null;
+    const brief = provenance?.brief ?? null;
+    const from = (field: string, fallback: unknown) =>
+      (actual?.[field] ?? brief?.[field] ?? fallback) as never;
+    const plan: Plan = {
+      ...detail.plan,
+      caption: from("caption", take.caption ?? ""),
+      lyrics: (brief?.lyrics ?? take.lyrics ?? "") as string,
+      bpm: from("bpm", take.bpm),
+      keyscale: from("keyscale", take.keyscale),
+      instrumental: (brief?.instrumental ?? detail.plan.instrumental) as boolean,
+      vocal_language: from("vocal_language", detail.plan.vocal_language),
+      timesignature: from("timesignature", detail.plan.timesignature),
+      duration_sec: from("duration_sec", detail.plan.duration_sec),
+      creation_mode: "from_brief",
+    };
+    const copied: TrackedField[] = brief
+      ? ["caption", "lyrics", "bpm", "keyscale", "vocal_language", "timesignature", "duration_sec"]
+      : ["caption", "lyrics", "bpm", "keyscale"];
+    plan.field_origins = {
+      ...detail.plan.field_origins,
+      ...Object.fromEntries(copied.map((field) => [field, "user"])),
+    };
+    savePlanDraft(plan);
+    if (withSeed) setSeedInput(String(take.seed));
+    const request = (provenance as { request?: Record<string, unknown> } | null)?.request;
+    setSettingsSource({
+      takeLabel: takeLabel(take.id),
+      legacy: !brief,
+      withSeed,
+      lmCodes: request?.thinking === true,
+    });
   }
 
   async function refreshDetail(id: string) {
     const data = await api.getProject(id);
     // Discard a response that's no longer for the active project (see
     // activeIdRef above) -- covers both a rapid A->B switch racing this
-    // fetch and generate()'s post-job refresh completing after the user
-    // has since switched away from the project the job ran in.
+    // fetch and a job-completion refresh landing after the user has since
+    // switched away from the project the job ran in.
     if (activeIdRef.current !== id) return;
     const openingProject = detail?.project.id !== id;
-    setDetail(data);
+    // An edit still waiting to save is newer than the server's plan: keep
+    // it on screen rather than replacing it with the older copy (sec 16.6).
+    const keepLocalPlan = !openingProject && hasPendingPlanEdit();
+    if (!keepLocalPlan) setServerRevision(id, data.plan.revision);
+    setDetail((current) =>
+      keepLocalPlan && current?.project.id === id ? { ...data, plan: current.plan } : data,
+    );
+    if (openingProject) offerLocalDraft(id, data.plan);
     setSelectedTakeId((current) => {
       if (current && data.takes.some((take) => take.id === current)) return current;
       return data.project.active_take_id ?? data.takes[0]?.id ?? null;
@@ -388,27 +552,43 @@ export default function App() {
     }
   }
 
+  // SPEC.md sec 16.6: an unsent edit survives a reload. When the server plan
+  // is still the revision the edit started from, the edit is simply resumed
+  // (nothing newer can be overwritten). When the server moved on, the edit
+  // is offered, never applied silently.
+  function offerLocalDraft(id: string, serverPlan: Plan): void {
+    const draft = readLocalDraft(id);
+    setDraftOffer(null);
+    if (!draft) return;
+    if (JSON.stringify(draft.plan) === JSON.stringify(serverPlan)) {
+      clearLocalDraft(id);
+      return;
+    }
+    if (draft.baseRevision != null && draft.baseRevision === (serverPlan.revision ?? null)) {
+      savePlanDraft(draft.plan, id);
+      return;
+    }
+    setDraftOffer(draft);
+  }
+
+  function restoreDraftOffer(): void {
+    if (!draftOffer || draftOffer.projectId !== activeIdRef.current) return;
+    // The user chose this edit over the newer saved plan, so it is sent
+    // against the current revision.
+    savePlanDraft(draftOffer.plan, draftOffer.projectId);
+    setDraftOffer(null);
+  }
+
+  function discardDraftOffer(): void {
+    if (draftOffer) clearLocalDraft(draftOffer.projectId);
+    setDraftOffer(null);
+  }
+
   async function refreshLoras(id: string) {
     const data = await api.listLoras(id);
     // Same stale-response guard as refreshDetail above.
     if (activeIdRef.current !== id) return;
     setLoras(data);
-  }
-
-  // Rediscovers this project's still-active (queued/running) train_lora job
-  // from the shared job queue (SPEC.md sec 8 GET /api/jobs) -- called on
-  // project load so a refresh mid-training restores visible progress, and
-  // again after a training finishes/fails so the pane matches the queue.
-  // active: true returns the project's complete queued/running worklist
-  // (no recency truncation server-side), so an older running training can
-  // never be pushed out of the result by newer jobs and lost to the
-  // recovery.
-  async function refreshTrainingJobs(id: string): Promise<void> {
-    const jobs = await api.listJobs({ projectId: id, action: "train_lora", active: true });
-    // Same stale-response guard as refreshDetail above. The client-side
-    // filter is belt-and-braces on top of the server's active filter.
-    if (activeIdRef.current !== id) return;
-    setTrainingJobs(jobs.filter((j) => j.status === "queued" || j.status === "running"));
   }
 
   useEffect(() => {
@@ -424,22 +604,20 @@ export default function App() {
     // pass, before any of it can be rendered against the new project.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setSelectedTakeId(null);
-    setCompareTakeId(null);
+    setCompare(null);
+    setSettingsSource(null);
     setUploadedSourcePath(null);
     setUploadedSourceName(null);
     setLoraSourceIds(new Set());
     setLoraName("");
     setSelectedLoraId(null);
-    setTrainingJobs([]);
+    setDraftOffer(null);
+    setPresetPreview(null);
     setEditingTitle(false);
     setTitleDraft("");
     if (activeId) {
       refreshDetail(activeId).catch((err) => setErrorMsg(String(err)));
       refreshLoras(activeId).catch((err) => setErrorMsg(String(err)));
-      // Recover a style-pack training that is still queued/running for this
-      // project (started before a refresh, or in another tab) so the Style
-      // Packs pane keeps showing its status.
-      refreshTrainingJobs(activeId).catch((err) => setErrorMsg(String(err)));
     } else {
       setDetail(null);
       setLoras([]);
@@ -448,83 +626,6 @@ export default function App() {
     // listing them would refetch the whole project on every state change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeId]);
-
-  // Recovery poll for the train_lora jobs above: while any are active,
-  // re-check the job queue and, the moment one completes or fails, refresh
-  // the pack list so the selector/pack entries update without another page
-  // reload. A failed training also surfaces its job error in the banner --
-  // a failure before the pack directory is allocated (e.g. the worker
-  // crashing on claim) never produces a pack entry, so this is the only
-  // place that error becomes visible. The session that started the training
-  // has its own pollJob running too; double-observing the same job is
-  // harmless (both just re-list an idempotent queue) and is exactly what
-  // makes this survive a refresh, which kills that original poller.
-  const trainingJobIds = trainingJobs.map((j) => j.id).join(",");
-  useEffect(() => {
-    if (!activeId || trainingJobIds === "") return;
-    const projectId = activeId;
-    const watchedIds = trainingJobIds.split(",");
-    let cancelled = false;
-
-    async function tick() {
-      let jobs: Job[];
-      try {
-        // active: true returns the complete queued/running worklist (no
-        // recency truncation server-side), so a watched training can never
-        // drop out of this list (and out of the pane/poll) just because
-        // newer jobs piled up behind it while it runs.
-        jobs = await api.listJobs({ projectId, action: "train_lora", active: true });
-      } catch {
-        return; // transient (server restarting...) -- retry on the next tick
-      }
-      if (cancelled || activeIdRef.current !== projectId) return;
-      const activeIds = new Set(jobs.map((j) => j.id));
-      // A watched id that fell out of the active set has finished (done or
-      // error). Fetch those by id -- the active-filtered list excludes them
-      // by definition, and a recency-limited unfiltered list can drop them
-      // too, which would silently lose the finish event and its error.
-      const finishedIds = watchedIds.filter((id) => !activeIds.has(id));
-      if (finishedIds.length === 0) {
-        setTrainingJobs(jobs);
-        return;
-      }
-      const finished: Job[] = [];
-      for (const id of finishedIds) {
-        try {
-          finished.push(await api.getJob(id));
-        } catch {
-          // No longer fetchable (e.g. the job row vanished with a project
-          // deletion) -- nothing left to surface for it.
-        }
-      }
-      // setTrainingJobs (below) drops this tick's now-finished id from
-      // trainingJobIds, which is this effect's own dependency -- committing
-      // that update re-runs the effect and marks this closure `cancelled`
-      // via its cleanup. Do the refresh/error work first so that this
-      // self-triggered cleanup can never preempt it.
-      if (finished.length > 0 && !cancelled && activeIdRef.current === projectId) {
-        await refreshLoras(projectId);
-      }
-      // The await above can outlast a project switch -- never surface this
-      // project's training failure on top of another project's workspace.
-      if (cancelled || activeIdRef.current !== projectId) return;
-      setTrainingJobs(jobs);
-      for (const job of finished) {
-        if (job.status === "error") {
-          // The pack entry itself (refreshLoras above) shows up in the
-          // list whenever the worker allocated one before failing; this
-          // banner is the actionable message either way.
-          setErrorMsg(`style pack training failed: ${job.error ?? "unknown error"}`);
-        }
-      }
-    }
-
-    const interval = setInterval(tick, LORA_TRAIN_RECOVERY_POLL_MS);
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
-  }, [activeId, trainingJobIds]);
 
   // An uploaded file and a selected take are alternative cover/repaint
   // sources (server.jobs._resolve_source_audio accepts exactly one) --
@@ -540,18 +641,15 @@ export default function App() {
     }
   }, [selectedTakeId]);
 
-  // A take picked as A (selectedTakeId) can also already be set as B
-  // (compareTakeId) -- e.g. clicking its row while it's mid-comparison, or
-  // following a parent-take link onto it. Clear the comparison rather than
-  // showing two identical players and a no-op swap.
+  // A and B must be two different takes; a pair that collapsed onto one
+  // take (a take removed out of band) closes the comparison.
   useEffect(() => {
-    if (compareTakeId && compareTakeId === selectedTakeId) {
-      // Deliberate: A and B must never be the same take, so picking A as B's
-      // current value clears the comparison.
+    if (compare && compare.a === compare.b) {
+      // Deliberate: there is nothing to compare.
       // eslint-disable-next-line react-hooks/set-state-in-effect
-      setCompareTakeId(null);
+      setCompare(null);
     }
-  }, [selectedTakeId, compareTakeId]);
+  }, [compare]);
 
   // Mounts a fresh WaveSurfer instance pointed at the selected take's audio
   // and tears it down on every change (SPEC.md sec 9.2) -- WaveSurfer owns
@@ -697,97 +795,171 @@ export default function App() {
     addSection({ name: "", start_sec: region.start, end_sec: region.end, lyrics: "" });
   }
 
-  async function generate() {
-    if (!activeId) return;
-    // Same base-model-swap gate as extract()/lego()/complete() (SPEC.md sec
-    // 4.3) -- a lora's weights only load against the studio_ops base
-    // checkpoint, so selecting one forces the same swap those already gate
-    // behind confirmation. Only shown when a lora is actually selected; a
-    // plain generate never prompts.
-    if (selectedLoraId) {
-      const accepted = await requestConfirmation({
-        title: "Load the studio model?",
-        message:
-          "Generate needs the studio_ops base model for this style pack. Lyre will unload the current model before the job starts.",
-        confirmLabel: "Load model & generate",
-      });
-      if (!accepted) return;
+  async function previewPreset(presetId: string): Promise<void> {
+    if (!activeId || !presetId) {
+      setPresetPreview(null);
+      return;
     }
-    setBusy(true);
-    setBusyStatus("queued");
-    setActiveJobAction("generate");
+    const projectId = activeId;
+    try {
+      // The preview is computed from the saved plan, so save first.
+      await flushPendingPlanSave();
+      const preview = await api.presetOnProject(projectId, presetId, { apply: false });
+      if (activeIdRef.current === projectId) setPresetPreview(preview);
+    } catch (err) {
+      setErrorMsg(String(err));
+    }
+  }
+
+  async function applyPresetPreview(): Promise<void> {
+    if (!activeId || !presetPreview) return;
+    const projectId = activeId;
+    try {
+      await flushPendingPlanSave();
+      const result = await api.presetOnProject(projectId, presetPreview.preset.id, {
+        apply: true,
+        expectedRevision: detail?.plan.revision ?? null,
+      });
+      if (activeIdRef.current !== projectId) return;
+      setServerRevision(projectId, result.plan.revision);
+      setDetail((current) =>
+        current?.project.id === projectId ? { ...current, plan: result.plan } : current,
+      );
+      setPresetPreview(null);
+    } catch (err) {
+      setErrorMsg(String(err));
+    }
+  }
+
+  // Submitting, observing, and collecting are separate (SPEC.md sec 16.5):
+  // startJob flushes the plan and queues the job with a submission identity,
+  // useProjectJobs observes it from the queue (surviving reloads and project
+  // switches), and handleJobFinished collects the result.
+  const { activeJobs, lastFinished, track } = useProjectJobs({
+    projectId: activeId,
+    onFinished: handleJobFinished,
+  });
+  const busy = submitting || activeJobs.length > 0;
+  const currentJob = activeJobs[activeJobs.length - 1] ?? lastFinished;
+  const activeJobAction = currentJob
+    ? currentJob.action === "train_lora"
+      ? "style pack training"
+      : currentJob.action
+    : null;
+  const trainingJobs = activeJobs.filter((job) => job.action === "train_lora");
+
+  async function startJob(body: JobRequest): Promise<void> {
+    if (!activeId) return;
+    const projectId = activeId;
+    setSubmitting(true);
     setErrorMsg(null);
     try {
       // The plan can still be mid-debounce (or an earlier save still in
-      // flight) when Generate is clicked -- without this, the job can read
-      // the plan from before the user's last edit (e.g. the query/caption
-      // they just typed).
+      // flight) when an action is clicked. The job snapshots the plan when
+      // it is queued, so it must be the plan the user last saw. A save
+      // that failed stops the job instead of queuing stale content.
       await flushPendingPlanSave();
-      const queued = await api.generate(activeId, selectedLoraId, parseSeed(seedInput));
-      const job = await pollJob(queued.id, (update) => setBusyStatus(update.status));
-      if (job.status === "error") {
-        setErrorMsg(job.error ?? "generate job failed");
-        setBusyStatus("error");
-      } else {
-        setBusyStatus("done");
+      const job = await submitJob(projectId, body);
+      startedHereRef.current.add(job.id);
+      if (activeIdRef.current === projectId) track(job);
+    } catch (err) {
+      if (activeIdRef.current === projectId) setErrorMsg(String(err));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  function handleJobFinished(job: Job): void {
+    const projectId = job.project_id;
+    // useProjectJobs only reports jobs of the project it observes, but the
+    // refreshes below are async: every write checks the project again.
+    if (activeIdRef.current !== projectId) return;
+    const startedHere = startedHereRef.current.delete(job.id);
+    if (job.status === "error") {
+      setErrorMsg(
+        job.action === "train_lora" && !startedHere
+          ? `style pack training failed: ${job.error ?? "unknown error"}`
+          : (job.error ?? `${job.action} job failed`),
+      );
+    }
+    if (job.action === "train_lora") {
+      if (job.status === "done" && startedHere) {
+        setLoraSourceIds(new Set());
+        setLoraName("");
       }
-      await refreshDetail(activeId);
-      if (job.status === "done" && job.take_id) setSelectedTakeId(job.take_id);
+      refreshLoras(projectId).catch((err) => setErrorMsg(String(err)));
+      return;
+    }
+    refreshDetail(projectId)
+      .then(() => {
+        if (activeIdRef.current !== projectId || !startedHere) return;
+        if (job.status === "done" && job.take_id) {
+          // Selected for listening, not kept: the active take only changes
+          // when the user says so (SPEC.md sec 16.5).
+          setSelectedTakeId(job.take_id);
+          if (job.action === "repaint" || job.action === "lego") clearRegion();
+        }
+      })
+      .catch((err) => setErrorMsg(String(err)));
+  }
+
+  async function cancelCurrentJob(): Promise<void> {
+    if (!currentJob) return;
+    try {
+      track(await api.cancelJob(currentJob.id));
     } catch (err) {
       setErrorMsg(String(err));
-      setBusyStatus("error");
-    } finally {
-      setBusy(false);
     }
+  }
+
+  async function retryCurrentJob(): Promise<void> {
+    if (!currentJob || !activeId) return;
+    const projectId = activeId;
+    try {
+      const retried = await api.retryJob(currentJob.id);
+      startedHereRef.current.add(retried.id);
+      if (activeIdRef.current === projectId) track(retried);
+    } catch (err) {
+      setErrorMsg(String(err));
+    }
+  }
+
+  async function copyJobSummary(): Promise<void> {
+    if (!currentJob) return;
+    try {
+      await navigator.clipboard.writeText(errorSummary(currentJob));
+    } catch {
+      setErrorMsg(errorSummary(currentJob));
+    }
+  }
+
+  // Same base-model-swap gate as extract()/lego()/complete() (SPEC.md sec
+  // 4.3) -- a lora's weights only load against the studio_ops base
+  // checkpoint, so selecting one forces the same swap those already gate
+  // behind confirmation. Only shown when a lora is actually selected; a
+  // plain generate never prompts.
+  async function confirmStyleSwap(verb: string): Promise<boolean> {
+    if (!selectedLoraId) return true;
+    return requestConfirmation({
+      title: "Load the studio model?",
+      message: `${verb[0].toUpperCase()}${verb.slice(1)} needs the studio_ops base model for this style pack. Lyre will unload the current model before the job starts.`,
+      confirmLabel: `Load model & ${verb}`,
+    });
+  }
+
+  async function generate(creationMode?: "from_idea" | "from_brief") {
+    if (!activeId) return;
+    if (!(await confirmStyleSwap("generate"))) return;
+    await startJob(jobBodies.generate(selectedLoraId, parseSeed(seedInput), creationMode));
   }
 
   async function cover() {
     if (!activeId || (!selectedTakeId && !uploadedSourcePath)) return;
-    // Same base-model-swap gate as generate() above.
-    if (selectedLoraId) {
-      const accepted = await requestConfirmation({
-        title: "Load the studio model?",
-        message:
-          "Cover needs the studio_ops base model for this style pack. Lyre will unload the current model before the job starts.",
-        confirmLabel: "Load model & cover",
-      });
-      if (!accepted) return;
-    }
-    setBusy(true);
-    setBusyStatus("queued");
-    setActiveJobAction("cover");
-    setErrorMsg(null);
-    try {
-      // Same race as generate(): the plan can still be mid-debounce (or an
-      // earlier save still in flight) when Cover is clicked -- the worker
-      // reads the on-disk plan, so a stale caption/lyrics edit would
-      // otherwise silently leak into the cover job.
-      await flushPendingPlanSave();
-      const source = selectedTakeId
-        ? { takeId: selectedTakeId }
-        : { uploadPath: uploadedSourcePath! };
-      const queued = await api.cover(
-        activeId,
-        source,
-        coverStrength,
-        selectedLoraId,
-        parseSeed(seedInput),
-      );
-      const job = await pollJob(queued.id, (update) => setBusyStatus(update.status));
-      if (job.status === "error") {
-        setErrorMsg(job.error ?? "cover job failed");
-        setBusyStatus("error");
-      } else {
-        setBusyStatus("done");
-      }
-      await refreshDetail(activeId);
-      if (job.status === "done" && job.take_id) setSelectedTakeId(job.take_id);
-    } catch (err) {
-      setErrorMsg(String(err));
-      setBusyStatus("error");
-    } finally {
-      setBusy(false);
-    }
+    if (!(await confirmStyleSwap("cover"))) return;
+    const source = selectedTakeId
+      ? { takeId: selectedTakeId }
+      : { uploadPath: uploadedSourcePath! };
+    await startJob(jobBodies.cover(source, coverStrength, selectedLoraId, parseSeed(seedInput)));
   }
 
   async function repaint() {
@@ -801,164 +973,50 @@ export default function App() {
     } else if (!uploadedSourcePath) {
       return;
     }
-    // Same base-model-swap gate as generate() above.
-    if (selectedLoraId) {
-      const accepted = await requestConfirmation({
-        title: "Load the studio model?",
-        message:
-          "Repaint needs the studio_ops base model for this style pack. Lyre will unload the current model before the job starts.",
-        confirmLabel: "Load model & repaint",
-      });
-      if (!accepted) return;
-    }
-    setBusy(true);
-    setBusyStatus("queued");
-    setActiveJobAction("repaint");
-    setErrorMsg(null);
-    try {
-      // Same race as generate()/cover(): flush any in-flight plan edit before
-      // the worker reads plan.json off disk.
-      await flushPendingPlanSave();
-      const source = selectedTakeId
-        ? { takeId: selectedTakeId }
-        : { uploadPath: uploadedSourcePath! };
-      const start = selectedTakeId ? region!.start : 0;
-      const end = selectedTakeId ? region!.end : -1;
-      const queued = await api.repaint(
-        activeId,
-        source,
-        start,
-        end,
-        selectedLoraId,
-        parseSeed(seedInput),
-      );
-      const job = await pollJob(queued.id, (update) => setBusyStatus(update.status));
-      if (job.status === "error") {
-        setErrorMsg(job.error ?? "repaint job failed");
-        setBusyStatus("error");
-      } else if (selectedTakeId) {
-        clearRegion();
-        setBusyStatus("done");
-      } else {
-        setBusyStatus("done");
-      }
-      await refreshDetail(activeId);
-      if (job.status === "done" && job.take_id) setSelectedTakeId(job.take_id);
-    } catch (err) {
-      setErrorMsg(String(err));
-      setBusyStatus("error");
-    } finally {
-      setBusy(false);
-    }
+    if (!(await confirmStyleSwap("repaint"))) return;
+    const source = selectedTakeId
+      ? { takeId: selectedTakeId }
+      : { uploadPath: uploadedSourcePath! };
+    const start = selectedTakeId ? region!.start : 0;
+    const end = selectedTakeId ? region!.end : -1;
+    await startJob(jobBodies.repaint(source, start, end, selectedLoraId, parseSeed(seedInput)));
+  }
+
+  // SPEC.md sec 4.3: one GPU occupant -- swapping between the iterate and
+  // studio_ops base models unloads/reloads the DiT, so these must be a
+  // deliberate, confirmed action, not a side effect of a stray click.
+  async function confirmBaseModelSwap(message: string, confirmLabel: string): Promise<boolean> {
+    return requestConfirmation({ title: "Load the studio model?", message, confirmLabel });
   }
 
   async function extract() {
     if (!activeId || !selectedTakeId || !trackName.trim()) return;
-    // SPEC.md sec 4.3: one GPU occupant -- swapping between the iterate and
-    // studio_ops base models unloads/reloads the DiT, so this must be a
-    // deliberate, confirmed action, not a side effect of a stray click.
-    const accepted = await requestConfirmation({
-      title: "Load the studio model?",
-      message:
-        "Extract uses the studio_ops base model. Lyre will unload the current model before isolating this track.",
-      confirmLabel: "Load model & extract",
-    });
+    const accepted = await confirmBaseModelSwap(
+      "Extract uses the studio_ops base model. Lyre will unload the current model before isolating this track.",
+      "Load model & extract",
+    );
     if (!accepted) return;
-    setBusy(true);
-    setBusyStatus("queued");
-    setActiveJobAction("extract");
-    setErrorMsg(null);
-    try {
-      // Same race as cover()/repaint(): flush any in-flight plan edit before
-      // the worker reads plan.json off disk.
-      await flushPendingPlanSave();
-      const queued = await api.extract(activeId, selectedTakeId, trackName);
-      const job = await pollJob(queued.id, (update) => setBusyStatus(update.status));
-      if (job.status === "error") {
-        setErrorMsg(job.error ?? "extract job failed");
-        setBusyStatus("error");
-      } else {
-        setBusyStatus("done");
-      }
-      await refreshDetail(activeId);
-      if (job.status === "done" && job.take_id) setSelectedTakeId(job.take_id);
-    } catch (err) {
-      setErrorMsg(String(err));
-      setBusyStatus("error");
-    } finally {
-      setBusy(false);
-    }
+    await startJob(jobBodies.extract(selectedTakeId, trackName));
   }
 
   async function lego() {
     if (!activeId || !selectedTakeId || !trackName.trim()) return;
-    // Same base-model-swap gate as extract() (SPEC.md sec 4.3).
-    const accepted = await requestConfirmation({
-      title: "Load the studio model?",
-      message:
-        "Lego uses the studio_ops base model. Lyre will unload the current model before adding or replacing the track.",
-      confirmLabel: "Load model & add track",
-    });
+    const accepted = await confirmBaseModelSwap(
+      "Lego uses the studio_ops base model. Lyre will unload the current model before adding or replacing the track.",
+      "Load model & add track",
+    );
     if (!accepted) return;
-    setBusy(true);
-    setBusyStatus("queued");
-    setActiveJobAction("lego");
-    setErrorMsg(null);
-    try {
-      // Same race as cover()/repaint()/extract(): flush any in-flight plan
-      // edit before the worker reads plan.json (and its caption) off disk.
-      await flushPendingPlanSave();
-      const queued = await api.lego(activeId, selectedTakeId, trackName, region);
-      const job = await pollJob(queued.id, (update) => setBusyStatus(update.status));
-      if (job.status === "error") {
-        setErrorMsg(job.error ?? "lego job failed");
-        setBusyStatus("error");
-      } else {
-        clearRegion();
-        setBusyStatus("done");
-      }
-      await refreshDetail(activeId);
-      if (job.status === "done" && job.take_id) setSelectedTakeId(job.take_id);
-    } catch (err) {
-      setErrorMsg(String(err));
-      setBusyStatus("error");
-    } finally {
-      setBusy(false);
-    }
+    await startJob(jobBodies.lego(selectedTakeId, trackName, region));
   }
 
   async function complete() {
     if (!activeId || !selectedTakeId || !trackName.trim()) return;
-    // Same base-model-swap gate as extract() (SPEC.md sec 4.3).
-    const accepted = await requestConfirmation({
-      title: "Load the studio model?",
-      message:
-        "Complete uses the studio_ops base model. Lyre will unload the current model before filling the arrangement.",
-      confirmLabel: "Load model & complete",
-    });
+    const accepted = await confirmBaseModelSwap(
+      "Complete uses the studio_ops base model. Lyre will unload the current model before filling the arrangement.",
+      "Load model & complete",
+    );
     if (!accepted) return;
-    setBusy(true);
-    setBusyStatus("queued");
-    setActiveJobAction("complete");
-    setErrorMsg(null);
-    try {
-      await flushPendingPlanSave();
-      const queued = await api.complete(activeId, selectedTakeId, trackName);
-      const job = await pollJob(queued.id, (update) => setBusyStatus(update.status));
-      if (job.status === "error") {
-        setErrorMsg(job.error ?? "complete job failed");
-        setBusyStatus("error");
-      } else {
-        setBusyStatus("done");
-      }
-      await refreshDetail(activeId);
-      if (job.status === "done" && job.take_id) setSelectedTakeId(job.take_id);
-    } catch (err) {
-      setErrorMsg(String(err));
-      setBusyStatus("error");
-    } finally {
-      setBusy(false);
-    }
+    await startJob(jobBodies.complete(selectedTakeId, trackName));
   }
 
   function toggleLoraSource(takeId: string): void {
@@ -972,68 +1030,10 @@ export default function App() {
 
   async function trainLora() {
     if (!activeId || loraSourceIds.size < MIN_LORA_SOURCE_TAKES || !loraName.trim()) return;
-    // Captured once, up front -- training can run for up to
-    // LORA_TRAIN_POLL_TIMEOUT_MS (~90 minutes), and nothing stops the user
-    // from switching to a different project while it's in flight. Every
-    // mutation below that touches project-specific state (the error banner,
-    // the source-take selection, the name field, the mid-poll status text)
-    // must check activeIdRef against this before writing, or a stale poll
-    // tick / late completion for project A can clobber project B's
-    // in-progress selections or surface A's failure in B's UI (reviewer-
-    // flagged). busy itself is the exception: it's the single cross-app
-    // "a job is in flight" lock (SPEC.md sec 4.3 one GPU occupant), not
-    // project-specific data, so it's still cleared unconditionally in
-    // `finally` -- guarding that clear would leave every other project
-    // permanently disabled if the user isn't back on this one the moment
-    // training finishes.
-    const projectId = activeId;
-    const sourceIds = Array.from(loraSourceIds);
-    const name = loraName.trim();
-    setBusy(true);
-    setBusyStatus("queued");
-    setActiveJobAction("style pack training");
-    setErrorMsg(null);
-    try {
-      const queued = await api.trainLora(projectId, sourceIds, name);
-      // Show the new training in the Style Packs pane right away (same
-      // in-flight entry a refresh would recover) and arm the recovery poll
-      // for it, so the pane's view of training is identical whether or not
-      // the page is reloaded mid-training.
-      refreshTrainingJobs(projectId).catch(() => {});
-      // Training runs the ACE-Step training loop under the worker's
-      // GPU-exclusive lock and can take roughly an hour (SPEC.md sec 4.4) --
-      // far past the default job-poll ceiling tuned for generate/cover/etc.
-      const job = await pollJob(
-        queued.id,
-        (update) => {
-          if (activeIdRef.current === projectId) setBusyStatus(update.status);
-        },
-        LORA_TRAIN_POLL_TIMEOUT_MS,
-      );
-      if (activeIdRef.current === projectId) {
-        if (job.status === "error") {
-          setErrorMsg(job.error ?? "train_lora job failed");
-          setBusyStatus("error");
-        } else {
-          setLoraSourceIds(new Set());
-          setLoraName("");
-          setBusyStatus("done");
-        }
-      }
-      await refreshLoras(projectId);
-    } catch (err) {
-      if (activeIdRef.current === projectId) {
-        setErrorMsg(String(err));
-        setBusyStatus("error");
-      }
-    } finally {
-      setBusy(false);
-      // Re-sync the recovered-training view with the queue. On success this
-      // just clears any entry; on a poll-timeout (the catch above) the job
-      // is still running server-side, and this is what hands it over to the
-      // recovery poll so it keeps being tracked after `busy` is released.
-      refreshTrainingJobs(projectId).catch(() => {});
-    }
+    // Training runs up to ~1 hour (SPEC.md sec 4.4). It is observed like any
+    // job, so it survives a reload or a project switch; its completion
+    // clears the source selection only on the page that started it.
+    await startJob(jobBodies.trainLora(Array.from(loraSourceIds), loraName.trim()));
   }
 
   // While an extract/lego/complete job is busy, the base model may still be
@@ -1076,27 +1076,27 @@ export default function App() {
     .filter((project) => project.title.toLowerCase().includes(librarySearch.toLowerCase()))
     .sort((a, b) => Number(b.favorite) - Number(a.favorite));
   const selectedTake = detail?.takes.find((take) => take.id === selectedTakeId) ?? null;
-  const jobStatusLabel = activeJobAction
-    ? busyStatus === "queued"
-      ? `Waiting for GPU: ${activeJobAction}`
-      : busyStatus === "running" && studioOpsLoading
-        ? `Loading base model: ${activeJobAction}`
-        : busyStatus === "running"
-          ? `Running: ${activeJobAction}`
-          : busyStatus === "done"
-            ? `Complete: ${activeJobAction}`
-            : busyStatus === "error"
-              ? `Interrupted: ${activeJobAction}`
-              : activeJobAction
+  const jobStatusLabel = currentJob
+    ? describeJob(currentJob, {
+        loadingBaseModel: currentJob.status === "running" && studioOpsLoading,
+      })
     : null;
+  const jobIsActive = currentJob
+    ? !["done", "error", "cancelled"].includes(currentJob.status)
+    : false;
+  const jobHeld = currentJob?.status === "queued" && currentJob.stage === "needs_confirmation";
   const saveStateLabel =
     saveState === "saving"
       ? "Saving..."
       : saveState === "saved"
         ? "Saved"
         : saveState === "error"
-          ? "Couldn’t save"
-          : "Local plan";
+          ? planSaveRetrying
+            ? "Save failed, retrying"
+            : "Save failed"
+          : saveState === "conflict"
+            ? "Changed elsewhere"
+            : "Local plan";
 
   return (
     <AppShell>
@@ -1143,14 +1143,31 @@ export default function App() {
           </details>
           <RemoteGpuControl />
           <div
-            className={`health ${health?.ok ? "ok" : "down"}`}
+            className={`health ${
+              health?.ok &&
+              (!capabilities || ["ready", "busy", "loading"].includes(capabilities.worker.state))
+                ? "ok"
+                : "down"
+            }`}
             title={healthError ?? undefined}
             role="status"
           >
             <span className="dot" />
-            <span className="health-copy">
-              <strong>{health ? health.gpu : "Server offline"}</strong>
-              <small>{health?.dit_loaded ? `${health.dit_loaded} loaded` : "local engine"}</small>
+            <span className="health-copy" title={health?.gpu}>
+              <strong>
+                {!health
+                  ? "Server offline"
+                  : capabilities
+                    ? READINESS_LABEL[capabilities.worker.state]
+                    : health.gpu}
+              </strong>
+              <small>
+                {capabilities && capabilities.worker.state !== "ready"
+                  ? (capabilities.worker.reason ?? "")
+                  : health?.dit_loaded
+                    ? `${health.dit_loaded} loaded`
+                    : "local engine"}
+              </small>
             </span>
           </div>
         </div>
@@ -1194,6 +1211,14 @@ export default function App() {
               >
                 <Icon name="close" />
               </button>
+            </div>
+          )}
+
+          {capabilities?.disk.low && (
+            <div className="disk-warning" role="status">
+              {capabilities.disk.blocked
+                ? "The disk is nearly full: new takes are refused until space is freed under projects/."
+                : "Disk space is low under projects/. A take needs tens of megabytes."}
             </div>
           )}
 
@@ -1294,17 +1319,84 @@ export default function App() {
                     className="export-link"
                     href={`${api.exportUrl(detail.project.id)}?include_stems=${includeStems}`}
                     download={`${detail.project.title}-export.zip`}
+                    title="The active take's full-resolution mix, its LRC and stems when available, project.json, plan.json, and a manifest with every file's hash. A delivery bundle, not a backup."
                   >
                     Export project (.zip)
                   </a>
                 </div>
               </header>
 
-              {jobStatusLabel && (
-                <div className={`job-strip status-${busyStatus ?? "idle"}`} aria-live="polite">
+              {jobStatusLabel && currentJob && (
+                <div className={`job-strip status-${currentJob.status}`} aria-live="polite">
                   <span className="job-pulse" />
                   <strong>{jobStatusLabel}</strong>
+                  {currentJob.status === "running" && currentJob.cancel_requested ? (
+                    <small className="job-note">
+                      ACE-Step cannot stop mid-render: it finishes the current pass and its output
+                      is discarded.
+                    </small>
+                  ) : jobHeld ? (
+                    <small className="job-note">
+                      Queued before this version and never snapshotted. Retry it with the current
+                      plan, or cancel it.
+                    </small>
+                  ) : null}
                   <span className="job-model">{health?.dit_loaded ?? "worker"}</span>
+                  {jobIsActive && !currentJob.cancel_requested && (
+                    <button type="button" className="text-button" onClick={cancelCurrentJob}>
+                      Cancel
+                    </button>
+                  )}
+                  {(currentJob.status === "error" ||
+                    currentJob.status === "cancelled" ||
+                    jobHeld) && (
+                    <button type="button" className="text-button" onClick={retryCurrentJob}>
+                      Retry
+                    </button>
+                  )}
+                  {currentJob.status === "error" && (
+                    <button type="button" className="text-button" onClick={copyJobSummary}>
+                      Copy error summary
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {settingsSource && (
+                <div className="draft-offer settings-source" role="status">
+                  <span>
+                    The plan now holds {settingsSource.takeLabel}'s settings
+                    {settingsSource.withSeed ? " and seed" : ""} as a draft. Generate to render
+                    them; no take has changed.
+                    {settingsSource.legacy &&
+                      " That take predates full provenance: only its caption, lyrics, BPM, and key were recorded."}
+                    {settingsSource.withSeed &&
+                      (settingsSource.lmCodes
+                        ? " That take used language-model audio codes, which its seed does not reproduce: expect a different render of the same brief."
+                        : " The same seed is not a promise of identical audio on other hardware or versions.")}
+                  </span>
+                  <button
+                    type="button"
+                    className="text-button"
+                    onClick={() => setSettingsSource(null)}
+                  >
+                    Dismiss
+                  </button>
+                </div>
+              )}
+
+              {draftOffer && (
+                <div className="draft-offer" role="alert">
+                  <span>
+                    Unsaved plan edits from {new Date(draftOffer.savedAt).toLocaleString()} are
+                    older than the saved plan.
+                  </span>
+                  <button type="button" className="button-secondary" onClick={restoreDraftOffer}>
+                    Restore my edits
+                  </button>
+                  <button type="button" className="text-button" onClick={discardDraftOffer}>
+                    Discard
+                  </button>
                 </div>
               )}
 
@@ -1322,6 +1414,38 @@ export default function App() {
                     >
                       <span />
                       {saveStateLabel}
+                      {saveState === "error" && (
+                        <button
+                          type="button"
+                          className="text-button"
+                          onClick={() => retryPlanSave().catch(() => {})}
+                        >
+                          Retry now
+                        </button>
+                      )}
+                      {saveState === "conflict" && (
+                        <>
+                          <button
+                            type="button"
+                            className="text-button"
+                            onClick={() => resolvePlanConflict("keep-mine").catch(() => {})}
+                          >
+                            Keep my edits
+                          </button>
+                          <button
+                            type="button"
+                            className="text-button"
+                            onClick={() => {
+                              resolvePlanConflict("use-saved").catch(() => {});
+                              if (activeId) {
+                                refreshDetail(activeId).catch((err) => setErrorMsg(String(err)));
+                              }
+                            }}
+                          >
+                            Use saved plan
+                          </button>
+                        </>
+                      )}
                     </div>
                     <button
                       type="button"
@@ -1361,6 +1485,130 @@ export default function App() {
                         A scene, a sound, and a feeling is plenty. You can refine it after the first
                         take.
                       </p>
+                      <div
+                        className="song-kind"
+                        role="radiogroup"
+                        aria-label="Song or instrumental"
+                      >
+                        <label className={detail.plan.instrumental ? "" : "selected"}>
+                          <input
+                            type="radio"
+                            name="song-kind"
+                            checked={!detail.plan.instrumental}
+                            onChange={() => savePlanField("instrumental", false)}
+                          />
+                          Song
+                        </label>
+                        <label className={detail.plan.instrumental ? "selected" : ""}>
+                          <input
+                            type="radio"
+                            name="song-kind"
+                            aria-label="Instrumental"
+                            checked={detail.plan.instrumental}
+                            onChange={() => savePlanField("instrumental", true)}
+                          />
+                          Instrumental
+                        </label>
+                      </div>
+                      {(capabilities?.presets.length ?? 0) > 0 && (
+                        <label className="field-label preset-field">
+                          Starting point
+                          <select
+                            aria-label="Preset"
+                            value={presetPreview?.preset.id ?? ""}
+                            disabled={busy}
+                            onChange={(event) => previewPreset(event.target.value)}
+                          >
+                            <option value="">
+                              {detail.plan.preset
+                                ? `Preset applied: ${
+                                    capabilities?.presets.find(
+                                      (preset) => preset.id === detail.plan.preset?.id,
+                                    )?.name ?? detail.plan.preset.id
+                                  }`
+                                : "No preset"}
+                            </option>
+                            {capabilities?.presets.map((preset) => (
+                              <option key={preset.id} value={preset.id} title={preset.purpose}>
+                                {preset.name}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      )}
+                      {presetPreview && (
+                        <div className="preset-preview" role="region" aria-label="Preset preview">
+                          <strong>
+                            {capabilities?.presets.find((p) => p.id === presetPreview.preset.id)
+                              ?.purpose ?? presetPreview.preset.id}
+                          </strong>
+                          {presetPreview.changes.length === 0 ? (
+                            <small>Nothing would change.</small>
+                          ) : (
+                            <ul>
+                              {presetPreview.changes.map((change) => (
+                                <li key={change.field}>
+                                  {change.field}: {String(change.from ?? "unset")} →{" "}
+                                  {String(change.to)}
+                                </li>
+                              ))}
+                            </ul>
+                          )}
+                          {presetPreview.warnings.map((warning) => (
+                            <small key={warning}>{warning}</small>
+                          ))}
+                          <small>Your own fields and lyrics are not changed.</small>
+                          <div>
+                            <button
+                              type="button"
+                              className="button-secondary"
+                              onClick={() => applyPresetPreview()}
+                            >
+                              Apply preset
+                            </button>
+                            <button
+                              type="button"
+                              className="text-button"
+                              onClick={() => setPresetPreview(null)}
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                      {hasInstrumentalConflict(detail.plan) && (
+                        <div className="creation-conflict" role="alert">
+                          <span>
+                            Instrumental asks for no vocals, but the plan has lyrics. Lyre will not
+                            delete them for you.
+                          </span>
+                          <button
+                            type="button"
+                            className="button-secondary"
+                            onClick={() => savePlanField("lyrics", "")}
+                          >
+                            Clear lyrics
+                          </button>
+                          <button
+                            type="button"
+                            className="text-button"
+                            onClick={() => savePlanField("instrumental", false)}
+                          >
+                            Keep vocals
+                          </button>
+                        </div>
+                      )}
+                      {detail.plan.brief?.source_query &&
+                        (detail.plan.brief.source_query === detail.plan.query ? (
+                          <p className="builder-tip brief-source">
+                            The caption and lyrics marked “planned” came from this idea.
+                          </p>
+                        ) : (
+                          <p className="builder-tip brief-source">
+                            You changed the idea since it was planned. Generate will plan the new
+                            one; text you wrote yourself is kept.
+                          </p>
+                        ))}
                     </section>
 
                     <button
@@ -1397,16 +1645,18 @@ export default function App() {
                           </div>
                         </div>
                         <label className="field-label">
-                          Caption
+                          Caption <FieldOrigin plan={detail.plan} field="caption" />
                           <input
+                            aria-label="Caption"
                             value={detail.plan.caption}
                             onChange={(event) => savePlanField("caption", event.target.value)}
                           />
                         </label>
                         <div className="plan-grid builder-settings-grid">
                           <label>
-                            BPM
+                            BPM <FieldOrigin plan={detail.plan} field="bpm" />
                             <input
+                              aria-label="BPM"
                               type="number"
                               value={detail.plan.bpm ?? ""}
                               onChange={(event) =>
@@ -1418,8 +1668,9 @@ export default function App() {
                             />
                           </label>
                           <label>
-                            Key
+                            Key <FieldOrigin plan={detail.plan} field="keyscale" />
                             <input
+                              aria-label="Key"
                               value={detail.plan.keyscale ?? ""}
                               onChange={(event) =>
                                 savePlanField(
@@ -1430,8 +1681,9 @@ export default function App() {
                             />
                           </label>
                           <label>
-                            Time signature
+                            Time signature <FieldOrigin plan={detail.plan} field="timesignature" />
                             <input
+                              aria-label="Time signature"
                               value={detail.plan.timesignature}
                               onChange={(event) =>
                                 savePlanField("timesignature", event.target.value)
@@ -1439,18 +1691,24 @@ export default function App() {
                             />
                           </label>
                           <label>
-                            Duration (sec)
+                            Duration (sec) <FieldOrigin plan={detail.plan} field="duration_sec" />
                             <input
+                              aria-label="Duration (sec)"
                               type="number"
-                              value={detail.plan.duration_sec}
+                              value={detail.plan.duration_sec ?? ""}
+                              placeholder="auto"
                               onChange={(event) =>
-                                savePlanField("duration_sec", Number(event.target.value))
+                                savePlanField(
+                                  "duration_sec",
+                                  event.target.value === "" ? null : Number(event.target.value),
+                                )
                               }
                             />
                           </label>
                           <label>
-                            Language
+                            Language <FieldOrigin plan={detail.plan} field="vocal_language" />
                             <input
+                              aria-label="Language"
                               value={detail.plan.vocal_language}
                               onChange={(event) =>
                                 savePlanField("vocal_language", event.target.value)
@@ -1462,20 +1720,6 @@ export default function App() {
                           <label className="checkbox">
                             <input
                               type="checkbox"
-                              aria-label="Instrumental"
-                              checked={detail.plan.instrumental}
-                              onChange={(event) =>
-                                savePlanField("instrumental", event.target.checked)
-                              }
-                            />
-                            <span>
-                              <strong>Instrumental</strong>
-                              <small>Do not generate vocals or lyrics.</small>
-                            </span>
-                          </label>
-                          <label className="checkbox">
-                            <input
-                              type="checkbox"
                               aria-label="Allow caption rewrite (Custom mode LM thinking)"
                               checked={detail.plan.caption_rewrite}
                               onChange={(event) =>
@@ -1484,7 +1728,10 @@ export default function App() {
                             />
                             <span>
                               <strong>Allow caption rewrite</strong>
-                              <small>Let Custom mode rethink the direction.</small>
+                              <small>
+                                Off keeps the caption you wrote exactly. On lets the language model
+                                rework it; the take records what it used.
+                              </small>
                             </span>
                           </label>
                         </div>
@@ -1504,6 +1751,7 @@ export default function App() {
                         <div className="field-label lyrics-field">
                           <div className="lyrics-label-row">
                             <label htmlFor="plan-lyrics">Lyrics</label>
+                            <FieldOrigin plan={detail.plan} field="lyrics" />
                             <span>Optional</span>
                           </div>
                           <div
@@ -1694,31 +1942,78 @@ export default function App() {
                             title="Project default DiT checkpoint for Generate/Cover/Repaint (SPEC.md sec 4.1); a style pack always forces studio_ops"
                           >
                             <span className="dit-profile-caption">DiT</span>
-                            {DIT_PROFILE_OPTIONS.map((profile) => (
-                              <button
-                                key={profile}
-                                type="button"
-                                className={`dit-profile-option ${detail.project.dit_profile === profile ? "selected" : ""}`}
-                                disabled={busy}
-                                onClick={() => setDitProfile(profile)}
-                                title={
-                                  profile === "iterate"
-                                    ? "Fast daily generate/cover/repaint (turbo, 8 steps)"
-                                    : profile === "polish"
-                                      ? "More prompt adherence / detail (sft, 50 steps + CFG)"
-                                      : "XL turbo; the job is rejected if the worker cannot load XL"
-                                }
-                              >
-                                {profile}
-                              </button>
-                            ))}
+                            {DIT_PROFILE_OPTIONS.map((profile) => {
+                              const report = capabilities?.profiles.find((p) => p.id === profile);
+                              const unavailable = report?.supported === false;
+                              return (
+                                <button
+                                  key={profile}
+                                  type="button"
+                                  className={`dit-profile-option ${detail.project.dit_profile === profile ? "selected" : ""} ${unavailable ? "unavailable" : ""}`}
+                                  disabled={busy || unavailable}
+                                  onClick={() => setDitProfile(profile)}
+                                  title={profileTitle(profile, report)}
+                                >
+                                  {profile}
+                                </button>
+                              );
+                            })}
                           </div>
+                          {(() => {
+                            const intent = generateIntent(detail.plan);
+                            const copy = INTENT_COPY[intent];
+                            const locked = (
+                              [
+                                ["caption", "caption"],
+                                ["lyrics", "lyrics"],
+                                ["bpm", "BPM"],
+                                ["keyscale", "key"],
+                                ["timesignature", "time signature"],
+                                ["duration_sec", "duration"],
+                                ["vocal_language", "language"],
+                              ] as const
+                            )
+                              .filter(([field]) => originOf(detail.plan, field) === "user")
+                              .map(([, name]) => name);
+                            return (
+                              <div className="generate-intent" aria-live="polite">
+                                <strong>{copy.title}</strong>
+                                <small>{copy.detail}</small>
+                                <small>
+                                  {locked.length > 0
+                                    ? `Yours, kept as set: ${locked.join(", ")}.`
+                                    : "Nothing is locked yet."}
+                                </small>
+                                {intent === "another-take" && detail.plan.query.trim() && (
+                                  <button
+                                    type="button"
+                                    className="text-button"
+                                    disabled={busy}
+                                    onClick={() => generate("from_idea")}
+                                    title="Run the planner again from the idea. Text you wrote yourself is kept."
+                                  >
+                                    Re-plan from idea
+                                  </button>
+                                )}
+                                {busy && activeJobs.length > 0 && (
+                                  <small>
+                                    A take is queued with the plan as it was when you clicked. Edits
+                                    now apply to the next take.
+                                  </small>
+                                )}
+                              </div>
+                            );
+                          })()}
                           <button
                             type="button"
                             className="generate-button"
-                            onClick={generate}
-                            disabled={busy}
-                            title="Shortcuts: G generate; Space play/pause; Up/Down previous/next take; Ctrl/Cmd+S save plan"
+                            onClick={() => generate()}
+                            disabled={busy || hasInstrumentalConflict(detail.plan)}
+                            title={
+                              hasInstrumentalConflict(detail.plan)
+                                ? "Resolve the Instrumental and lyrics conflict first"
+                                : "Shortcuts: G generate; Space play/pause; Up/Down previous/next take; Ctrl/Cmd+S save plan"
+                            }
                           >
                             <Icon name="spark" /> Generate
                           </button>
@@ -1973,6 +2268,29 @@ export default function App() {
                     <span className="transport-time">
                       {formatClock(waveformDuration || selectedTake?.duration_sec || 0)}
                     </span>
+                    <label className="transport-volume">
+                      <span className="sr-only">Volume</span>
+                      <input
+                        type="range"
+                        min={0}
+                        max={1}
+                        step={0.05}
+                        value={playerVolume}
+                        aria-label="Volume"
+                        onChange={(event) => setPlayerVolume(Number(event.target.value))}
+                      />
+                    </label>
+                    <label
+                      className="transport-repeat"
+                      title="Plays the take again from the start. Not a seamless loop."
+                    >
+                      <input
+                        type="checkbox"
+                        checked={repeatPlayback}
+                        onChange={(event) => setRepeatPlayback(event.target.checked)}
+                      />
+                      Repeat
+                    </label>
                     <LoudnessMeter audioEl={waveformMediaEl} />
                   </StudioPlayer>
 
@@ -2004,51 +2322,57 @@ export default function App() {
                     </div>
                   </div>
 
-                  {compareTakeId &&
+                  {compare &&
                     (() => {
-                      const compareTake = detail.takes.find((take) => take.id === compareTakeId);
-                      if (!compareTake || compareTake.error) return null;
+                      const takeA = detail.takes.find((take) => take.id === compare.a);
+                      const takeB = detail.takes.find((take) => take.id === compare.b);
+                      if (!takeA || !takeB || takeA.error || takeB.error) return null;
                       return (
                         <section className="compare" aria-label="A/B comparison">
                           <div className="compare-heading">
                             <div>
-                              <span className="eyebrow">Instant audition</span>
+                              <span className="eyebrow">Audition two takes</span>
                               <h3>Compare</h3>
                             </div>
                             <button
                               type="button"
                               className="icon-button"
                               aria-label="Close compare"
-                              onClick={() => setCompareTakeId(null)}
+                              onClick={() => setCompare(null)}
                             >
                               <Icon name="close" />
                             </button>
                           </div>
                           <div className="compare-panel">
                             <div className="compare-slot">
-                              <span className="compare-label">A: selected</span>
-                              {selectedTake && !selectedTake.error ? (
-                                <audio
-                                  controls
-                                  src={api.takeAudioUrl(detail.project.id, selectedTake.id)}
-                                />
-                              ) : (
-                                <p className="hint">Select a take to fill A too.</p>
-                              )}
-                            </div>
-                            <button
-                              type="button"
-                              className="swap-compare"
-                              disabled={!selectedTakeId}
-                              onClick={swapCompare}
-                            >
-                              Swap A/B
-                            </button>
-                            <div className="compare-slot">
-                              <span className="compare-label">B: comparing</span>
+                              <span className="compare-label">A: {takeLabel(takeA.id)}</span>
                               <audio
+                                ref={compareARef}
                                 controls
-                                src={api.takeAudioUrl(detail.project.id, compareTakeId)}
+                                preload="metadata"
+                                src={api.takeAudioUrl(detail.project.id, takeA.id)}
+                              />
+                            </div>
+                            <div className="compare-actions">
+                              <button
+                                type="button"
+                                className="swap-compare"
+                                onClick={switchAudition}
+                                title="Continue at about the same position in the other take. The two players are not phase-aligned or loudness-matched."
+                              >
+                                Switch A ↔ B
+                              </button>
+                              <button type="button" className="text-button" onClick={swapCompare}>
+                                Swap A/B
+                              </button>
+                            </div>
+                            <div className="compare-slot">
+                              <span className="compare-label">B: {takeLabel(takeB.id)}</span>
+                              <audio
+                                ref={compareBRef}
+                                controls
+                                preload="metadata"
+                                src={api.takeAudioUrl(detail.project.id, takeB.id)}
                               />
                             </div>
                           </div>
@@ -2132,7 +2456,12 @@ export default function App() {
                                 <span className="active-take-badge">active</span>
                               )}
                               {take.id === selectedTakeId && (
-                                <span className="source-take-badge">source</span>
+                                <span
+                                  className="source-take-badge"
+                                  title="Selected: on the waveform, and the source for Cover, Repaint, Extract, Lego, and Complete. Not the kept take unless it is also active."
+                                >
+                                  source
+                                </span>
                               )}
                             </div>
                             <button
@@ -2220,20 +2549,28 @@ export default function App() {
                             </button>
                             <button
                               type="button"
-                              disabled={!!take.error || take.id === selectedTakeId}
+                              disabled={
+                                !!take.error ||
+                                (!compare && (!selectedTakeId || take.id === selectedTakeId)) ||
+                                take.id === compare?.a
+                              }
                               title={
-                                take.id === selectedTakeId
+                                !compare && take.id === selectedTakeId
                                   ? "Already selected as A -- pick a different take to compare"
-                                  : undefined
+                                  : !compare && !selectedTakeId
+                                    ? "Select a take first; it becomes A"
+                                    : undefined
                               }
                               onClick={(event) => {
                                 event.stopPropagation();
-                                setCompareTakeId((current) =>
-                                  current === take.id ? null : take.id,
-                                );
+                                setCompare((current) => {
+                                  if (current?.b === take.id) return null;
+                                  const a = current?.a ?? selectedTakeId;
+                                  return a ? { a, b: take.id } : current;
+                                });
                               }}
                             >
-                              {take.id === compareTakeId ? "Comparing" : "Compare"}
+                              {take.id === compare?.b ? "Comparing" : "Compare"}
                             </button>
                             {take.parent_take_id &&
                               (detail.takes.find(
@@ -2256,12 +2593,56 @@ export default function App() {
                               ))}
                             {!take.error && (
                               <>
-                                <a
-                                  href={api.takeAudioUrl(detail.project.id, take.id)}
-                                  download={`${take.id}.wav`}
+                                {(() => {
+                                  // The stored file, by its real name: the
+                                  // full-resolution WAV, or an MP3 when that
+                                  // is all the take has (SPEC.md sec 16.6). A
+                                  // legacy take without provenance takes the
+                                  // server's filename rather than a guess.
+                                  const files = take.provenance?.files;
+                                  const ext = files?.["mix.wav"]
+                                    ? "wav"
+                                    : files?.["mix.mp3"]
+                                      ? "mp3"
+                                      : null;
+                                  return (
+                                    <a
+                                      href={api.takeAudioUrl(detail.project.id, take.id)}
+                                      download={ext ? `${take.id}.${ext}` : ""}
+                                      title={
+                                        ext === "mp3"
+                                          ? "Only an MP3 was stored for this take"
+                                          : ext === "wav"
+                                            ? "Full-resolution WAV"
+                                            : undefined
+                                      }
+                                    >
+                                      download
+                                    </a>
+                                  );
+                                })()}
+                                <button
+                                  type="button"
+                                  className="text-button"
+                                  title="Copy what this take rendered into the plan as a draft. Nothing renders until you Generate."
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    applyTakeSettings(take, false);
+                                  }}
                                 >
-                                  download
-                                </a>
+                                  Use settings
+                                </button>
+                                <button
+                                  type="button"
+                                  className="text-button"
+                                  title="Use settings, and also put this take's seed in the seed field"
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    applyTakeSettings(take, true);
+                                  }}
+                                >
+                                  Replay settings
+                                </button>
                                 {take.has_lrc && (
                                   <a
                                     href={api.takeLrcUrl(detail.project.id, take.id)}

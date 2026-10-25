@@ -25,7 +25,12 @@ from server.mcp.results import (
 from server.mcp.tasks import TasksExtension
 
 _INSTRUCTIONS = (
-    "Lyre generates music on the operator's machine. create_song and "
+    "Lyre generates music on the operator's machine. Start with "
+    "get_capabilities to see whether the worker is ready, which profiles can "
+    "load, the presets, and the request limits. create_song starts a project; "
+    "generate_take makes another take in an existing one (or re-plans it with "
+    "creation_mode from_idea); set_active_take keeps a take; get_export returns "
+    "the export manifest and its URL. create_song, generate_take, and "
     "transform_take take minutes. If you do not speak the tasks extension "
     "io.modelcontextprotocol/tasks, pass wait_timeout_sec (for example 600) "
     "so the tool polls until the job finishes. If you do speak it, omit "
@@ -97,6 +102,34 @@ def _register(server: MCPServer) -> None:
         get_artifact,
         description=(
             "URL and metadata for mix.wav, mix.mp3, and lyrics.lrc. Does not download the audio."
+        ),
+    )
+    # SPEC.md sec 16.6: the narrow completion flow, each a thin /v1 client.
+    server.add_tool(
+        get_capabilities,
+        description=(
+            "Worker readiness, generation profiles (files present, validated, loaded, "
+            "supported), the fixed language model, presets, and request limits."
+        ),
+    )
+    server.add_tool(
+        generate_take,
+        description=(
+            "Queue another take in an existing project. creation_mode from_brief "
+            "renders the stored brief with a new seed; from_idea re-plans from the "
+            "idea; omitted follows the plan. Sends Idempotency-Key. Returns a task, "
+            "or the finished job when wait_timeout_sec is set."
+        ),
+    )
+    server.add_tool(
+        set_active_take,
+        description="Keep a take: make it the project's active take. A failed take is refused.",
+    )
+    server.add_tool(
+        get_export,
+        description=(
+            "The export manifest (take, provenance, every file's size and sha256, and what "
+            "is unavailable) and the ZIP's URL. Does not download the archive."
         ),
     )
     server.resource(
@@ -239,6 +272,51 @@ async def list_takes(
 async def get_artifact(project_id: str, take_id: str) -> ArtifactResult:
     payload = await service.get_artifact(project_id, take_id)
     return ArtifactResult.model_validate(payload)
+
+
+async def get_capabilities() -> JsonObject:
+    return JsonObject.model_validate(await service.get_capabilities())
+
+
+async def generate_take(
+    project_id: Annotated[str, Field(description="The project to generate in.")],
+    creation_mode: Annotated[
+        str | None,
+        Field(description="from_brief (another take), from_idea (re-plan), or omitted."),
+    ] = None,
+    dit_profile: str | None = None,
+    seed: int | None = None,
+    lora_id: str | None = None,
+    idempotency_key: str | None = None,
+    wait_timeout_sec: float | None = None,
+) -> Annotated[CallToolResult, JobResult]:
+    job, timed_out = await service.generate_take(
+        {
+            "project_id": project_id,
+            "creation_mode": creation_mode,
+            "dit_profile": dit_profile,
+            "seed": seed,
+            "lora_id": lora_id,
+        },
+        idempotency_key=idempotency_key,
+        wait_timeout_sec=wait_timeout_sec,
+    )
+    return complete_job(job, timed_out=timed_out)
+
+
+async def set_active_take(project_id: str, take_id: str) -> JsonObject:
+    return JsonObject.model_validate(await service.set_active_take(project_id, take_id))
+
+
+async def get_export(
+    project_id: str,
+    take_id: Annotated[
+        str | None, Field(description="The take to export. Omitted: the active take.")
+    ] = None,
+    include_stems: bool = True,
+) -> JsonObject:
+    payload = await service.get_export(project_id, take_id=take_id, include_stems=include_stems)
+    return JsonObject.model_validate(payload)
 
 
 async def read_project(project_id: str) -> str:

@@ -64,16 +64,20 @@ RUN revision="$(tr -d '\n' < /tmp/lyre/ACE_STEP_REVISION)" \
     && rm -rf /tmp/lyre
 
 # Only the modules the host runs: its own package, the ACE-Step adapter it
-# wraps, and the mock backend for GPU-free smoke tests. Nothing from server/.
+# wraps, the mock backend for GPU-free smoke tests, and the pure creation
+# resolver both of those import (server/generation, SPEC.md sec 16.3). No
+# other part of server/.
 WORKDIR /app
 # The build id (worker/remote_host/__init__.py) also hashes these, so the image
 # keeps them where it can find them and reports the same id as its source.
 COPY ACE_STEP_REVISION /app/
 COPY requirements/ace-step-security.txt /app/requirements/
 COPY docker/remote-gpu/Dockerfile /app/docker/remote-gpu/
-COPY worker/__init__.py worker/mock_worker.py /app/worker/
+COPY worker/__init__.py worker/mock_worker.py worker/playback.py /app/worker/
 COPY worker/acestep_worker /app/worker/acestep_worker
 COPY worker/remote_host /app/worker/remote_host
+COPY server/__init__.py /app/server/
+COPY server/generation /app/server/generation
 
 # Weights and caches live under LYRE_REMOTE_ROOT. The in-image default is lost
 # with the container; point it at a volume to keep weights between pods.

@@ -9,7 +9,17 @@
 // Math.random, and jobs complete on the first /api/jobs/{id} poll unless a
 // test explicitly scripts a different sequence via scriptNextJob().
 import { vi } from "vitest";
-import type { Job, Lora, Plan, Project, ProjectDetail, ProjectSummary, Take } from "../api";
+import type {
+  Capabilities,
+  Job,
+  Lora,
+  Plan,
+  Project,
+  ProjectDetail,
+  ProjectSummary,
+  Take,
+  TrackedField,
+} from "../api";
 
 export const PROJECT_ID = "proj-1";
 
@@ -17,6 +27,9 @@ export interface RecordedRequest {
   method: string;
   url: string;
   body: unknown;
+  // For job POSTs: the submission identity (SPEC.md sec 16.4), kept out of
+  // `body` so request-body assertions stay about the request itself.
+  submissionId?: string;
 }
 
 // Successive statuses GET /api/jobs/{id} returns for one enqueued job; the
@@ -25,6 +38,8 @@ export interface RecordedRequest {
 export interface JobScript {
   statuses: string[];
   error?: string | null;
+  // Optional stage per status entry (same index), for the job strip.
+  stages?: (string | null)[];
 }
 
 interface MockResponseLike {
@@ -117,6 +132,98 @@ export function makePlan(): Plan {
   };
 }
 
+// What server.storage.default_plan() writes for a brand-new project: an
+// empty brief that resolves its idea on the first Generate (SPEC.md sec
+// 16.3). New-project fixtures must start from this, not from makePlan().
+export function makeDefaultPlan(): Plan {
+  return {
+    query: "",
+    caption: "",
+    negative: [],
+    lyrics: "",
+    instrumental: false,
+    vocal_language: "en",
+    bpm: null,
+    keyscale: null,
+    timesignature: "4/4",
+    duration_sec: 120,
+    sections: [],
+    caption_rewrite: false,
+    creation_mode: "from_idea",
+    field_origins: {
+      caption: "default",
+      lyrics: "default",
+      vocal_language: "default",
+      bpm: "default",
+      keyscale: "default",
+      timesignature: "default",
+      duration_sec: "default",
+    },
+    revision: 0,
+    brief: null,
+  };
+}
+
+// Mirrors server/generation/presets.py closely enough for UI tests: two
+// entries, one song and one instrumental.
+export const MOCK_PRESETS = [
+  {
+    id: "lyric_song",
+    version: 1,
+    name: "Lyric song",
+    purpose: "A song built around a sung lead and a clear verse and chorus.",
+    caption: "song with a clear lead vocal",
+    instrumental: false,
+    fields: { timesignature: "4/4" },
+    example: "a hopeful song",
+  },
+  {
+    id: "combat_cue",
+    version: 1,
+    name: "Combat cue",
+    purpose: "Driving, tense music for a fight or a chase.",
+    caption: "intense combat music",
+    instrumental: true,
+    fields: { bpm: 150, duration_sec: 90 },
+    example: "a boss fight",
+  },
+];
+
+export function makeCapabilities(overrides: Partial<Capabilities> = {}): Capabilities {
+  const profile = (id: string, label: string): Capabilities["profiles"][number] => ({
+    id,
+    label,
+    summary: `${label} summary`,
+    checkpoint: `acestep-${id}`,
+    inference_steps: 8,
+    guidance_scale: 1,
+    cpu_offload: id === "quality",
+    files: "present",
+    validated: id === "iterate",
+    loaded: id === "iterate",
+    supported: true,
+    reason: null,
+  });
+  return {
+    worker: {
+      state: "ready",
+      reason: "worker: 'iterate' DiT + LM currently loaded",
+      backend: "mock",
+      dit_loaded: "iterate",
+      queue: { queued: 0, running: 0 },
+    },
+    profiles: [
+      profile("iterate", "Iterate"),
+      profile("polish", "Polish"),
+      profile("quality", "Quality"),
+    ],
+    lm: { model: "acestep-5Hz-lm-1.7B", selectable: false },
+    disk: { free_bytes: 100 * 1024 ** 3, low: false, blocked: false },
+    presets: MOCK_PRESETS,
+    ...overrides,
+  };
+}
+
 export function makeProjectSummary(overrides: Partial<ProjectSummary> = {}): ProjectSummary {
   return {
     id: PROJECT_ID,
@@ -145,6 +252,40 @@ export function makeProjectDetail(takes: Take[]): ProjectDetail {
   };
 }
 
+const TRACKED: TrackedField[] = [
+  "caption",
+  "lyrics",
+  "vocal_language",
+  "bpm",
+  "keyscale",
+  "timesignature",
+  "duration_sec",
+];
+
+// The server's write rule (server/generation/brief.apply_write_semantics):
+// a tracked field whose value changed becomes `user`, or `default` when
+// cleared, unless the body names another origin; a changed idea switches
+// to `from_idea` unless the body sets the mode.
+function deriveWrite(current: Plan, next: Plan): Plan {
+  const origins = { ...(current.field_origins ?? {}) };
+  for (const field of TRACKED) {
+    const claimed = next.field_origins?.[field];
+    if (claimed && claimed !== current.field_origins?.[field]) {
+      origins[field] = claimed;
+    } else if (next[field] !== current[field]) {
+      const value = next[field];
+      origins[field] = value === null || String(value).trim() === "" ? "default" : "user";
+    }
+  }
+  let mode = current.creation_mode;
+  if (next.creation_mode && next.creation_mode !== current.creation_mode) {
+    mode = next.creation_mode;
+  } else if (next.query !== current.query) {
+    mode = "from_idea";
+  }
+  return { ...next, field_origins: origins, creation_mode: mode, brief: current.brief ?? null };
+}
+
 // ---------------------------------------------------------------------------
 // The mock server itself.
 // ---------------------------------------------------------------------------
@@ -160,6 +301,7 @@ export function createMockLyreServer() {
     // /api/projects/{id} has something to return for it afterward.
     createdDetails: new Map<string, ProjectDetail>(),
     loras: [] as Lora[],
+    capabilities: makeCapabilities(),
   };
 
   const jobEntries = new Map<
@@ -170,9 +312,20 @@ export function createMockLyreServer() {
       script: JobScript;
       pollIndex: number;
       takeAdded: boolean;
+      submissionId: string | null;
+      bodyKey: string;
+      cancelRequested: boolean;
+      retryOf: string | null;
     }
   >();
   let nextJobScript: JobScript | null = null;
+  // Makes the next N job POSTs reach the server (the job is created) but
+  // lose their response, the way a dropped connection does.
+  let lostJobsPostResponses = 0;
+  // Makes the next N GET /api/jobs/{id} polls fail with a network error.
+  let failedJobPolls = 0;
+  // Makes the next N PUT .../plan fail with this HTTP status.
+  let planPutFailures: { count: number; status: number } | null = null;
   let jobsPostFailure: { status: number; body: unknown } | null = null;
   let uploadFailure: { status: number; body: unknown } | null = null;
   let jobCounter = 0;
@@ -182,6 +335,27 @@ export function createMockLyreServer() {
 
   function scriptNextJob(script: JobScript): void {
     nextJobScript = script;
+  }
+
+  function loseNextJobsPostResponses(count = 1): void {
+    lostJobsPostResponses = count;
+  }
+
+  function failNextJobPolls(count: number): void {
+    failedJobPolls = count;
+  }
+
+  function failNextPlanPuts(count: number, status = 500): void {
+    planPutFailures = { count, status };
+  }
+
+  // Lets a test move a job along as another client or the worker would.
+  function setJobScript(id: string, script: JobScript): void {
+    const entry = jobEntries.get(id);
+    if (entry) {
+      entry.script = script;
+      entry.pollIndex = 0;
+    }
   }
 
   // Makes the next POST /api/projects/{id}/jobs fail with the given HTTP
@@ -203,7 +377,13 @@ export function createMockLyreServer() {
     status: string,
     script: JobScript,
   ): Job {
+    const entry = jobEntries.get(id);
+    const index = entry ? Math.min(entry.pollIndex, script.statuses.length - 1) : 0;
     return {
+      stage: script.stages?.[index] ?? null,
+      cancel_requested: entry?.cancelRequested ? 1 : 0,
+      submission_id: entry?.submissionId ?? null,
+      retry_of: entry?.retryOf ?? null,
       id,
       project_id: projectId,
       action,
@@ -245,7 +425,26 @@ export function createMockLyreServer() {
       script: { statuses: [status], error },
       pollIndex: 0,
       takeAdded: status === "done",
+      submissionId: null,
+      bodyKey: "",
+      cancelRequested: false,
+      retryOf: null,
     });
+  }
+
+  // Mirrors server.jobs writing the new take before flipping the job row to
+  // done -- the first response to report "done" is what makes the take show
+  // up in the next GET /api/projects/{id} (App refreshes when it sees it).
+  function materializeTake(
+    id: string,
+    entry: { action: string; takeAdded: boolean; projectId: string },
+  ): void {
+    if (entry.action === "train_lora" || entry.takeAdded) return;
+    entry.takeAdded = true;
+    const take = makeTake(`take-of-${id}`, state.detail.takes.length + 1, {
+      task_type: entry.action,
+    });
+    state.detail = { ...state.detail, takes: [...state.detail.takes, take] };
   }
 
   function handle(input: string | URL | Request, init?: RequestInit): Promise<MockResponseLike> {
@@ -259,12 +458,21 @@ export function createMockLyreServer() {
         body = String(init.body);
       }
     }
-    requests.push({ method, url, body });
+    const recorded: RecordedRequest = { method, url, body };
+    if (method === "POST" && url.endsWith("/jobs") && body && typeof body === "object") {
+      const { submission_id: submissionId, ...rest } = body as Record<string, unknown>;
+      recorded.body = rest;
+      recorded.submissionId = submissionId as string | undefined;
+    }
+    requests.push(recorded);
 
     if (method === "GET" && url === "/api/health") {
       return Promise.resolve(
         jsonResponse({ ok: true, gpu: "RTX 4070 Ti SUPER", dit_loaded: "iterate" }),
       );
+    }
+    if (method === "GET" && url === "/api/capabilities") {
+      return Promise.resolve(jsonResponse(state.capabilities));
     }
     if (method === "GET" && url === "/api/remote-gpu") {
       return Promise.resolve(
@@ -299,7 +507,7 @@ export function createMockLyreServer() {
         favorite: false,
       };
       state.projects = [...state.projects, makeProjectSummary({ id, title })];
-      const plan = makePlan();
+      const plan = makeDefaultPlan();
       if (payload.query) plan.query = payload.query;
       state.createdDetails.set(id, { project, plan, takes: [] });
       return Promise.resolve(jsonResponse(project));
@@ -367,10 +575,83 @@ export function createMockLyreServer() {
 
     m = url.match(/^\/api\/projects\/([^/]+)\/plan$/);
     if (method === "PUT" && m) {
+      if (planPutFailures && planPutFailures.count > 0) {
+        planPutFailures.count -= 1;
+        return Promise.resolve(
+          jsonResponse({ detail: "plan save failed" }, planPutFailures.status),
+        );
+      }
       // SPEC.md sec 8: PUT /plan replaces plan.json outright, so the mock
-      // swaps in whatever body it got verbatim (sections included).
-      state.detail = { ...state.detail, plan: (body ?? {}) as Plan };
+      // swaps in whatever body it got verbatim (sections included), and,
+      // like the server, bumps the revision and honors expected_revision
+      // (sec 16.3).
+      const { expected_revision: expected, ...plan } = (body ?? {}) as Plan & {
+        expected_revision?: number;
+      };
+      const current = state.detail.plan.revision ?? 0;
+      if (expected != null && expected !== current) {
+        return Promise.resolve(jsonResponse({ detail: "plan revision changed" }, 409));
+      }
+      state.detail = {
+        ...state.detail,
+        plan: { ...deriveWrite(state.detail.plan, plan as Plan), revision: current + 1 },
+      };
       return Promise.resolve(jsonResponse(state.detail.plan));
+    }
+
+    m = url.match(/^\/api\/projects\/([^/]+)\/preset$/);
+    if (method === "POST" && m) {
+      // server/generation/presets.apply_preset, reduced: user fields and
+      // lyrics are kept; changed fields become origin "preset".
+      const payload = (body ?? {}) as { preset_id: string; apply: boolean };
+      const preset = MOCK_PRESETS.find((p) => p.id === payload.preset_id);
+      if (!preset) return Promise.resolve(jsonResponse({ detail: "preset not found" }, 404));
+      const current = state.detail.plan;
+      const origins = { ...(current.field_origins ?? {}) };
+      const plan = { ...current } as Plan & Record<string, unknown>;
+      const changes: { field: string; from: unknown; to: unknown }[] = [];
+      const warnings: string[] = [];
+      const set = (field: string, to: unknown, tracked = true) => {
+        if (plan[field] === to) return;
+        changes.push({ field, from: plan[field], to });
+        plan[field] = to;
+        if (tracked) origins[field as TrackedField] = "preset";
+      };
+      if (origins.caption === "user" && current.caption.trim()) {
+        warnings.push("kept your caption; the preset's caption was not applied");
+      } else {
+        set("caption", preset.caption);
+      }
+      for (const [field, value] of Object.entries(preset.fields)) {
+        if (origins[field as TrackedField] === "user") warnings.push(`kept your ${field}`);
+        else set(field, value);
+      }
+      const hasWords =
+        current.lyrics.trim() !== "" && current.lyrics.trim().toLowerCase() !== "[instrumental]";
+      if (preset.instrumental && hasWords) {
+        warnings.push(
+          "the preset suggests an instrumental, but the plan has lyrics, so it stays a song",
+        );
+      } else {
+        set("instrumental", preset.instrumental, false);
+      }
+      plan.field_origins = origins;
+      plan.preset = { id: preset.id, version: preset.version };
+      if (payload.apply) {
+        state.detail = {
+          ...state.detail,
+          plan: { ...plan, revision: (current.revision ?? 0) + 1 },
+        };
+      }
+      return Promise.resolve(
+        jsonResponse({
+          plan: payload.apply ? state.detail.plan : plan,
+          changes,
+          warnings,
+          preset: { id: preset.id, version: preset.version },
+          applied: payload.apply,
+        }),
+      );
     }
 
     m = url.match(/^\/api\/projects\/([^/]+)\/loras$/);
@@ -398,11 +679,43 @@ export function createMockLyreServer() {
       }
       const payload = (body ?? {}) as Record<string, unknown>;
       const action = String(payload.action ?? "");
+      const submissionId = (payload.submission_id as string | undefined) ?? null;
+      const { submission_id: _ignored, ...rest } = payload;
+      void _ignored;
+      const bodyKey = JSON.stringify(rest);
+      // SPEC.md sec 16.4: the same submission id and body return the job
+      // the first send created; a different body is a 409.
+      for (const [existingId, entry] of jobEntries) {
+        if (submissionId && entry.submissionId === submissionId && entry.projectId === m[1]) {
+          if (entry.bodyKey !== bodyKey) {
+            return Promise.resolve(jsonResponse({ detail: "submission_id conflict" }, 409));
+          }
+          const status = entryStatus(entry);
+          if (status === "done") materializeTake(existingId, entry);
+          return Promise.resolve(
+            jsonResponse(jobRow(existingId, m[1], action, status, entry.script)),
+          );
+        }
+      }
       jobCounter += 1;
       const id = `job-${jobCounter}`;
       const script = nextJobScript ?? { statuses: ["done"] };
       nextJobScript = null;
-      jobEntries.set(id, { projectId: m[1], action, script, pollIndex: 0, takeAdded: false });
+      jobEntries.set(id, {
+        projectId: m[1],
+        action,
+        script,
+        pollIndex: 0,
+        takeAdded: false,
+        submissionId,
+        bodyKey,
+        cancelRequested: false,
+        retryOf: null,
+      });
+      if (lostJobsPostResponses > 0) {
+        lostJobsPostResponses -= 1;
+        return Promise.reject(new TypeError("Failed to fetch"));
+      }
       // A successful train_lora makes the pack listable right away, like
       // server.jobs._run_train_lora_job writing meta.json before the job
       // row flips to done (the UI re-fetches this list after the poll).
@@ -453,25 +766,57 @@ export function createMockLyreServer() {
       );
     }
 
+    m = url.match(/^\/api\/jobs\/([^/]+)\/cancel$/);
+    if (method === "POST" && m) {
+      const entry = jobEntries.get(m[1]);
+      if (!entry) return Promise.resolve(jsonResponse({ detail: "no such job" }, 404));
+      const status = entryStatus(entry);
+      if (status === "queued") {
+        entry.script = { statuses: ["cancelled"] };
+        entry.pollIndex = 0;
+      } else if (status === "running") {
+        entry.cancelRequested = true;
+      }
+      return Promise.resolve(
+        jsonResponse(jobRow(m[1], entry.projectId, entry.action, entryStatus(entry), entry.script)),
+      );
+    }
+
+    m = url.match(/^\/api\/jobs\/([^/]+)\/retry$/);
+    if (method === "POST" && m) {
+      const original = jobEntries.get(m[1]);
+      if (!original) return Promise.resolve(jsonResponse({ detail: "no such job" }, 404));
+      jobCounter += 1;
+      const id = `job-${jobCounter}`;
+      const script = nextJobScript ?? { statuses: ["done"] };
+      nextJobScript = null;
+      jobEntries.set(id, {
+        ...original,
+        script,
+        pollIndex: 0,
+        takeAdded: false,
+        submissionId: null,
+        cancelRequested: false,
+        retryOf: m[1],
+      });
+      return Promise.resolve(
+        jsonResponse(jobRow(id, original.projectId, original.action, "queued", script)),
+      );
+    }
+
     m = url.match(/^\/api\/jobs\/([^/]+)$/);
     if (method === "GET" && m) {
+      if (failedJobPolls > 0) {
+        failedJobPolls -= 1;
+        return Promise.reject(new TypeError("Failed to fetch"));
+      }
       const entry = jobEntries.get(m[1]);
       if (!entry) {
         return Promise.resolve(jsonResponse({ detail: "no such job" }, 404));
       }
       const status = entryStatus(entry);
       entry.pollIndex += 1;
-      // Mirrors server.jobs writing the new take before flipping the job row
-      // to done -- the first poll to observe "done" is what makes the take
-      // show up in the next GET /api/projects/{id} (App calls refreshDetail
-      // right after the poll resolves).
-      if (status === "done" && entry.action !== "train_lora" && !entry.takeAdded) {
-        entry.takeAdded = true;
-        const take = makeTake(`take-of-${m[1]}`, state.detail.takes.length + 1, {
-          task_type: entry.action,
-        });
-        state.detail = { ...state.detail, takes: [...state.detail.takes, take] };
-      }
+      if (status === "done") materializeTake(m[1], entry);
       return Promise.resolve(
         jsonResponse(jobRow(m[1], entry.projectId, entry.action, status, entry.script)),
       );
@@ -500,6 +845,10 @@ export function createMockLyreServer() {
     });
   }
 
+  function jobSubmissionIds(): (string | undefined)[] {
+    return jobRequests().map((r) => r.submissionId);
+  }
+
   return {
     state,
     requests,
@@ -509,7 +858,12 @@ export function createMockLyreServer() {
     failNextJobsPost,
     failNextUpload,
     jobRequests,
+    jobSubmissionIds,
     seedJob,
+    setJobScript,
+    loseNextJobsPostResponses,
+    failNextJobPolls,
+    failNextPlanPuts,
   };
 }
 

@@ -46,6 +46,14 @@
 .studio-inspector.is-open {
   transform: translateX(0);
 }
+/* The inspector is a drawer at every width in this layout, so its opener
+   and close button must be reachable at every width too. The base layout
+   only shows panel actions below 1360 px, which left the take list
+   unreachable on wider screens. */
+.workspace-actions .panel-action[aria-controls="studio-inspector"],
+.studio-inspector .drawer-close {
+  display: inline-flex;
+}
 .waveform {
   grid-column: 2;
   background-image: none;

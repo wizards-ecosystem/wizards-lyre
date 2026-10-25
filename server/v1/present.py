@@ -66,4 +66,6 @@ def job_object(job: dict[str, Any]) -> dict[str, Any]:
         "created_at": job["created_at"],
         "updated_at": job["updated_at"],
         "artifacts": artifacts,
+        "submission_id": job.get("submission_id"),
+        "retry_of": job.get("retry_of"),
     }

@@ -26,10 +26,17 @@ from server import config
 from server.storage.errors import (
     LoraNotFound,
     PathJailError,
+    PlanRevisionConflict,
     ProjectNotFound,
     TakeNotFound,
 )
-from server.storage.export import STEM_TASK_TYPES, build_export_zip
+from server.storage.export import (
+    MANIFEST_SCHEMA,
+    STEM_TASK_TYPES,
+    ExportError,
+    build_export_manifest,
+    build_export_zip,
+)
 
 # The private IO/jail helpers are part of the historical surface: tests
 # and scripts reach them as storage.<name>. Internal callers deliberately
@@ -66,17 +73,27 @@ from server.storage.projects import (
     set_active_take,
 )
 from server.storage.takes import (
+    STAGING_MARKER,
     allocate_lora_dir,
+    allocate_staged_take,
     allocate_take_dir,
+    discard_staged_take,
     discard_unfinished_take,
     get_lora,
     get_take,
     list_loras,
+    list_staged_takes,
     list_takes,
+    promote_staged_take,
+    set_active_take_if_unset,
+    staging_dir,
     take_audio_path,
     take_lrc_path,
     update_take_annotations,
+    write_error_take,
     write_lora_meta,
+    write_staged_lrc,
+    write_staged_meta,
     write_take_lrc,
     write_take_meta,
 )
@@ -90,6 +107,19 @@ from server.storage.uploads import (
 )
 
 __all__ = [
+    "build_export_manifest",
+    "ExportError",
+    "MANIFEST_SCHEMA",
+    "write_staged_meta",
+    "write_staged_lrc",
+    "write_error_take",
+    "staging_dir",
+    "set_active_take_if_unset",
+    "promote_staged_take",
+    "list_staged_takes",
+    "discard_staged_take",
+    "allocate_staged_take",
+    "STAGING_MARKER",
     "ALLOWED_UPLOAD_EXTENSIONS",
     "MAX_UPLOAD_BYTES",
     "STEM_TASK_TYPES",
@@ -97,6 +127,7 @@ __all__ = [
     "VALID_DIT_PROFILES",
     "LoraNotFound",
     "PathJailError",
+    "PlanRevisionConflict",
     "ProjectNotFound",
     "TakeNotFound",
     "_jail",

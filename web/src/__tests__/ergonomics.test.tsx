@@ -167,8 +167,10 @@ describe("A/B compare (SPEC.md sec 12 Phase 5)", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Swap A/B" }));
 
-    // A/B swapped: take-03 is now selected (A), take-02 is now "Comparing".
-    expect(takeRows()[2].className).toMatch(/selected/);
+    // A/B swapped: take-03 is A and take-02 is B ("Comparing"). The selected
+    // take -- the source for Cover/Repaint -- is still take-02 (sec 16.6).
+    expect(takeRows()[1].className).toMatch(/selected/);
+    expect(takeRows()[2].className).not.toMatch(/selected/);
     expect(within(takeRows()[1]).getByRole("button", { name: "Comparing" })).toBeTruthy();
     const comparePane = screen.getByRole("heading", { name: "Compare" }).closest("section")!;
     const [audioA, audioB] = Array.from(comparePane.querySelectorAll("audio"));

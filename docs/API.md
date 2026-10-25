@@ -34,6 +34,8 @@ This page is the orientation; the schema is the specification.
 | `GET` | `/api/health` | Worker readiness, loaded DiT profile, GPU status. |
 | `GET` | `/api/projects` | Project list, newest-updated first. |
 | `POST` | `/api/projects` | Create from `{ title?, query? }`. |
+| `GET` | `/api/capabilities` | Worker state, profiles (files, validated, loaded, supported), fixed LM, disk, presets, limits. |
+| `POST` | `/api/projects/{id}/preset` | Preview a preset, or apply it with `apply: true` (keeps user fields and lyrics). |
 | `GET` | `/api/projects/{id}` | Project + plan + takes in one response. |
 | `PATCH` | `/api/projects/{id}` | Update `title`, `dit_profile`, or `favorite`. |
 | `DELETE` | `/api/projects/{id}` | Delete the project and cancel its queued jobs. `204`. |
@@ -43,12 +45,14 @@ This page is the orientation; the schema is the specification.
 | `PATCH` | `/api/projects/{id}/takes/{take_id}` | Update `favorite` / `notes` only. |
 | `GET` | `/api/projects/{id}/takes/{take_id}/audio` | Stream `mix.wav` or `mix.mp3`. |
 | `GET` | `/api/projects/{id}/takes/{take_id}/lrc` | Timestamped lyrics. `404` when the take has none. |
-| `GET` | `/api/projects/{id}/export` | Zip: `project.json`, `plan.json`, active mix, optional stems. |
+| `GET` | `/api/projects/{id}/export` | Zip: the selected take's mix (`take_id`, else the active take), LRC, optional stems, `project.json`, `plan.json`, `manifest.json`. |
 | `POST` | `/api/projects/{id}/uploads` | Upload a WAV/MP3 as a cover/repaint source. |
 | `GET` | `/api/projects/{id}/loras` | Trained style packs for this project. |
 | `POST` | `/api/projects/{id}/jobs` | Enqueue a job. Returns the `queued` row. |
 | `GET` | `/api/jobs/{job_id}` | One job's status. |
 | `GET` | `/api/jobs` | Recent jobs. Filters: `project_id`, `action`, `active`, `limit`. |
+| `POST` | `/api/jobs/{job_id}/cancel` | Cooperative cancel, same as `/v1`. |
+| `POST` | `/api/jobs/{job_id}/retry` | Queue an explicit retry linked by `retry_of` (SPEC.md section 16.5). |
 | `GET` | `/api/remote-gpu` | Remote GPU state: provisioner, price quote, connection, rental, host health. |
 | `PUT` | `/api/remote-gpu/connection` | Connect a host you run: `{ base_url, secret }`. |
 | `DELETE` | `/api/remote-gpu/connection` | Forget the connected host. |
@@ -56,6 +60,8 @@ This page is the orientation; the schema is the specification.
 | `DELETE` | `/api/remote-gpu/session` | Terminate the rental. Safe when nothing is running. |
 | `GET` | `/v1/health` | Typed health: backend, readiness, GPU, loaded DiT, queue counts. |
 | `GET` | `/v1/projects` | Page of project summaries. `limit` (default 50, max 100) and `cursor`. |
+| `GET` | `/v1/capabilities` | Same report as `/api/capabilities`. |
+| `POST` | `/v1/projects/{id}/preset` | Preview or apply a preset; `409` on a stale `expected_revision`. |
 | `GET` | `/v1/projects/{id}` | Project, plan, and takes. |
 | `GET` | `/v1/projects/{id}/takes` | Take metadata page. |
 | `GET` | `/v1/jobs` | Job page. Filters: `project_id`, `action`, `active`, `limit`, `cursor`. |
@@ -68,9 +74,11 @@ This page is the orientation; the schema is the specification.
 | `PATCH` | `/v1/projects/{id}/takes/{take_id}` | Update `favorite` / `notes` only. |
 | `POST` | `/v1/projects/{id}/uploads` | Upload a WAV/MP3 as a cover/repaint source. |
 | `GET` | `/v1/projects/{id}/loras` | Trained style packs for this project. |
-| `GET` | `/v1/projects/{id}/export` | Zip: `project.json`, `plan.json`, active mix, optional stems. |
+| `GET` | `/v1/projects/{id}/export` | Zip: the selected take's mix (`take_id`, else the active take), LRC, optional stems, `project.json`, `plan.json`, `manifest.json`. |
+| `GET` | `/v1/projects/{id}/export/manifest` | The export's `manifest.json` and `export_url`, without the archive. |
 | `POST` | `/v1/projects/{id}/jobs` | Enqueue a job. `202`, `Location: /v1/jobs/{job_id}`, and the job object. |
 | `POST` | `/v1/jobs/{job_id}/cancel` | Cancel a queued job, or ask a running job to drop its audio. |
+| `POST` | `/v1/jobs/{job_id}/retry` | Retry a failed, cancelled, or held job: `202` and the new job, whose `retry_of` names this one. |
 | `POST` | `/v1/songs` | Create a project, write its plan, and queue `generate`. `202`, `Location`, and the job. |
 | `GET` | `/v1/artifacts/{id}/{take_id}/mix.wav` | Stable `mix.wav` for a take. |
 | `GET` | `/v1/artifacts/{id}/{take_id}/mix.mp3` | Stable `mix.mp3` for a take. |
@@ -101,7 +109,8 @@ object below. `/api` answers `200` with the queue row.
   "lora_id": null,
   "audio_cover_strength": 0.7,
   "seed": -1,
-  "batch_size": 1
+  "batch_size": 1,
+  "creation_mode": null
 }
 ```
 
@@ -121,6 +130,24 @@ What is validated at enqueue time, before anything reaches the GPU:
 - `batch_size` is forced to 1.
 - `audio_cover_strength` must be within `0.0`-`1.0` (which also rejects NaN
   and infinities).
+- `generate` resolves the plan by the creation contract (SPEC.md section
+  16.3). `creation_mode` (`from_idea` re-plans from `query`, `from_brief`
+  renders the stored brief) overrides the plan's own mode for this job.
+  Unsupported metas fail here with `param` naming the field: BPM 30-300,
+  duration 10-600 seconds, a key such as `C major` or `F#m`, a meter of `2`,
+  `3`, `4`, `6`, `2/4`, `3/4`, `4/4`, or `6/8`, and an ACE-Step language code.
+  Instrumental with real lyrics is `instrumental_lyrics_conflict`.
+
+### Plan writes
+
+`PUT .../plan` replaces the plan. The server adds `creation_mode`,
+`field_origins` (`user`, `planner`, `preset`, `default`, or `unknown` for
+`caption`, `lyrics`, `vocal_language`, `bpm`, `keyscale`, `timesignature`,
+and `duration_sec`), `revision`, and the server-managed `brief`. A field
+whose value changed becomes `user` unless the body names another origin; a
+changed `query` switches to `from_idea`. An optional `expected_revision`
+makes the write conditional (`409` when the plan has moved on). A null
+`duration_sec` lets the planner or ACE-Step choose the length.
 
 ## Job lifecycle
 
