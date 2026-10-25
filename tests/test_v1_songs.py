@@ -289,9 +289,14 @@ def test_song_validation_uses_the_v1_error(api_client: TestClient) -> None:
 
     assert api_client.get("/v1/projects").json()["data"] == []
     # `/api` does not gain this route, and it keeps its own error shape.
+    # Without a built SPA the router answers 404 in `/api` shape. With
+    # web/dist present the static mount owns unmatched paths and answers a
+    # POST with 405. Either way no route handled it.
     unknown = api_client.post("/api/songs", json={"prompt": "rain"})
-    assert unknown.status_code == 404
-    assert "detail" in unknown.json()
+    assert unknown.status_code in (404, 405)
+    if unknown.status_code == 404:
+        assert "detail" in unknown.json()
+    assert not any(getattr(route, "path", None) == "/api/songs" for route in app.routes)
 
 
 def test_song_duration_rejects_non_finite() -> None:
