@@ -17,7 +17,7 @@
   "dependencies": {
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
-    "wavesurfer.js": "^7.12.11"
+    "wavesurfer.js": "^8.0.3"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
